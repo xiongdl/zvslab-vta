@@ -138,10 +138,11 @@ def _source_request(module_type):
     return "", "txt"
 
 
-def _discover_sources(module):
+def _discover_sources(module, host_codegen=None):
     """Walk the import tree once in deterministic pre-order."""
     discovered = []
     visited = set()
+    codegen = host_codegen.lower() if isinstance(host_codegen, str) else ""
 
     def visit(current):
         identity = id(current)
@@ -150,6 +151,10 @@ def _discover_sources(module):
         visited.add(identity)
         module_type = _module_type(current)
         requested_format, suffix = _source_request(module_type)
+        if not requested_format and codegen == "llvm":
+            requested_format, suffix = "ll", "ll"
+        elif not requested_format and codegen == "c":
+            requested_format, suffix = "c", "c"
         source = None
         reason = None
         try:
@@ -190,6 +195,24 @@ def _discover_sources(module):
 
     visit(module)
     return discovered
+
+
+def _require_host_source(sources, host_codegen):
+    """Require a non-empty source in the language selected for the host."""
+    codegen = host_codegen.lower()
+    if codegen == "llvm":
+        formats = {"ll"}
+    elif codegen == "c":
+        formats = {"c", "cc", "cpp"}
+    else:
+        return
+    if not any(
+        source.get("available")
+        and source.get("bytes")
+        and source.get("source_format") in formats
+        for source in sources
+    ):
+        raise RuntimeError(f"{host_codegen} artifact has no inspectable host source")
 
 
 def _safe_relative_file(bundle_dir, relative):
@@ -324,6 +347,7 @@ def _read_validated_sources(bundle_dir, manifest):
         raise RuntimeError("artifact manifest has an invalid sources list")
 
     source_paths = []
+    source_records = []
     for index, entry in enumerate(sources):
         if not isinstance(entry, dict):
             raise RuntimeError(f"artifact manifest has an invalid source entry at index {index}")
@@ -350,6 +374,14 @@ def _read_validated_sources(bundle_dir, manifest):
         if actual_sha256 != expected_sha256:
             raise RuntimeError(f"source hash mismatch: {path}")
         source_paths.append(path)
+        source_records.append(
+            {
+                "available": True,
+                "bytes": path.read_bytes(),
+                "source_format": entry.get("source_format"),
+            }
+        )
+    _require_host_source(source_records, manifest.get("host_codegen", ""))
     return tuple(source_paths)
 
 
@@ -384,6 +416,14 @@ def _publish(stage, artifact_dir):
     return backup
 
 
+def _remove_path(path):
+    """Remove one exact artifact or staging path, including symlinks."""
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
 def export_graph_bundle(factory, output_root, relative_artifact_dir, *, artifact_name,
                         artifact_role, model_sha256, host_codegen, simulator,
                         expected_vta_symbols=(), forbidden_vta_symbols=()):
@@ -399,6 +439,7 @@ def export_graph_bundle(factory, output_root, relative_artifact_dir, *, artifact
     artifact_dir.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=f".{artifact_dir.name}.staging-", dir=artifact_dir.parent))
     backup = None
+    published = False
     try:
         graph_json = factory.get_graph_json()
         if not isinstance(graph_json, str):
@@ -414,11 +455,8 @@ def export_graph_bundle(factory, output_root, relative_artifact_dir, *, artifact
             raise RuntimeError(f"factory did not export a library: {library_path}")
 
         library = factory.get_lib()
-        sources = _discover_sources(library)
-        if host_codegen.lower() in {"llvm", "c"} and not any(
-            source["available"] for source in sources
-        ):
-            raise RuntimeError(f"{host_codegen} artifact has no inspectable host source")
+        sources = _discover_sources(library, host_codegen)
+        _require_host_source(sources, host_codegen)
         staged_module = tvm.runtime.load_module(str(library_path))
         expected_implemented, forbidden_absent = _validate_symbols(
             staged_module, expected, forbidden
@@ -432,6 +470,7 @@ def export_graph_bundle(factory, output_root, relative_artifact_dir, *, artifact
         _write_manifest(stage / "manifest.json", manifest)
 
         backup = _publish(stage, artifact_dir)
+        published = True
         final_manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
         final_module = tvm.runtime.load_module(
             str(artifact_dir / ("model" + shared_library_suffix()))
@@ -447,8 +486,8 @@ def export_graph_bundle(factory, output_root, relative_artifact_dir, *, artifact
     except Exception:
         if stage.exists():
             shutil.rmtree(stage)
-        if backup is not None and artifact_dir.exists():
-            shutil.rmtree(artifact_dir)
+        if published and (artifact_dir.exists() or artifact_dir.is_symlink()):
+            _remove_path(artifact_dir)
         if backup is not None and backup.exists() and not artifact_dir.exists():
             os.replace(backup, artifact_dir)
         raise

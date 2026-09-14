@@ -35,7 +35,7 @@ ARTIFACTS_PATH = APP_ROOT / "graph_artifacts.py"
 def artifacts_module():
     try:
         import tvm  # noqa: F401
-    except RuntimeError:
+    except (ImportError, RuntimeError):
         for name in tuple(sys.modules):
             if name == "tvm" or name.startswith("tvm."):
                 del sys.modules[name]
@@ -280,6 +280,63 @@ def test_failed_replacement_preserves_previous_bundle_and_cleans_staging(
             simulator="fsim",
         )
     assert (tmp_path / "bundle" / "manifest.json").read_bytes() == old_manifest
+    assert not list(tmp_path.glob(".bundle.staging-*"))
+
+
+def test_failed_final_reload_on_first_export_removes_published_bundle_and_staging(
+    artifacts_module, monkeypatch, tmp_path
+):
+    module = FakeModule("llvm", source="define @main() { ret void }\n")
+    monkeypatch.setattr(artifacts_module.relay, "save_param_dict", lambda params: params)
+    calls = []
+
+    def fail_final_reload(path):
+        calls.append(path)
+        if len(calls) == 1:
+            return FakeModule("loaded", source="loaded-source")
+        raise RuntimeError("synthetic final reload failure")
+
+    monkeypatch.setattr(artifacts_module.tvm.runtime, "load_module", fail_final_reload)
+    with pytest.raises(RuntimeError, match="synthetic final reload failure"):
+        artifacts_module.export_graph_bundle(
+            FakeFactory(module),
+            tmp_path,
+            "bundle",
+            artifact_name="resnet8",
+            artifact_role="reference",
+            model_sha256="a" * 64,
+            host_codegen="llvm",
+            simulator="fsim",
+        )
+    assert not (tmp_path / "bundle").exists()
+    assert not list(tmp_path.glob(".bundle.staging-*"))
+
+
+@pytest.mark.parametrize(
+    ("module_type", "source", "host_codegen"),
+    [
+        ("llvm", "", "llvm"),
+        ("c", "int main(void) { return 0; }\n", "llvm"),
+        ("llvm", "define @main() { ret void }\n", "c"),
+    ],
+)
+def test_host_source_acceptance_requires_nonempty_matching_language(
+    artifacts_module, monkeypatch, tmp_path, module_type, source, host_codegen
+):
+    module = FakeModule(module_type, source=source)
+    monkeypatch.setattr(artifacts_module.relay, "save_param_dict", lambda params: params)
+    with pytest.raises(RuntimeError, match="no inspectable host source"):
+        artifacts_module.export_graph_bundle(
+            FakeFactory(module),
+            tmp_path,
+            "bundle",
+            artifact_name="resnet8",
+            artifact_role="reference",
+            model_sha256="a" * 64,
+            host_codegen=host_codegen,
+            simulator="fsim",
+        )
+    assert not (tmp_path / "bundle").exists()
     assert not list(tmp_path.glob(".bundle.staging-*"))
 
 
