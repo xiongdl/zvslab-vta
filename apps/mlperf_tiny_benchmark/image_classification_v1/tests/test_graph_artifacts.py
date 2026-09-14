@@ -271,3 +271,42 @@ def test_load_graph_bundle_validates_final_files(artifacts_module, monkeypatch, 
     assert reloaded.graph_json == result.graph_json
     assert reloaded.params == result.params
     assert reloaded.module is loaded
+
+
+def test_load_graph_bundle_rejects_tampered_source(artifacts_module, monkeypatch, tmp_path):
+    result = _export(
+        artifacts_module,
+        monkeypatch,
+        tmp_path,
+        FakeModule("llvm", source="define @main() { ret void }\n"),
+    )
+    result.source_paths[0].write_text("tampered\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="source hash mismatch"):
+        artifacts_module.load_graph_bundle(tmp_path, "bundle")
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda entry: entry.update(path="../escape.ll"), "unsafe relative"),
+        (lambda entry: entry.update(path="source/missing.ll"), "source file is missing"),
+        (lambda entry: entry.update(path=None), "invalid source path"),
+    ],
+)
+def test_load_graph_bundle_rejects_malformed_source_entries(
+    artifacts_module, monkeypatch, tmp_path, mutation, message
+):
+    _export(
+        artifacts_module,
+        monkeypatch,
+        tmp_path,
+        FakeModule("llvm", source="define @main() { ret void }\n"),
+    )
+    manifest_path = tmp_path / "bundle" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    mutation(manifest["sources"][0])
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match=message):
+        artifacts_module.load_graph_bundle(tmp_path, "bundle")

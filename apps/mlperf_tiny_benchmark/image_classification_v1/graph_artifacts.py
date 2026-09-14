@@ -189,8 +189,12 @@ def _discover_sources(module):
 
 
 def _safe_relative_file(bundle_dir, relative):
+    if not isinstance(relative, str) or not relative:
+        raise RuntimeError(f"manifest contains an invalid relative file path: {relative!r}")
     path = Path(relative)
-    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+    if path == Path(".") or path.is_absolute() or any(
+        part in {"", ".", ".."} for part in path.parts
+    ):
         raise RuntimeError(f"manifest contains an unsafe relative file path: {relative!r}")
     resolved = (bundle_dir / path).resolve(strict=False)
     try:
@@ -310,13 +314,44 @@ def _read_validated_files(bundle_dir, manifest):
     return loaded, graph_json, params
 
 
+def _read_validated_sources(bundle_dir, manifest):
+    sources = manifest.get("sources")
+    if not isinstance(sources, list):
+        raise RuntimeError("artifact manifest has an invalid sources list")
+
+    source_paths = []
+    for index, entry in enumerate(sources):
+        if not isinstance(entry, dict):
+            raise RuntimeError(f"artifact manifest has an invalid source entry at index {index}")
+        available = entry.get("available")
+        if not isinstance(available, bool):
+            raise RuntimeError(f"artifact manifest has an invalid source availability at index {index}")
+        if not available:
+            if entry.get("path") is not None or entry.get("sha256") is not None:
+                raise RuntimeError(
+                    f"artifact manifest has unexpected source file metadata at index {index}"
+                )
+            continue
+
+        try:
+            path = _safe_relative_file(bundle_dir, entry.get("path"))
+        except RuntimeError as error:
+            raise RuntimeError(f"invalid source path at index {index}: {error}") from error
+        if not path.is_file():
+            raise RuntimeError(f"source file is missing: {path}")
+        expected_sha256 = entry.get("sha256")
+        if not isinstance(expected_sha256, str) or not _HASH_RE.fullmatch(expected_sha256):
+            raise RuntimeError(f"invalid source SHA-256 at index {index}")
+        actual_sha256 = _file_sha256(path)
+        if actual_sha256 != expected_sha256:
+            raise RuntimeError(f"source hash mismatch: {path}")
+        source_paths.append(path)
+    return tuple(source_paths)
+
+
 def _result_from_files(bundle_dir, manifest, module):
     files, graph_json, params = _read_validated_files(bundle_dir, manifest)
-    source_paths = tuple(
-        _safe_relative_file(bundle_dir, entry["path"])
-        for entry in manifest.get("sources", ())
-        if entry.get("available")
-    )
+    source_paths = _read_validated_sources(bundle_dir, manifest)
     return GraphArtifactBundle(
         artifact_dir=bundle_dir,
         graph_path=files["graph"],
