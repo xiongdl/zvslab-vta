@@ -28,7 +28,8 @@ import vta
 from tvm import relay
 from tvm.contrib import graph_executor
 
-from model_pipeline import load_sample, prepare_model
+from graph_artifacts import export_graph_bundle
+from model_pipeline import MODEL_SHA256, load_sample, prepare_model
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -46,6 +47,7 @@ class ReloadedArtifact:
     """One exported and reloaded Graph Executor library."""
 
     path: Path
+    artifact_dir: Path
     graph_json: str
     params: bytes
     module: tvm.runtime.Module
@@ -123,64 +125,54 @@ def _mixed_target():
     return tvm.target.Target("vta", host=environment.target_host)
 
 
-def _artifact_paths(output_dir):
-    suffix = shared_library_suffix()
-    return (
-        output_dir / f"{REFERENCE_ARTIFACT_STEM}{suffix}",
-        output_dir / f"{MIXED_ARTIFACT_STEM}{suffix}",
-    )
-
-
-def _remove_artifacts(paths):
-    for path in paths:
-        path.unlink(missing_ok=True)
-
-
 def build_host_artifacts(prepared, output_dir):
     """Build, export, and reload both standard host libraries without FSIM."""
     if prepared.reference_module is not prepared.quantized_module:
         raise RuntimeError("pure LLVM build must use the exact shared quantized module object")
 
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    reference_path, mixed_path = _artifact_paths(output_dir)
-    paths = (reference_path, mixed_path)
-    _remove_artifacts(paths)
-    reference_params = None
-    mixed_params = None
+    reference_factory = relay.build(prepared.reference_module, target="llvm")
+    with vta.build_config():
+        mixed_factory = relay.build(prepared.mixed_module, target=_mixed_target())
 
-    try:
-        reference_factory = relay.build(prepared.reference_module, target="llvm")
-        with vta.build_config():
-            mixed_factory = relay.build(prepared.mixed_module, target=_mixed_target())
-
-        reference_graph = reference_factory.get_graph_json()
-        mixed_graph = mixed_factory.get_graph_json()
-        reference_params = relay.save_param_dict(reference_factory.get_params())
-        mixed_params = relay.save_param_dict(mixed_factory.get_params())
-        reference_factory.export_library(str(reference_path))
-        mixed_factory.export_library(str(mixed_path))
-        reference_module = tvm.runtime.load_module(str(reference_path))
-        mixed_module = tvm.runtime.load_module(str(mixed_path))
-    except Exception:
-        _remove_artifacts(paths)
-        reference_params = None
-        mixed_params = None
-        raise
+    reference_bundle = export_graph_bundle(
+        reference_factory,
+        output_dir,
+        "reference",
+        artifact_name=REFERENCE_ARTIFACT_STEM,
+        artifact_role="reference",
+        model_sha256=getattr(getattr(prepared, "imported", None), "model_sha256", MODEL_SHA256),
+        host_codegen="llvm",
+        simulator="fsim",
+        forbidden_vta_symbols=prepared.routing.symbols,
+    )
+    mixed_bundle = export_graph_bundle(
+        mixed_factory,
+        output_dir,
+        "mixed",
+        artifact_name=MIXED_ARTIFACT_STEM,
+        artifact_role="mixed",
+        model_sha256=getattr(getattr(prepared, "imported", None), "model_sha256", MODEL_SHA256),
+        host_codegen="llvm",
+        simulator="fsim",
+        expected_vta_symbols=prepared.routing.symbols,
+    )
 
     return HostArtifacts(
         reference=ReloadedArtifact(
-            path=reference_path,
-            graph_json=reference_graph,
-            params=reference_params,
-            module=reference_module,
+            path=reference_bundle.library_path,
+            artifact_dir=reference_bundle.artifact_dir,
+            graph_json=reference_bundle.graph_json,
+            params=reference_bundle.params,
+            module=reference_bundle.module,
             device=tvm.cpu(0),
         ),
         mixed=ReloadedArtifact(
-            path=mixed_path,
-            graph_json=mixed_graph,
-            params=mixed_params,
-            module=mixed_module,
+            path=mixed_bundle.library_path,
+            artifact_dir=mixed_bundle.artifact_dir,
+            graph_json=mixed_bundle.graph_json,
+            params=mixed_bundle.params,
+            module=mixed_bundle.module,
             device=tvm.ext_dev(0),
         ),
         vta_symbols=tuple(prepared.routing.symbols),

@@ -35,7 +35,7 @@ RUN_PATH = APP_ROOT / "run.py"
 MODEL_PATH = APP_ROOT / "model" / "pretrainedResnet.tflite"
 MANIFEST_PATH = APP_ROOT / "samples" / "manifest.json"
 EXPECTED_VTA_SYMBOLS = tuple(f"tvmgen_mlperf_resnet_vta_main_{index}" for index in range(8))
-EXPECTED_ARTIFACT_STEMS = ("mlperf_resnet_llvm", "mlperf_resnet_vta")
+EXPECTED_ARTIFACT_DIRS = ("reference", "mixed")
 REQUIRED_PROFILER_COUNTERS = ("gemm_counter", "wgt_load_nbytes", "out_store_nbytes")
 
 
@@ -102,6 +102,9 @@ def test_build_exports_and_reloads_two_standard_dsos_without_loading_fsim(
             events.append(("get_params", self.kind))
             return params_by_kind[self.kind]
 
+        def get_lib(self):
+            return SimpleNamespace(type_key=self.kind, imported_modules=(), get_source=lambda fmt="": "source")
+
         def export_library(self, path):
             path = Path(path)
             events.append(("export", self.kind, path))
@@ -115,7 +118,8 @@ def test_build_exports_and_reloads_two_standard_dsos_without_loading_fsim(
     def fake_load(path):
         path = Path(path)
         events.append(("reload", path))
-        loaded = SimpleNamespace(path=path)
+        symbols = EXPECTED_VTA_SYMBOLS if path.parent.name == "mixed" or path.parent.name.startswith(".mixed") else ()
+        loaded = SimpleNamespace(path=path, implements_function=lambda symbol, query_imports: symbol in symbols)
         loaded_modules[path] = loaded
         return loaded
 
@@ -144,8 +148,10 @@ def test_build_exports_and_reloads_two_standard_dsos_without_loading_fsim(
     artifacts = deployment_runtime.build_host_artifacts(prepared, tmp_path)
 
     suffix = deployment_runtime.shared_library_suffix()
-    assert artifacts.reference.path == tmp_path / f"{EXPECTED_ARTIFACT_STEMS[0]}{suffix}"
-    assert artifacts.mixed.path == tmp_path / f"{EXPECTED_ARTIFACT_STEMS[1]}{suffix}"
+    assert artifacts.reference.path == tmp_path / "reference" / ("model" + suffix)
+    assert artifacts.mixed.path == tmp_path / "mixed" / ("model" + suffix)
+    assert artifacts.reference.artifact_dir == tmp_path / "reference"
+    assert artifacts.mixed.artifact_dir == tmp_path / "mixed"
     assert artifacts.reference.graph_json == '{"kind":"reference"}'
     assert artifacts.mixed.graph_json == '{"kind":"mixed"}'
     assert artifacts.reference.module is loaded_modules[artifacts.reference.path]
@@ -165,7 +171,7 @@ def test_build_exports_and_reloads_two_standard_dsos_without_loading_fsim(
     assert events.index(("build_config_enter",)) < events.index(build_events[1])
     assert events.index(build_events[1]) < events.index(("build_config_exit",))
     assert [event[0] for event in events].count("export") == 2
-    assert [event[0] for event in events].count("reload") == 2
+    assert [event[0] for event in events].count("reload") == 4
     param_events = [event for event in events if event[0] in {"get_params", "serialize_params"}]
     assert len(param_events) == 4
     assert set(param_events) == {
@@ -267,6 +273,9 @@ def test_partial_artifacts_are_removed_when_export_fails(deployment_runtime, mon
         def get_params(self):
             return {f"{self.kind}_weight": object()}
 
+        def get_lib(self):
+            return SimpleNamespace(type_key="llvm", imported_modules=(), get_source=lambda fmt="": "source")
+
         def export_library(self, path):
             nonlocal exports
             exports += 1
@@ -287,14 +296,22 @@ def test_partial_artifacts_are_removed_when_export_fails(deployment_runtime, mon
     )
     monkeypatch.setattr(deployment_runtime.vta, "build_config", fake_build_config)
     monkeypatch.setattr(deployment_runtime, "_mixed_target", object)
+    monkeypatch.setattr(
+        deployment_runtime.tvm.runtime,
+        "load_module",
+        lambda path: SimpleNamespace(
+            implements_function=lambda symbol, query_imports: Path(path).parent.name == "mixed"
+        ),
+    )
 
     with pytest.raises(RuntimeError, match="synthetic export failure"):
         deployment_runtime.build_host_artifacts(prepared, tmp_path)
 
     suffix = deployment_runtime.shared_library_suffix()
-    for stem in EXPECTED_ARTIFACT_STEMS:
-        assert not (tmp_path / f"{stem}{suffix}").exists()
-    assert list(tmp_path.iterdir()) == []
+    assert (tmp_path / "reference" / "manifest.json").is_file()
+    assert not (tmp_path / "mixed").exists()
+    assert not list(tmp_path.glob(".reference.staging-*"))
+    assert not list(tmp_path.glob(".mixed.staging-*"))
 
 
 def test_reloaded_mixed_artifact_requires_every_deterministic_vta_symbol(deployment_runtime):
@@ -429,8 +446,10 @@ def test_cli_has_only_the_operational_output_directory_option(
 def test_application_sources_use_only_the_approved_host_flow():
     assert RUNTIME_PATH.is_file(), f"missing Task 12 implementation: {RUNTIME_PATH}"
     assert RUN_PATH.is_file(), f"missing Task 12 implementation: {RUN_PATH}"
+    artifact_path = APP_ROOT / "graph_artifacts.py"
     sources = {
-        path.name: path.read_text(encoding="utf-8") for path in (RUNTIME_PATH, RUN_PATH)
+        path.name: path.read_text(encoding="utf-8")
+        for path in (RUNTIME_PATH, RUN_PATH, artifact_path)
     }
     combined = "\n".join(sources.values())
     lowered = combined.lower()
