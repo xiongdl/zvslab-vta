@@ -154,8 +154,12 @@ def _discover_sources(module):
         reason = None
         try:
             source = current.get_source(requested_format)
-        except Exception as error:  # Runtime modules legitimately have no source.
-            reason = str(error) or "source unavailable"
+        except Exception:  # Runtime modules legitimately have no source.
+            # Keep exception details out of the persisted manifest: runtime and
+            # staging paths are neither stable nor useful to artifact readers.
+            reason = "get_source_failed"
+        if source is None and reason is None:
+            reason = "source_unavailable"
         if source is not None:
             if isinstance(source, bytes):
                 source = source.decode("utf-8")

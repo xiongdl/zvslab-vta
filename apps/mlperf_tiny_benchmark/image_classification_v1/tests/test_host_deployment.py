@@ -497,3 +497,19 @@ def test_end_to_end_host_fsim_deployment(deployment_runtime, tmp_path):
         assert comparison.top1 == int(np.argmax(comparison.reference, axis=1)[0])
     for counter in REQUIRED_PROFILER_COUNTERS:
         assert result.execution.profiler_stats[counter] > 0
+
+    for artifact in (result.artifacts.reference, result.artifacts.mixed):
+        manifest = json.loads(
+            (artifact.artifact_dir / "manifest.json").read_text(encoding="utf-8")
+        )
+        llvm_sources = [
+            entry
+            for entry in manifest["sources"]
+            if entry["source_format"] == "ll" and entry["path"]
+        ]
+        assert llvm_sources, f"{artifact.artifact_dir} has no LLVM IR source entry"
+        assert all(
+            (artifact.artifact_dir / entry["path"]).is_file()
+            and (artifact.artifact_dir / entry["path"]).stat().st_size > 0
+            for entry in llvm_sources
+        )

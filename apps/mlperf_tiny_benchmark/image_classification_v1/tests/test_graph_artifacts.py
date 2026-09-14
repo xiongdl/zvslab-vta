@@ -58,13 +58,16 @@ def artifacts_module():
 
 
 class FakeModule:
-    def __init__(self, type_key, source=None, imports=(), symbols=()):
+    def __init__(self, type_key, source=None, imports=(), symbols=(), source_error=None):
         self.type_key = type_key
         self._source = source
+        self._source_error = source_error
         self.imported_modules = list(imports)
         self._symbols = set(symbols)
 
     def get_source(self, fmt=""):
+        if self._source_error is not None:
+            raise RuntimeError(self._source_error)
         if self._source is None:
             raise RuntimeError("source is unavailable")
         return self._source
@@ -154,6 +157,25 @@ def test_source_discovery_is_recursive_preorder_and_records_no_source(artifacts_
     assert [path.name for path in result.source_paths] == ["00-llvm.ll", "01-c.c"]
     assert result.source_paths[0].read_text(encoding="utf-8").startswith("define")
     assert result.source_paths[1].read_text(encoding="utf-8").startswith("int leaf")
+
+
+def test_source_discovery_manifest_uses_stable_reason_for_source_exception(
+    artifacts_module, monkeypatch, tmp_path
+):
+    absolute_detail = "/private/tmp/build-123/module-identity-456"
+    root = FakeModule(
+        "llvm",
+        source="define @root() { ret void }\n",
+        imports=(FakeModule("runtime", source_error=f"failed at {absolute_detail}"),),
+    )
+    result = _export(artifacts_module, monkeypatch, tmp_path, root)
+
+    manifest_text = result.manifest_path.read_text(encoding="utf-8")
+    manifest = json.loads(manifest_text)
+    unavailable = manifest["sources"][1]
+    assert unavailable["reason"] == "get_source_failed"
+    assert absolute_detail not in manifest_text
+    assert "failed at" not in manifest_text
 
 
 @pytest.mark.parametrize("relative", ["", ".", "../escape", "nested/../../escape", "/absolute"])
@@ -271,6 +293,35 @@ def test_load_graph_bundle_validates_final_files(artifacts_module, monkeypatch, 
     assert reloaded.graph_json == result.graph_json
     assert reloaded.params == result.params
     assert reloaded.module is loaded
+
+
+@pytest.mark.parametrize("file_key", ["graph", "params", "library"])
+def test_load_graph_bundle_rejects_tampered_core_file_before_module_load(
+    artifacts_module, monkeypatch, tmp_path, file_key
+):
+    result = _export(
+        artifacts_module,
+        monkeypatch,
+        tmp_path,
+        FakeModule("llvm", source="define @main() { ret void }\n"),
+    )
+    paths = {
+        "graph": result.graph_path,
+        "params": result.params_path,
+        "library": result.library_path,
+    }
+    path = paths[file_key]
+    path.write_bytes(path.read_bytes() + b"tampered")
+    load_calls = []
+    monkeypatch.setattr(
+        artifacts_module.tvm.runtime,
+        "load_module",
+        lambda library_path: load_calls.append(library_path),
+    )
+
+    with pytest.raises(RuntimeError, match=rf"artifact {file_key} hash mismatch"):
+        artifacts_module.load_graph_bundle(tmp_path, "bundle")
+    assert load_calls == []
 
 
 def test_load_graph_bundle_rejects_tampered_source(artifacts_module, monkeypatch, tmp_path):
