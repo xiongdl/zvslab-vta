@@ -51,6 +51,18 @@ void Require(bool condition, const std::string& message) {
   }
 }
 
+std::string HostKindName(const Optional<Target>& host) {
+  if (!host.defined() || !host.value().defined()) {
+    return "<missing>";
+  }
+  return host.value()->kind->name;
+}
+
+std::string UnsupportedHostMessage(const std::string& prefix, const Optional<Target>& host) {
+  return prefix + " rejected host '" + HostKindName(host) +
+         "'; supported host kinds are llvm and c";
+}
+
 }  // namespace
 
 bool IsSupportedHostTarget(const Target& target) {
@@ -63,7 +75,7 @@ void ValidateActiveVTAHost(const Target& target) {
           "VTA RelayToTIR requires an active vta target");
   Optional<Target> host = target->GetHost();
   Require(host.defined() && IsSupportedHostTarget(host.value()),
-          "VTA RelayToTIR requires an LLVM host or C host on the active vta target");
+          UnsupportedHostMessage("VTA RelayToTIR", host));
 }
 
 namespace {
@@ -160,38 +172,66 @@ Optional<PrimExpr> CHostConstantValue(DataType dtype, const void* value) {
   }
   if (dtype.is_int()) {
     switch (dtype.bits()) {
-      case 8:
-        return tir::make_const(dtype, *static_cast<const int8_t*>(value));
-      case 16:
-        return tir::make_const(dtype, *reinterpret_cast<const int16_t*>(value));
-      case 32:
-        return tir::make_const(dtype, *reinterpret_cast<const int32_t*>(value));
-      case 64:
-        return tir::make_const(dtype, *reinterpret_cast<const int64_t*>(value));
+      case 8: {
+        int8_t constant;
+        std::memcpy(&constant, value, sizeof(constant));
+        return tir::make_const(dtype, constant);
+      }
+      case 16: {
+        int16_t constant;
+        std::memcpy(&constant, value, sizeof(constant));
+        return tir::make_const(dtype, constant);
+      }
+      case 32: {
+        int32_t constant;
+        std::memcpy(&constant, value, sizeof(constant));
+        return tir::make_const(dtype, constant);
+      }
+      case 64: {
+        int64_t constant;
+        std::memcpy(&constant, value, sizeof(constant));
+        return tir::make_const(dtype, constant);
+      }
       default:
         return NullOpt;
     }
   }
   if (dtype.is_uint()) {
     switch (dtype.bits()) {
-      case 8:
-        return tir::make_const(dtype, *static_cast<const uint8_t*>(value));
-      case 16:
-        return tir::make_const(dtype, *reinterpret_cast<const uint16_t*>(value));
-      case 32:
-        return tir::make_const(dtype, *reinterpret_cast<const uint32_t*>(value));
-      case 64:
-        return tir::make_const(dtype, *reinterpret_cast<const uint64_t*>(value));
+      case 8: {
+        uint8_t constant;
+        std::memcpy(&constant, value, sizeof(constant));
+        return tir::make_const(dtype, constant);
+      }
+      case 16: {
+        uint16_t constant;
+        std::memcpy(&constant, value, sizeof(constant));
+        return tir::make_const(dtype, constant);
+      }
+      case 32: {
+        uint32_t constant;
+        std::memcpy(&constant, value, sizeof(constant));
+        return tir::make_const(dtype, constant);
+      }
+      case 64: {
+        uint64_t constant;
+        std::memcpy(&constant, value, sizeof(constant));
+        return tir::make_const(dtype, constant);
+      }
       default:
         return NullOpt;
     }
   }
   if (dtype.is_float()) {
     if (dtype.bits() == 32) {
-      return tir::make_const(dtype, *reinterpret_cast<const float*>(value));
+      float constant;
+      std::memcpy(&constant, value, sizeof(constant));
+      return tir::make_const(dtype, constant);
     }
     if (dtype.bits() == 64) {
-      return tir::make_const(dtype, *reinterpret_cast<const double*>(value));
+      double constant;
+      std::memcpy(&constant, value, sizeof(constant));
+      return tir::make_const(dtype, constant);
     }
   }
   return NullOpt;
@@ -256,7 +296,7 @@ void ValidateModule(const IRModule& mod, const Target& target) {
           "VTA TIRToRuntime requires a vta target");
   Optional<Target> host = target->GetHost();
   Require(host.defined() && IsSupportedHostTarget(host.value()),
-          "VTA TIRToRuntime requires an LLVM host or C host target");
+          UnsupportedHostMessage("VTA TIRToRuntime", host));
   Require(mod->functions.size() > 0, "VTA TIRToRuntime does not accept an empty module");
 
   std::unordered_set<std::string> symbols;
@@ -292,7 +332,7 @@ void ValidateModule(const IRModule& mod, const Target& target) {
                      calling_conv.value()->value == static_cast<int>(CallingConv::kCPackedFunc);
     if (is_packed) {
       Require(IsSupportedHostTarget(function_target.value()),
-              "VTA PrimFunc " + symbol + " has invalid packed host target");
+              UnsupportedHostMessage("VTA PrimFunc " + symbol + " packed", function_target));
       Require(function_target.value()->str() == host.value()->str(),
               "VTA PrimFunc " + symbol + " packed host does not match selected host");
     } else {
@@ -300,7 +340,7 @@ void ValidateModule(const IRModule& mod, const Target& target) {
               "VTA PrimFunc " + symbol + " has invalid target");
       Optional<Target> function_host = function_target.value()->GetHost();
       Require(function_host.defined() && IsSupportedHostTarget(function_host.value()),
-              "VTA PrimFunc " + symbol + " target requires an LLVM host or C host");
+              UnsupportedHostMessage("VTA PrimFunc " + symbol + " target", function_host));
       Require(function_host.value()->str() == host.value()->str(),
               "VTA PrimFunc " + symbol + " host does not match selected host");
     }

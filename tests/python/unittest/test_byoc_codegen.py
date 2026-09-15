@@ -21,10 +21,12 @@ import sys
 import textwrap
 from pathlib import Path
 
+import numpy as np
 import pytest
 import tvm
 import vta
 from tvm import relay
+from tvm.ir import CallingConv
 
 from byoc_utils import make_qnn_conv2d_module
 from vta.relay import partition_for_vta
@@ -152,7 +154,18 @@ def test_modern_relay_to_tir_rejects_missing_active_host():
     )
 
     with tvm.target.Target("vta"):
-        with pytest.raises(tvm.error.TVMError, match="LLVM host or C host"):
+        with pytest.raises(tvm.error.TVMError, match="<missing>.*llvm and c"):
+            _relay_to_tir_hook()(partitioned)
+
+
+def test_modern_relay_to_tir_rejects_unsupported_active_host_with_supported_kinds():
+    partitioned = partition_for_vta(
+        make_qnn_conv2d_module(vta.get_env()), mod_name="unsupported_active_host"
+    )
+    active_target = tvm.target.Target("vta", host=tvm.target.Target("stackvm"))
+
+    with active_target:
+        with pytest.raises(tvm.error.TVMError, match="stackvm.*llvm and c"):
             _relay_to_tir_hook()(partitioned)
 
 
@@ -346,7 +359,7 @@ def test_tir_to_runtime_rejects_wrong_target_and_missing_llvm_host():
 
     with pytest.raises(tvm.error.TVMError, match="vta target"):
         _tir_to_runtime_hook()(mod, tvm.target.Target("llvm"))
-    with pytest.raises(tvm.error.TVMError, match="LLVM host"):
+    with pytest.raises(tvm.error.TVMError, match="<missing>.*llvm and c"):
         _tir_to_runtime_hook()(mod, tvm.target.Target("vta"))
 
     symbol = symbols[0]
@@ -354,6 +367,73 @@ def test_tir_to_runtime_rejects_wrong_target_and_missing_llvm_host():
     mod.update_func(mod.get_global_var(symbol), wrong_function_target)
     with pytest.raises(tvm.error.TVMError, match="{}.*target".format(symbol)):
         _tir_to_runtime_hook()(mod, target)
+
+
+def test_tir_to_runtime_rejects_unsupported_top_level_host_with_supported_kinds():
+    mod, _, _ = _vta_tir_module()
+    unsupported_target = tvm.target.Target("vta", host=tvm.target.Target("stackvm"))
+
+    with pytest.raises(tvm.error.TVMError, match="stackvm.*llvm and c"):
+        _tir_to_runtime_hook()(mod, unsupported_target)
+
+
+def test_tir_to_runtime_rejects_unsupported_raw_function_host_with_supported_kinds():
+    mod, target, symbols = _vta_tir_module()
+    symbol = symbols[0]
+    unsupported_function_target = tvm.target.Target(
+        "vta", host=tvm.target.Target("stackvm")
+    )
+    malformed = mod[symbol].with_attr("target", unsupported_function_target)
+    mod.update_func(mod.get_global_var(symbol), malformed)
+
+    with pytest.raises(tvm.error.TVMError, match="stackvm.*llvm and c"):
+        _tir_to_runtime_hook()(mod, target)
+
+
+def test_tir_to_runtime_rejects_unsupported_packed_function_host_with_supported_kinds():
+    mod, target, symbols = _vta_tir_module()
+    symbol = symbols[0]
+    malformed = mod[symbol].with_attrs(
+        {
+            "target": tvm.target.Target("stackvm"),
+            "calling_conv": int(CallingConv.C_PACKED_FUNC),
+        }
+    )
+    mod.update_func(mod.get_global_var(symbol), malformed)
+
+    with pytest.raises(tvm.error.TVMError, match="stackvm.*llvm and c"):
+        _tir_to_runtime_hook()(mod, target)
+
+
+def test_tir_to_runtime_c_converts_integer_and_float_constants():
+    target = tvm.target.Target("vta", host=tvm.target.Target("c"))
+    functions = {}
+    for symbol, dtype, values in (
+        ("const_i32", "int32", [0x11223344, -7]),
+        ("const_f32", "float32", [1.25, -3.5]),
+    ):
+        buffer_var = tvm.tir.Var(
+            symbol + "_buffer",
+            tvm.ir.PointerType(tvm.ir.PrimType(dtype), "global"),
+        )
+        data = tvm.nd.array(np.asarray(values, dtype=dtype))
+        body = tvm.tir.AllocateConst(
+            buffer_var,
+            dtype,
+            [len(values)],
+            data,
+            tvm.tir.Evaluate(tvm.tir.call_extern("int32", "VTASynchronize")),
+        )
+        attrs = tvm.ir.make_node("DictAttrs", global_symbol=symbol, target=target)
+        functions[symbol] = tvm.tir.PrimFunc([], body, attrs=attrs)
+
+    runtime_module = _tir_to_runtime_hook()(tvm.IRModule(functions), target)
+    source = runtime_module.get_source()
+
+    assert "287454020" in source
+    assert "-7" in source
+    assert "1.25" in source
+    assert "-3.5" in source
 
 
 def test_tir_to_runtime_rejects_malformed_runtime_calls():
