@@ -235,6 +235,15 @@ def _write_manifest(path, manifest):
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _freeze_manifest(value):
+    """Recursively make a manifest safe to expose as a read-only value."""
+    if isinstance(value, dict):
+        return MappingProxyType({key: _freeze_manifest(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_manifest(item) for item in value)
+    return value
+
+
 def _validate_symbols(module, expected, forbidden):
     checker = getattr(module, "implements_function", None)
     if (expected or forbidden) and not callable(checker):
@@ -385,9 +394,13 @@ def _read_validated_sources(bundle_dir, manifest):
     return tuple(source_paths)
 
 
-def _result_from_files(bundle_dir, manifest, module):
-    files, graph_json, params = _read_validated_files(bundle_dir, manifest)
-    source_paths = _read_validated_sources(bundle_dir, manifest)
+def _result_from_files(bundle_dir, manifest, module, validated=None):
+    if validated is None:
+        validated = (
+            *_read_validated_files(bundle_dir, manifest),
+            _read_validated_sources(bundle_dir, manifest),
+        )
+    files, graph_json, params, source_paths = validated
     return GraphArtifactBundle(
         artifact_dir=bundle_dir,
         graph_path=files["graph"],
@@ -397,7 +410,7 @@ def _result_from_files(bundle_dir, manifest, module):
         graph_json=graph_json,
         params=params,
         module=module,
-        manifest=MappingProxyType(manifest),
+        manifest=_freeze_manifest(manifest),
         source_paths=source_paths,
     )
 
@@ -472,11 +485,13 @@ def export_graph_bundle(factory, output_root, relative_artifact_dir, *, artifact
         backup = _publish(stage, artifact_dir)
         published = True
         final_manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
-        final_module = tvm.runtime.load_module(
-            str(artifact_dir / ("model" + shared_library_suffix()))
+        final_validated = (
+            *_read_validated_files(artifact_dir, final_manifest),
+            _read_validated_sources(artifact_dir, final_manifest),
         )
+        final_module = tvm.runtime.load_module(str(final_validated[0]["library"]))
         _validate_symbols(final_module, expected, forbidden)
-        result = _result_from_files(artifact_dir, final_manifest, final_module)
+        result = _result_from_files(artifact_dir, final_manifest, final_module, final_validated)
         if backup is not None:
             if backup.is_dir():
                 shutil.rmtree(backup)
@@ -502,7 +517,11 @@ def load_graph_bundle(output_root, relative_artifact_dir):
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != 1:
         raise RuntimeError("unsupported artifact manifest schema")
-    files, _, _ = _read_validated_files(artifact_dir, manifest)
+    validated = (
+        *_read_validated_files(artifact_dir, manifest),
+        _read_validated_sources(artifact_dir, manifest),
+    )
+    files = validated[0]
     module = tvm.runtime.load_module(str(files["library"]))
     symbols = manifest.get("symbols", {})
     _validate_symbols(
@@ -510,4 +529,4 @@ def load_graph_bundle(output_root, relative_artifact_dir):
         tuple(symbols.get("expected", ())),
         tuple(symbols.get("forbidden", ())),
     )
-    return _result_from_files(artifact_dir, manifest, module)
+    return _result_from_files(artifact_dir, manifest, module, validated)

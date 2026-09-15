@@ -245,6 +245,24 @@ def test_expected_and_forbidden_symbols_are_checked_after_reload(artifacts_modul
     }
 
 
+def test_returned_manifest_is_deeply_immutable(artifacts_module, monkeypatch, tmp_path):
+    result = _export(
+        artifacts_module,
+        monkeypatch,
+        tmp_path,
+        FakeModule("llvm", source="define @main() { ret void }\n"),
+    )
+
+    with pytest.raises(TypeError):
+        result.manifest["files"]["graph"]["path"] = "tampered"
+    with pytest.raises(TypeError):
+        result.manifest["symbols"]["expected"] += ("unexpected",)
+    with pytest.raises(TypeError):
+        result.manifest["sources"][0]["path"] = "tampered"
+    with pytest.raises(AttributeError):
+        result.manifest["sources"].append({})
+
+
 def test_failed_replacement_preserves_previous_bundle_and_cleans_staging(
     artifacts_module, monkeypatch, tmp_path
 ):
@@ -308,6 +326,43 @@ def test_failed_final_reload_on_first_export_removes_published_bundle_and_stagin
             host_codegen="llvm",
             simulator="fsim",
         )
+    assert not (tmp_path / "bundle").exists()
+    assert not list(tmp_path.glob(".bundle.staging-*"))
+
+
+def test_final_library_hash_is_validated_before_post_publication_load(
+    artifacts_module, monkeypatch, tmp_path
+):
+    module = FakeModule("llvm", source="define @main() { ret void }\n")
+    monkeypatch.setattr(artifacts_module.relay, "save_param_dict", lambda params: params)
+    load_calls = []
+
+    def record_loader(path):
+        load_calls.append(path)
+        return FakeModule("loaded", source="loaded-source")
+
+    monkeypatch.setattr(artifacts_module.tvm.runtime, "load_module", record_loader)
+    original_publish = artifacts_module._publish
+
+    def publish_then_tamper(stage, artifact_dir):
+        backup = original_publish(stage, artifact_dir)
+        library_path = artifact_dir / ("model" + artifacts_module.shared_library_suffix())
+        library_path.write_bytes(library_path.read_bytes() + b"tampered")
+        return backup
+
+    monkeypatch.setattr(artifacts_module, "_publish", publish_then_tamper)
+    with pytest.raises(RuntimeError, match="artifact library hash mismatch"):
+        artifacts_module.export_graph_bundle(
+            FakeFactory(module),
+            tmp_path,
+            "bundle",
+            artifact_name="resnet8",
+            artifact_role="reference",
+            model_sha256="a" * 64,
+            host_codegen="llvm",
+            simulator="fsim",
+        )
+    assert len(load_calls) == 1
     assert not (tmp_path / "bundle").exists()
     assert not list(tmp_path.glob(".bundle.staging-*"))
 
@@ -392,6 +447,28 @@ def test_load_graph_bundle_rejects_tampered_source(artifacts_module, monkeypatch
 
     with pytest.raises(RuntimeError, match="source hash mismatch"):
         artifacts_module.load_graph_bundle(tmp_path, "bundle")
+
+
+def test_load_graph_bundle_validates_source_before_module_load(
+    artifacts_module, monkeypatch, tmp_path
+):
+    result = _export(
+        artifacts_module,
+        monkeypatch,
+        tmp_path,
+        FakeModule("llvm", source="define @main() { ret void }\n"),
+    )
+    result.source_paths[0].write_text("tampered\n", encoding="utf-8")
+    load_calls = []
+    monkeypatch.setattr(
+        artifacts_module.tvm.runtime,
+        "load_module",
+        lambda library_path: load_calls.append(library_path),
+    )
+
+    with pytest.raises(RuntimeError, match="source hash mismatch"):
+        artifacts_module.load_graph_bundle(tmp_path, "bundle")
+    assert load_calls == []
 
 
 @pytest.mark.parametrize(
