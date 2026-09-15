@@ -23,12 +23,16 @@
 #include <tvm/target/codegen.h>
 #include <tvm/tir/builtin.h>
 #include <tvm/tir/function.h>
+#include <tvm/tir/op.h>
 #include <tvm/tir/stmt_functor.h>
 #include <tvm/tir/transform.h>
 
 #include <cstdint>
+#include <cstring>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace tvm {
 namespace vta {
@@ -47,7 +51,22 @@ void Require(bool condition, const std::string& message) {
   }
 }
 
-bool IsLLVMTarget(const Target& target) { return target->kind->name == "llvm"; }
+}  // namespace
+
+bool IsSupportedHostTarget(const Target& target) {
+  return target.defined() &&
+         (target->kind->name == "llvm" || target->kind->name == "c");
+}
+
+void ValidateActiveVTAHost(const Target& target) {
+  Require(target.defined() && target->kind->name == "vta",
+          "VTA RelayToTIR requires an active vta target");
+  Optional<Target> host = target->GetHost();
+  Require(host.defined() && IsSupportedHostTarget(host.value()),
+          "VTA RelayToTIR requires an LLVM host or C host on the active vta target");
+}
+
+namespace {
 
 bool IsRawVTAFunctionTarget(const Target& target) {
   return target->kind->name == "vta" || target->HasKey("vta");
@@ -96,12 +115,148 @@ class RuntimeCallValidator : public tir::StmtExprVisitor {
   bool has_vta_activity_{false};
 };
 
+class CHostCallRewriter : public tir::StmtExprMutator {
+ private:
+  PrimExpr VisitExpr_(const tir::CallNode* call) final {
+    const auto* op = call->op.as<OpNode>();
+    if (op != nullptr && op->name == "tir.vta.command_handle") {
+      return tir::Call(DataType::Handle(), tir::builtin::call_extern(),
+                       {tir::StringImm("VTATLSCommandHandle")});
+    }
+    if (op != nullptr && op->name == "tir.vta.uop_push") {
+      Array<PrimExpr> args{tir::StringImm("VTAUopPush")};
+      for (const PrimExpr& arg : call->args) {
+        args.push_back(arg);
+      }
+      return tir::Call(call->dtype, tir::builtin::call_extern(), std::move(args));
+    }
+    if (call->op.same_as(tir::builtin::call_extern()) && call->args.size() > 0) {
+      const auto* name = call->args[0].as<tir::StringImmNode>();
+      if (name != nullptr) {
+        static const std::unordered_map<std::string, size_t> kAddressArguments = {
+            {"VTABufferCPUPtr", 2}, {"VTAWriteBarrier", 2}, {"VTAReadBarrier", 2},
+            {"VTALoadBuffer2D", 2}, {"VTAStoreBuffer2D", 4}};
+        auto it = kAddressArguments.find(name->value);
+        if (it != kAddressArguments.end() && call->args.size() > it->second) {
+          Array<PrimExpr> args;
+          for (size_t index = 0; index < call->args.size(); ++index) {
+            PrimExpr arg = call->args[index];
+            if (index == it->second) {
+              arg = tir::Cast(DataType::Handle(), arg);
+            }
+            args.push_back(std::move(arg));
+          }
+          return tir::Call(call->dtype, tir::builtin::call_extern(), std::move(args));
+        }
+      }
+    }
+    return tir::StmtExprMutator::VisitExpr_(call);
+  }
+};
+
+Optional<PrimExpr> CHostConstantValue(DataType dtype, const void* value) {
+  if (dtype.lanes() != 1) {
+    return NullOpt;
+  }
+  if (dtype.is_int()) {
+    switch (dtype.bits()) {
+      case 8:
+        return tir::make_const(dtype, *static_cast<const int8_t*>(value));
+      case 16:
+        return tir::make_const(dtype, *reinterpret_cast<const int16_t*>(value));
+      case 32:
+        return tir::make_const(dtype, *reinterpret_cast<const int32_t*>(value));
+      case 64:
+        return tir::make_const(dtype, *reinterpret_cast<const int64_t*>(value));
+      default:
+        return NullOpt;
+    }
+  }
+  if (dtype.is_uint()) {
+    switch (dtype.bits()) {
+      case 8:
+        return tir::make_const(dtype, *static_cast<const uint8_t*>(value));
+      case 16:
+        return tir::make_const(dtype, *reinterpret_cast<const uint16_t*>(value));
+      case 32:
+        return tir::make_const(dtype, *reinterpret_cast<const uint32_t*>(value));
+      case 64:
+        return tir::make_const(dtype, *reinterpret_cast<const uint64_t*>(value));
+      default:
+        return NullOpt;
+    }
+  }
+  if (dtype.is_float()) {
+    if (dtype.bits() == 32) {
+      return tir::make_const(dtype, *reinterpret_cast<const float*>(value));
+    }
+    if (dtype.bits() == 64) {
+      return tir::make_const(dtype, *reinterpret_cast<const double*>(value));
+    }
+  }
+  return NullOpt;
+}
+
+class CHostAllocateConstRewriter : public tir::StmtMutator {
+ private:
+  tir::Stmt VisitStmt_(const tir::AllocateConstNode* op) final {
+    if (!op->data.defined()) {
+      return tir::StmtMutator::VisitStmt_(op);
+    }
+    const runtime::NDArray& data = op->data.value();
+    if (op->dtype.lanes() != 1 || data.DataType().lanes() != 1) {
+      return tir::StmtMutator::VisitStmt_(op);
+    }
+    int64_t element_count = 1;
+    for (int64_t extent : data.Shape()) {
+      element_count *= extent;
+    }
+    if (element_count <= 0) {
+      return tir::StmtMutator::VisitStmt_(op);
+    }
+    std::vector<uint8_t> bytes(element_count * op->dtype.bytes());
+    data.CopyToBytes(bytes.data(), bytes.size());
+    Array<PrimExpr> shape{tir::make_const(DataType::Int(64), element_count)};
+    tir::Buffer buffer(op->buffer_var, op->dtype, shape, {},
+                       tir::make_const(DataType::Int(64), 0), op->buffer_var->name_hint, 0, 0,
+                       tir::kDefault);
+    std::vector<tir::Stmt> stores;
+    stores.reserve(element_count);
+    for (int64_t index = 0; index < element_count; ++index) {
+      Optional<PrimExpr> value = CHostConstantValue(
+          op->dtype, bytes.data() + static_cast<size_t>(index) * op->dtype.bytes());
+      if (!value.defined()) {
+        return tir::StmtMutator::VisitStmt_(op);
+      }
+      stores.push_back(tir::BufferStore(
+          buffer, value.value(), {tir::make_const(DataType::Int(64), index)}));
+    }
+    tir::Stmt body = tir::StmtMutator::VisitStmt(op->body);
+    stores.push_back(std::move(body));
+    return tir::Allocate(op->buffer_var, op->dtype, shape, tir::const_true(),
+                         tir::SeqStmt(std::move(stores)), op->annotations, op->span);
+  }
+};
+
+IRModule LowerVTAOpsForC(IRModule mod) {
+  mod = mod->ShallowCopy();
+  for (const auto& [global_var, base_func] : mod->functions) {
+    tir::PrimFunc prim_func = Downcast<tir::PrimFunc>(base_func);
+    CHostCallRewriter rewriter;
+    prim_func.CopyOnWrite()->body = rewriter(std::move(prim_func->body));
+    CHostAllocateConstRewriter const_rewriter;
+    prim_func.CopyOnWrite()->body = const_rewriter(std::move(prim_func->body));
+    mod->Update(global_var, std::move(prim_func));
+  }
+  return mod;
+}
+
 void ValidateModule(const IRModule& mod, const Target& target) {
   Require(target.defined() && target->kind->name == "vta",
           "VTA TIRToRuntime requires a vta target");
   Optional<Target> host = target->GetHost();
-  Require(host.defined() && IsLLVMTarget(host.value()),
-          "VTA TIRToRuntime requires an LLVM host target");
+  Require(host.defined() && IsSupportedHostTarget(host.value()),
+          "VTA TIRToRuntime requires an LLVM host or C host target");
   Require(mod->functions.size() > 0, "VTA TIRToRuntime does not accept an empty module");
 
   std::unordered_set<std::string> symbols;
@@ -136,14 +291,18 @@ void ValidateModule(const IRModule& mod, const Target& target) {
     bool is_packed = calling_conv.defined() &&
                      calling_conv.value()->value == static_cast<int>(CallingConv::kCPackedFunc);
     if (is_packed) {
-      Require(IsLLVMTarget(function_target.value()),
-              "VTA PrimFunc " + symbol + " has invalid packed target");
+      Require(IsSupportedHostTarget(function_target.value()),
+              "VTA PrimFunc " + symbol + " has invalid packed host target");
+      Require(function_target.value()->str() == host.value()->str(),
+              "VTA PrimFunc " + symbol + " packed host does not match selected host");
     } else {
       Require(IsRawVTAFunctionTarget(function_target.value()),
               "VTA PrimFunc " + symbol + " has invalid target");
       Optional<Target> function_host = function_target.value()->GetHost();
-      Require(function_host.defined() && IsLLVMTarget(function_host.value()),
-              "VTA PrimFunc " + symbol + " target requires an LLVM host");
+      Require(function_host.defined() && IsSupportedHostTarget(function_host.value()),
+              "VTA PrimFunc " + symbol + " target requires an LLVM host or C host");
+      Require(function_host.value()->str() == host.value()->str(),
+              "VTA PrimFunc " + symbol + " host does not match selected host");
     }
 
     RuntimeCallValidator(symbol).Validate(prim_func->body);
@@ -194,6 +353,10 @@ runtime::Module TIRToRuntime(IRModule mod, Target target) {
 
   IRModule lowered = ForceFlattenExternalBuffers(std::move(mod));
   lowered = tir::transform::MakePackedAPI()(std::move(lowered));
+  if (host->kind->name == "c") {
+    lowered = tir::transform::VectorizeLoop(false)(std::move(lowered));
+    lowered = LowerVTAOpsForC(std::move(lowered));
+  }
   lowered = transform::Sequential({tir::transform::BindTarget(host),
                                    tir::transform::LowerTVMBuiltin(),
                                    tir::transform::LowerCustomDatatypes(),

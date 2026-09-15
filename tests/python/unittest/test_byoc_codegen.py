@@ -65,15 +65,25 @@ def _tir_to_runtime_hook():
     return hook
 
 
-def _vta_tir_module(function_count=1):
+def _relay_to_tir_hook():
+    hook = tvm.target.Target("vta").get_kind_attr("RelayToTIR")
+    assert hook is not None
+    return hook
+
+
+def _vta_tir_module(function_count=1, host_kind="llvm"):
     primfunc = lower_vta_function(_partitioned_function())
+    host = tvm.target.Target(host_kind)
+    vta_target = tvm.target.Target("vta", host=host)
     functions = {}
     symbols = []
     for index in range(function_count):
         symbol = "tvmgen_native_vta_{}".format(index)
-        functions[symbol] = primfunc.with_attr("global_symbol", symbol)
+        functions[symbol] = primfunc.with_attr("global_symbol", symbol).with_attr(
+            "target", vta_target
+        )
         symbols.append(symbol)
-    target = tvm.target.Target("vta", host=vta.get_env().target_host)
+    target = vta_target
     return tvm.IRModule(functions), target, symbols
 
 
@@ -108,6 +118,118 @@ def test_tir_to_runtime_returns_one_standard_llvm_module_with_every_symbol(funct
             flags=re.MULTILINE,
         )
         assert len(definitions) == 1, symbol
+
+
+def test_modern_relay_to_tir_rebinds_every_vta_function_to_active_c_host():
+    partitioned = partition_for_vta(
+        make_qnn_conv2d_module(vta.get_env()), mod_name="active_c_host"
+    )
+    active_target = tvm.target.Target("vta", host=tvm.target.Target("c"))
+
+    with active_target:
+        lowered = _relay_to_tir_hook()(partitioned)
+
+    vta_functions = [
+        function
+        for function in lowered.functions.values()
+        if isinstance(function, tvm.tir.PrimFunc)
+        and function.attrs is not None
+        and bool(function.attrs.get("vta.route_to_runtime", False))
+    ]
+    assert len(vta_functions) == 1
+    function = vta_functions[0]
+    target = function.attrs["target"]
+    assert target.kind.name == "vta"
+    assert target.host.kind.name == "c"
+    assert target.host.kind.name != "llvm"
+    assert function.attrs["global_symbol"]
+    assert function.attrs["relay_attrs"].get_str("Compiler") == "vta"
+
+
+def test_modern_relay_to_tir_rejects_missing_active_host():
+    partitioned = partition_for_vta(
+        make_qnn_conv2d_module(vta.get_env()), mod_name="missing_active_host"
+    )
+
+    with tvm.target.Target("vta"):
+        with pytest.raises(tvm.error.TVMError, match="LLVM host or C host"):
+            _relay_to_tir_hook()(partitioned)
+
+
+def test_tir_to_runtime_returns_one_standard_c_module_with_every_symbol(function_count=2):
+    mod, target, symbols = _vta_tir_module(function_count, host_kind="c")
+
+    runtime_module = _tir_to_runtime_hook()(mod, target)
+
+    assert isinstance(runtime_module, tvm.runtime.Module)
+    assert runtime_module.type_key == "c"
+    source = runtime_module.get_source()
+    assert source
+    for symbol in symbols:
+        assert runtime_module.implements_function(symbol, False)
+        definitions = re.findall(
+            r"^TVM_DLL .*\b{}\s*\([^)]*\)\s*\{{".format(re.escape(symbol)),
+            source,
+            flags=re.MULTILINE,
+        )
+        assert len(definitions) == 1, symbol
+    assert "VTACheckConfig" in source
+    assert source.find("VTACheckConfig") < source.find("VTATLSCommandHandle")
+
+
+def test_c_host_partitioned_graph_build_exports_and_reloads_without_simulator():
+    result = _run_isolated_python(
+        """
+        import os
+        import sys
+        import tempfile
+
+        import tvm
+        import vta
+        from tvm import relay
+
+        from byoc_utils import make_qnn_conv2d_module
+        from vta.relay import partition_for_vta
+
+        assert "vta.testing.simulator" not in sys.modules
+        env = vta.get_env()
+        partitioned = partition_for_vta(
+            make_qnn_conv2d_module(env), mod_name="c_graph_build"
+        )
+        symbol = next(
+            function.attrs.get_str("global_symbol")
+            for function in partitioned.functions.values()
+            if isinstance(function, relay.Function)
+            and function.attrs is not None
+            and "Compiler" in function.attrs
+        )
+        target = tvm.target.Target("vta", host=tvm.target.Target("c"))
+        with vta.build_config(config={"tir.disable_vectorize": True}):
+            factory = relay.build(partitioned, target=target)
+        runtime_module = factory.get_lib()
+        assert runtime_module.type_key == "c"
+
+        def find_source(module):
+            sources = [module.get_source()]
+            for imported in module.imported_modules:
+                sources.extend(find_source(imported))
+            return sources
+
+        sources = find_source(runtime_module)
+        assert any(symbol in source for source in sources)
+        assert any("VTACheckConfig" in source for source in sources)
+        assert any("VTABufferCPUPtr(void*, void*)" in source for source in sources)
+        assert all("VTABufferCPUPtr(void*, int8_t*)" not in source for source in sources)
+        with tempfile.TemporaryDirectory() as artifact_dir:
+            artifact_path = os.path.join(artifact_dir, "c_graph_build.so")
+            factory.export_library(artifact_path)
+            reloaded = tvm.runtime.load_module(artifact_path)
+            assert reloaded.get_function(symbol, True) is not None
+        assert "vta.testing.simulator" not in sys.modules
+        """
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_tir_to_runtime_flattens_external_buffers_before_llvm_codegen():

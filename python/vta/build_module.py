@@ -83,9 +83,10 @@ def build_config(debug_flag=0, **kwargs):
     pass_list.append((3, tvm.tir.transform.LowerDeviceStorageAccessInfo()))
     pass_list.append((3, transform.FoldUopLoop()))
     pass_list.append((3, transform.CPUAccessRewrite()))
+    pass_list.append((3, transform.NormalizeVTAAddressArgs()))
     config = {"tir.add_lower_pass": pass_list}
     if kwargs.get("config"):
-        config.update(kwargs[config])
+        config.update(kwargs["config"])
         del kwargs["config"]
 
     return tvm.transform.PassContext(config=config, **kwargs)

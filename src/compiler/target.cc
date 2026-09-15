@@ -31,6 +31,7 @@ namespace vta {
 transform::Pass RelayToTIR();
 
 runtime::Module TIRToRuntime(IRModule mod, Target target);
+void ValidateActiveVTAHost(const Target& target);
 
 transform::Pass ModernRelayToTIR() {
   auto bind_vta_target = tir::transform::CreatePrimFuncPass(
@@ -39,11 +40,11 @@ transform::Pass ModernRelayToTIR() {
         if (!lowered_target.defined() || !lowered_target.value()->HasKey("vta")) {
           return func;
         }
-        Optional<Target> host = lowered_target.value()->GetHost();
-        ICHECK(host.defined() && host.value()->kind->name == "llvm")
-            << "VTA RelayToTIR produced a PrimFunc without an LLVM host target";
+        Target active_target = Target::Current(true);
+        ValidateActiveVTAHost(active_target);
+        Target host = active_target->GetHost().value();
         return WithAttrs(std::move(func),
-                         {{tvm::attr::kTarget, Target::WithHost(Target("vta"), host.value())},
+                         {{tvm::attr::kTarget, Target::WithHost(Target("vta"), host)},
                           {"vta.route_to_runtime", Bool(true)}});
       },
       0, "vta.BindModernTarget", {});
