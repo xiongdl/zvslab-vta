@@ -85,9 +85,8 @@ def build_config(debug_flag=0, **kwargs):
     pass_list.append((3, transform.CPUAccessRewrite()))
     pass_list.append((3, transform.NormalizeVTAAddressArgs()))
     config = {"tir.add_lower_pass": pass_list}
-    if kwargs.get("config"):
-        config.update(kwargs["config"])
-        del kwargs["config"]
+    user_config = kwargs.pop("config", {})
+    config.update(user_config)
 
     return tvm.transform.PassContext(config=config, **kwargs)
 

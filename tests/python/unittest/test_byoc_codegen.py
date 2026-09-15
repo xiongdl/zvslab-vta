@@ -102,6 +102,15 @@ def _llvm_function_body(llvm_source, symbol):
     return llvm_source[definition.start() : body_end]
 
 
+def test_build_config_accepts_empty_config_and_merges_nonempty_config():
+    with vta.build_config(config={}) as empty_context:
+        assert empty_context.config["tir.add_lower_pass"]
+
+    with vta.build_config(config={"tir.disable_vectorize": True}) as configured_context:
+        assert configured_context.config["tir.add_lower_pass"]
+        assert bool(configured_context.config["tir.disable_vectorize"]) is True
+
+
 @pytest.mark.parametrize("function_count", [1, 3])
 def test_tir_to_runtime_returns_one_standard_llvm_module_with_every_symbol(function_count):
     mod, target, symbols = _vta_tir_module(function_count)
