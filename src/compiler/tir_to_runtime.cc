@@ -19,6 +19,7 @@
 
 #include <tvm/ir/attrs.h>
 #include <tvm/ir/transform.h>
+#include <tvm/node/structural_equal.h>
 #include <tvm/runtime/logging.h>
 #include <tvm/target/codegen.h>
 #include <tvm/tir/builtin.h>
@@ -61,6 +62,10 @@ std::string HostKindName(const Optional<Target>& host) {
 std::string UnsupportedHostMessage(const std::string& prefix, const Optional<Target>& host) {
   return prefix + " rejected host '" + HostKindName(host) +
          "'; supported host kinds are llvm and c";
+}
+
+bool StructurallyEqualTargets(const Target& lhs, const Target& rhs) {
+  return StructuralEqual()(lhs, rhs);
 }
 
 }  // namespace
@@ -333,7 +338,7 @@ void ValidateModule(const IRModule& mod, const Target& target) {
     if (is_packed) {
       Require(IsSupportedHostTarget(function_target.value()),
               UnsupportedHostMessage("VTA PrimFunc " + symbol + " packed", function_target));
-      Require(function_target.value()->str() == host.value()->str(),
+      Require(StructurallyEqualTargets(function_target.value(), host.value()),
               "VTA PrimFunc " + symbol + " packed host does not match selected host");
     } else {
       Require(IsRawVTAFunctionTarget(function_target.value()),
@@ -341,7 +346,7 @@ void ValidateModule(const IRModule& mod, const Target& target) {
       Optional<Target> function_host = function_target.value()->GetHost();
       Require(function_host.defined() && IsSupportedHostTarget(function_host.value()),
               UnsupportedHostMessage("VTA PrimFunc " + symbol + " target", function_host));
-      Require(function_host.value()->str() == host.value()->str(),
+      Require(StructurallyEqualTargets(function_host.value(), host.value()),
               "VTA PrimFunc " + symbol + " host does not match selected host");
     }
 

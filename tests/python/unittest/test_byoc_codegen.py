@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import json
 import re
 import subprocess
 import sys
@@ -405,35 +406,118 @@ def test_tir_to_runtime_rejects_unsupported_packed_function_host_with_supported_
         _tir_to_runtime_hook()(mod, target)
 
 
-def test_tir_to_runtime_c_converts_integer_and_float_constants():
+def test_tir_to_runtime_accepts_structurally_equal_raw_and_packed_hosts():
+    mod, target, symbols = _vta_tir_module(2, host_kind="c")
+    structurally_equal_vta = tvm.target.Target("vta", host=tvm.target.Target("c"))
+    raw_function = mod[symbols[0]].with_attr("target", structurally_equal_vta)
+    packed_function = tvm.tir.PrimFunc(
+        [],
+        tvm.tir.Evaluate(tvm.tir.call_extern("int32", "VTASynchronize")),
+        attrs=tvm.ir.make_node(
+            "DictAttrs",
+            global_symbol=symbols[1],
+            target=tvm.target.Target("c"),
+            calling_conv=int(CallingConv.C_PACKED_FUNC),
+        ),
+    )
+    mod.update_func(mod.get_global_var(symbols[0]), raw_function)
+    mod.update_func(mod.get_global_var(symbols[1]), packed_function)
+
+    runtime_module = _tir_to_runtime_hook()(mod, target)
+
+    assert runtime_module.implements_function(symbols[0], False)
+    assert runtime_module.implements_function(symbols[1], False)
+
+
+def test_tir_to_runtime_rejects_structurally_different_raw_host():
+    mod, target, symbols = _vta_tir_module()
+    mismatched = tvm.target.Target("vta", host=tvm.target.Target("c -keys=other"))
+    mod.update_func(mod.get_global_var(symbols[0]), mod[symbols[0]].with_attr("target", mismatched))
+
+    with pytest.raises(tvm.error.TVMError, match="host does not match selected host"):
+        _tir_to_runtime_hook()(mod, target)
+
+
+def test_tir_to_runtime_rejects_structurally_different_packed_host():
+    mod, target, symbols = _vta_tir_module()
+    mismatched = tvm.target.Target("c -keys=other")
+    mod.update_func(
+        mod.get_global_var(symbols[0]),
+        mod[symbols[0]].with_attrs(
+            {"target": mismatched, "calling_conv": int(CallingConv.C_PACKED_FUNC)}
+        ),
+    )
+
+    with pytest.raises(tvm.error.TVMError, match="packed host does not match selected host"):
+        _tir_to_runtime_hook()(mod, target)
+
+
+@pytest.mark.parametrize(
+    "dtype, values",
+    [
+        ("int8", [-128, -1, 127]),
+        ("int16", [-32768, -1, 32767]),
+        ("int32", [-123456789, 0x1020304]),
+        ("int64", [-123456789012345, 0x102030405060708]),
+        ("uint8", [0, 1, 255]),
+        ("uint16", [0, 1, 65535]),
+        ("uint32", [0, 0x89ABCDEF, 0xFFFFFFFF]),
+        ("uint64", [0, 0x89ABCDEF01234567, 0xFFFFFFFFFFFFFFFF]),
+        ("float32", [1.25, -3.5]),
+        ("float64", [1.25, -3.5]),
+    ],
+)
+def test_tir_to_runtime_c_executes_constant_initialization(dtype, values, tmp_path):
     target = tvm.target.Target("vta", host=tvm.target.Target("c"))
-    functions = {}
-    for symbol, dtype, values in (
-        ("const_i32", "int32", [0x11223344, -7]),
-        ("const_f32", "float32", [1.25, -3.5]),
-    ):
-        buffer_var = tvm.tir.Var(
-            symbol + "_buffer",
-            tvm.ir.PointerType(tvm.ir.PrimType(dtype), "global"),
-        )
-        data = tvm.nd.array(np.asarray(values, dtype=dtype))
-        body = tvm.tir.AllocateConst(
-            buffer_var,
-            dtype,
-            [len(values)],
-            data,
-            tvm.tir.Evaluate(tvm.tir.call_extern("int32", "VTASynchronize")),
-        )
-        attrs = tvm.ir.make_node("DictAttrs", global_symbol=symbol, target=target)
-        functions[symbol] = tvm.tir.PrimFunc([], body, attrs=attrs)
+    symbol = "constant_capture_" + dtype
+    buffer_var = tvm.tir.Var(
+        symbol + "_buffer",
+        tvm.ir.PointerType(tvm.ir.PrimType(dtype), "global"),
+    )
+    data = tvm.nd.array(np.asarray(values, dtype=dtype))
+    buffer = tvm.tir.decl_buffer([len(values)], dtype=dtype, data=buffer_var)
+    command_handle = tvm.tir.call_extern("handle", "VTATLSCommandHandle")
+    capture = tvm.tir.call_extern(
+        "handle", "VTABufferCPUPtr", command_handle, tvm.tir.address_of(buffer[0])
+    )
+    body = tvm.tir.AllocateConst(
+        buffer_var,
+        dtype,
+        [len(values)],
+        data,
+        tvm.tir.Evaluate(capture),
+    )
+    attrs = tvm.ir.make_node("DictAttrs", global_symbol=symbol, target=target)
+    runtime_module = _tir_to_runtime_hook()(
+        tvm.IRModule({symbol: tvm.tir.PrimFunc([], body, attrs=attrs)}), target
+    )
 
-    runtime_module = _tir_to_runtime_hook()(tvm.IRModule(functions), target)
-    source = runtime_module.get_source()
+    capture_path = tmp_path / "captured.bin"
+    stub_path = tmp_path / "vta_constant_stub.c"
+    byte_count = data.numpy().nbytes
+    stub_path.write_text(
+        "#include <stdint.h>\n"
+        "#include <stdio.h>\n"
+        "#ifdef __cplusplus\n"
+        'extern "C" {\n'
+        "#endif\n"
+        "int32_t VTACheckConfig(int64_t fingerprint) { return 0; }\n"
+        "void* VTATLSCommandHandle(void) { return 0; }\n"
+        "void* VTABufferCPUPtr(void* command, void* data) {\n"
+        f'  FILE* output = fopen({json.dumps(str(capture_path))}, "wb");\n'
+        f"  if (output != NULL) {{ fwrite(data, 1, {byte_count}, output); fclose(output); }}\n"
+        "  return data;\n"
+        "}\n"
+        "#ifdef __cplusplus\n"
+        "}\n"
+        "#endif\n"
+    )
+    artifact_path = tmp_path / "constant_capture.so"
+    runtime_module.export_library(str(artifact_path), addons=[str(stub_path)])
+    loaded = tvm.runtime.load_module(str(artifact_path))
+    loaded.get_function(symbol)()
 
-    assert "287454020" in source
-    assert "-7" in source
-    assert "1.25" in source
-    assert "-3.5" in source
+    assert capture_path.read_bytes() == data.numpy().tobytes(order="C")
 
 
 def test_tir_to_runtime_rejects_malformed_runtime_calls():
