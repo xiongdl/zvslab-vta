@@ -95,12 +95,151 @@ class DeploymentResult:
 
 
 @dataclass(frozen=True)
-class FsimMatrixResult:
-    """All host variants from one prepared FSIM deployment matrix."""
+class SimulationMatrixResult:
+    """All host variants from one prepared simulator deployment matrix."""
 
     prepared: object
     artifacts: tuple
     executions: tuple
+
+
+# Kept as an import-compatible alias for callers of the original FSIM API.
+FsimMatrixResult = SimulationMatrixResult
+
+
+@dataclass(frozen=True)
+class SimulatorSession:
+    """Validated simulator registry adaptor for one configured process."""
+
+    label: str
+    environment_target: str
+    clear_registry: str
+    status_registry: str
+    required_registries: tuple
+    activity_counter: str
+    diagnostic: str
+
+    def validate_environment(self):
+        active_target = getattr(vta.get_env(), "TARGET", None)
+        if active_target != self.environment_target:
+            raise RuntimeError(
+                f"simulator {self.label!r} requires VTA target "
+                f"{self.environment_target!r}, active target is {active_target!r}"
+            )
+        return self
+
+    def load(self):
+        # Importing this standard module is deliberately the only simulator
+        # initialization path.  In particular, TSIM's import performs the
+        # global driver load, hardware-module load, and vta.tsim.init call.
+        try:
+            from vta.testing import simulator
+        except Exception as error:
+            missing = [
+                name
+                for name in self.required_registries
+                if tvm.get_global_func(name, allow_missing=True) is None
+            ]
+            detail = (
+                f"missing registry functions: {', '.join(missing)}"
+                if missing
+                else "standard simulator initialization failed"
+            )
+            raise RuntimeError(
+                f"{self.label.upper()} is unavailable; {detail}. Build the required "
+                f"libraries with {self.diagnostic}"
+            ) from error
+
+        missing = [
+            name
+            for name in self.required_registries
+            if tvm.get_global_func(name, allow_missing=True) is None
+        ]
+        if missing:
+            raise RuntimeError(
+                f"{self.label.upper()} is unavailable; missing registry functions: "
+                f"{', '.join(missing)}. Build the required libraries with "
+                f"{self.diagnostic}"
+            )
+        return simulator
+
+    def clear_and_validate(self, simulator=None):
+        clear = getattr(simulator, "clear_stats", None) if simulator is not None else None
+        status = getattr(simulator, "stats", None) if simulator is not None else None
+        clear = clear or tvm.get_global_func(self.clear_registry, allow_missing=True)
+        status = status or tvm.get_global_func(self.status_registry, allow_missing=True)
+        if clear is None or status is None:
+            raise RuntimeError(
+                f"{self.label.upper()} profiler registry is unavailable; build the "
+                f"required libraries with {self.diagnostic}"
+            )
+        clear()
+        stats = self.read_stats(status)
+        if self.label == "tsim":
+            if stats != {"cycle_count": 0}:
+                raise RuntimeError(f"TSIM profiler did not reset to {{'cycle_count': 0}}: {stats}")
+        elif any(value != 0 for value in stats.values()):
+            raise RuntimeError(f"FSIM profiler did not reset to zero: {stats}")
+        return stats
+
+    def read_stats(self, status=None, simulator=None):
+        status = status or getattr(simulator, "stats", None)
+        status = status or tvm.get_global_func(self.status_registry, allow_missing=True)
+        if status is None:
+            raise RuntimeError(
+                f"{self.label.upper()} profiler status is unavailable; build the "
+                f"required libraries with {self.diagnostic}"
+            )
+        try:
+            raw = status()
+            stats = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"{self.label.upper()} profiler returned malformed counters") from error
+        if not isinstance(stats, dict):
+            raise RuntimeError(f"{self.label.upper()} profiler counters must be a JSON object")
+        return stats
+
+    def validate_activity(self, stats):
+        if self.label == "tsim":
+            value = stats.get(self.activity_counter)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise RuntimeError(
+                    f"TSIM profiler counter cycle_count must be a positive integer: {stats}"
+                )
+            return
+        validate_profiler_stats(stats)
+
+
+def _simulator_session(simulator):
+    if simulator == "fsim":
+        return SimulatorSession(
+            label="fsim",
+            environment_target="sim",
+            clear_registry="vta.simulator.profiler_clear",
+            status_registry="vta.simulator.profiler_status",
+            required_registries=(
+                "vta.simulator.profiler_clear",
+                "vta.simulator.profiler_status",
+            ),
+            activity_counter="gemm_counter",
+            diagnostic="bash scripts/build_vta_lib.sh --target libvta_fsim",
+        )
+    if simulator == "tsim":
+        return SimulatorSession(
+            label="tsim",
+            environment_target="tsim",
+            clear_registry="vta.tsim.profiler_clear",
+            status_registry="vta.tsim.profiler_status",
+            required_registries=(
+                "vta.tsim.init",
+                "vta.tsim.profiler_clear",
+                "vta.tsim.profiler_status",
+                "runtime.module.loadfile_vta-tsim",
+            ),
+            activity_counter="cycle_count",
+            diagnostic="bash scripts/build_vta_lib.sh --target libvta_hw",
+        )
+    raise ValueError(f"unsupported simulator {simulator!r}; supported simulators are fsim and tsim")
 
 
 def shared_library_suffix():
@@ -164,9 +303,10 @@ def _artifact_identity(host_codegen, role):
     return "mlperf_resnet_c" if role == "reference" else "mlperf_resnet_vta_c"
 
 
-def _matrix_artifact_root(output_dir, host_codegen):
+def _matrix_artifact_root(output_dir, host_codegen, simulator="fsim"):
     _validate_host_codegen(host_codegen)
-    return Path(output_dir) / f"{host_codegen}-fsim"
+    _simulator_session(simulator)
+    return Path(output_dir) / f"{host_codegen}-{simulator}"
 
 
 def _mixed_target(host_codegen=DEFAULT_HOST_CODEGEN):
@@ -177,10 +317,9 @@ def _mixed_target(host_codegen=DEFAULT_HOST_CODEGEN):
 
 
 def build_host_artifacts(prepared, output_dir, host_codegen=DEFAULT_HOST_CODEGEN, simulator="fsim"):
-    """Build, export, and reload both standard host libraries without FSIM."""
+    """Build, export, and reload both standard host libraries without simulator loading."""
     _validate_host_codegen(host_codegen)
-    if simulator != "fsim":
-        raise ValueError(f"unsupported simulator {simulator!r}; only fsim is implemented")
+    _simulator_session(simulator).validate_environment()
     if prepared.reference_module is not prepared.quantized_module:
         raise RuntimeError("pure LLVM build must use the exact shared quantized module object")
 
@@ -308,13 +447,13 @@ def validate_profiler_stats(stats):
 
 
 def _load_fsim():
-    from vta.testing import simulator
+    return _simulator_session("fsim").load()
 
-    if not simulator.enabled():
-        raise RuntimeError(
-            "VTA FSIM is unavailable; run ./scripts/build_vta_lib.sh --target libvta_fsim"
-        )
-    return simulator
+
+def _load_simulator(simulator):
+    session = _simulator_session(simulator)
+    session.validate_environment()
+    return session, session.load()
 
 
 def execute_samples(artifacts, sample_paths):
@@ -330,24 +469,23 @@ def execute_samples(artifacts, sample_paths):
     )
 
     validate_mixed_symbols(artifacts.mixed.module, artifacts.vta_symbols)
+    session = _simulator_session("fsim")
     simulator = _load_fsim()
-    simulator.clear_stats()
-    cleared_stats = simulator.stats()
-    if any(value != 0 for value in cleared_stats.values()):
-        raise RuntimeError(f"FSIM profiler did not reset to zero: {cleared_stats}")
+    session.validate_environment()
+    cleared_stats = session.clear_and_validate(simulator)
 
     comparisons = []
     for (path, input_data), (_, reference_output) in zip(inputs, reference_outputs):
         mixed_output = _run_graph(artifacts.mixed, input_data)
         comparisons.append(compare_outputs(path, reference_output, mixed_output))
 
-    profiler_stats = simulator.stats()
-    validate_profiler_stats(profiler_stats)
+    profiler_stats = session.read_stats(simulator=simulator)
+    session.validate_activity(profiler_stats)
     return ExecutionSummary(comparisons=tuple(comparisons), profiler_stats=dict(profiler_stats))
 
 
-def _execute_fsim_matrix(artifacts, sample_paths):
-    """Run reference graphs before FSIM, then each mixed graph independently."""
+def _execute_matrix(artifacts, sample_paths, simulator):
+    """Run references first, then each mixed graph in independent windows."""
     sample_paths = tuple(Path(path) for path in sample_paths)
     expected_paths = committed_sample_paths()
     if sample_paths != expected_paths:
@@ -370,15 +508,15 @@ def _execute_fsim_matrix(artifacts, sample_paths):
                 compare_outputs(path, expected, actual)
         reference_outputs[host] = outputs
 
-    simulator = _load_fsim()
+    session, simulator_module = _load_simulator(simulator)
     executions = []
     for host_artifacts in artifacts:
         host = host_artifacts.host_codegen
         validate_mixed_symbols(host_artifacts.mixed.module, host_artifacts.vta_symbols)
-        simulator.clear_stats()
-        cleared_stats = simulator.stats()
-        if any(value != 0 for value in cleared_stats.values()):
-            raise RuntimeError(f"{host} FSIM profiler did not reset to zero: {cleared_stats}")
+        try:
+            cleared_stats = session.clear_and_validate(simulator_module)
+        except RuntimeError as error:
+            raise RuntimeError(f"{host} {simulator.upper()} profiler reset failed: {error}") from error
 
         comparisons = []
         for (path, input_data), (_, reference_output) in zip(
@@ -388,54 +526,75 @@ def _execute_fsim_matrix(artifacts, sample_paths):
                 mixed_output = _run_graph(host_artifacts.mixed, input_data)
                 comparisons.append(compare_outputs(path, reference_output, mixed_output))
             except Exception as error:
-                raise RuntimeError(f"{host} mixed FSIM failed for sample {path.name}: {error}") from error
+                raise RuntimeError(
+                    f"{host} mixed {simulator.upper()} failed for sample {path.name}: {error}"
+                ) from error
 
-        profiler_stats = simulator.stats()
+        profiler_stats = session.read_stats(simulator=simulator_module)
         try:
-            validate_profiler_stats(profiler_stats)
+            session.validate_activity(profiler_stats)
         except RuntimeError as error:
-            raise RuntimeError(f"{host} mixed FSIM profiler validation failed: {error}") from error
+            raise RuntimeError(
+                f"{host} mixed {simulator.upper()} profiler validation failed: {error}"
+            ) from error
         executions.append(
             ExecutionSummary(comparisons=tuple(comparisons), profiler_stats=dict(profiler_stats))
         )
     return tuple(executions)
 
 
-def deploy_fsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HOST_CODEGENS):
-    """Build and execute the complete ordered LLVM/C FSIM matrix."""
+def _execute_fsim_matrix(artifacts, sample_paths):
+    """Compatibility wrapper for the existing FSIM matrix tests and callers."""
+    return _execute_matrix(artifacts, sample_paths, "fsim")
+
+
+def _deploy_matrix(output_dir, host_codegens, simulator):
+    session = _simulator_session(simulator)
+    session.validate_environment()
     host_codegens = _validate_host_codegens(host_codegens)
     prepared = prepare_model(MODEL_PATH)
     print(f"VTA partitions: {len(prepared.routing.symbols)}")
     print(f"VTA symbols: {', '.join(prepared.routing.symbols)}")
     print(f"VTA composites: {', '.join(prepared.routing.composite_names)}")
     print(f"Host operators: {', '.join(prepared.routing.host_operator_names)}")
-
-    # Build and reload all four bundles before importing the simulator.
     artifacts = tuple(
         build_host_artifacts(
             prepared,
-            _matrix_artifact_root(output_dir, host_codegen),
+            _matrix_artifact_root(output_dir, host_codegen, simulator),
             host_codegen=host_codegen,
-            simulator="fsim",
+            simulator=simulator,
         )
         for host_codegen in host_codegens
     )
-    executions = _execute_fsim_matrix(artifacts, committed_sample_paths())
-    return FsimMatrixResult(
-        prepared=prepared,
-        artifacts=artifacts,
-        executions=executions,
-    )
+    executions = _execute_matrix(artifacts, committed_sample_paths(), simulator)
+    return SimulationMatrixResult(prepared=prepared, artifacts=artifacts, executions=executions)
 
 
-def deploy(output_dir=DEFAULT_OUTPUT_DIR, host_codegen=DEFAULT_HOST_CODEGEN):
+def deploy_fsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HOST_CODEGENS):
+    """Build and execute the complete ordered LLVM/C FSIM matrix."""
+    return _deploy_matrix(output_dir, host_codegens, "fsim")
+
+
+def deploy_tsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HOST_CODEGENS):
+    """Build and execute the complete ordered LLVM/C TSIM matrix."""
+    return _deploy_matrix(output_dir, host_codegens, "tsim")
+
+
+def deploy(output_dir=DEFAULT_OUTPUT_DIR, host_codegen=DEFAULT_HOST_CODEGEN, simulator="fsim"):
     """Perform the complete fixed HOST deployment and return its evidence."""
     _validate_host_codegen(host_codegen)
+    session = _simulator_session(simulator)
+    session.validate_environment()
     prepared = prepare_model(MODEL_PATH)
     print(f"VTA partitions: {len(prepared.routing.symbols)}")
     print(f"VTA symbols: {', '.join(prepared.routing.symbols)}")
     print(f"VTA composites: {', '.join(prepared.routing.composite_names)}")
     print(f"Host operators: {', '.join(prepared.routing.host_operator_names)}")
-    artifacts = build_host_artifacts(prepared, output_dir, host_codegen=host_codegen)
-    execution = execute_samples(artifacts, committed_sample_paths())
+    artifacts = build_host_artifacts(
+        prepared, output_dir, host_codegen=host_codegen, simulator=simulator
+    )
+    if simulator == "fsim":
+        execution = execute_samples(artifacts, committed_sample_paths())
+    else:
+        execution = _execute_matrix((artifacts,), committed_sample_paths(), simulator)[0]
     return DeploymentResult(prepared=prepared, artifacts=artifacts, execution=execution)

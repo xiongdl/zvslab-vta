@@ -495,7 +495,6 @@ def test_application_sources_use_only_the_approved_host_flow():
         "download_testdata",
         "cmsis",
         "fvp",
-        "tsim",
     ]:
         assert forbidden not in lowered
 
