@@ -131,14 +131,23 @@ def test_relay_to_tir_hook_is_typed_and_preserves_module_without_vta_functions()
     assert tvm.get_global_func(LEGACY_COMPILER_GLOBAL, allow_missing=True) is None
 
 
+def test_relay_to_tir_rejects_vta_functions_without_active_target():
+    mod, _ = _module_with_global_vta_functions(1)
+
+    with pytest.raises(tvm.error.TVMError, match="active vta target"):
+        _relay_to_tir_hook()(mod)
+
+
 @pytest.mark.parametrize("vta_function_count", [1, 3])
+@pytest.mark.parametrize("host_kind", ["llvm", "c"])
 def test_one_hook_invocation_replaces_every_existing_vta_global_in_place(
-    vta_function_count,
+    vta_function_count, host_kind
 ):
     mod, global_vars = _module_with_global_vta_functions(vta_function_count)
     host_helper_before = mod["host_helper"]
 
-    lowered = _relay_to_tir_hook()(mod)
+    with tvm.target.Target("vta", host=tvm.target.Target(host_kind)):
+        lowered = _relay_to_tir_hook()(mod)
 
     assert _vta_relay_functions(lowered) == []
     assert tvm.ir.structural_equal(lowered["host_helper"], host_helper_before)
@@ -153,10 +162,12 @@ def test_one_hook_invocation_replaces_every_existing_vta_global_in_place(
     assert tvm.get_global_func(LEGACY_COMPILER_GLOBAL, allow_missing=True) is None
 
 
-def test_relay_to_tir_outlines_and_replaces_nested_vta_function():
+@pytest.mark.parametrize("host_kind", ["llvm", "c"])
+def test_relay_to_tir_outlines_and_replaces_nested_vta_function(host_kind):
     mod, symbol = _module_with_nested_vta_function()
 
-    lowered = _relay_to_tir_hook()(mod)
+    with tvm.target.Target("vta", host=tvm.target.Target(host_kind)):
+        lowered = _relay_to_tir_hook()(mod)
 
     assert _vta_relay_functions(lowered) == []
     assert isinstance(lowered[symbol], tvm.tir.PrimFunc)
