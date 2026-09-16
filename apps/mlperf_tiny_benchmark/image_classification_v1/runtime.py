@@ -192,13 +192,22 @@ def build_host_artifacts(prepared, output_dir, host_codegen=DEFAULT_HOST_CODEGEN
             reference_factory = relay.build(
                 prepared.reference_module, target=tvm.target.Target("c")
             )
-    mixed_target = _mixed_target() if host_codegen == DEFAULT_HOST_CODEGEN else _mixed_target(host_codegen)
     if host_codegen == "c":
         with vta.build_config(config={"tir.disable_vectorize": True}):
-            mixed_factory = relay.build(prepared.mixed_module, target=mixed_target)
+            mixed_factory = relay.build(
+                prepared.mixed_module,
+                target=_mixed_target(
+                    *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
+                ),
+            )
     else:
         with vta.build_config():
-            mixed_factory = relay.build(prepared.mixed_module, target=mixed_target)
+            mixed_factory = relay.build(
+                prepared.mixed_module,
+                target=_mixed_target(
+                    *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
+                ),
+            )
 
     reference_identity = _artifact_identity(host_codegen, "reference")
     mixed_identity = _artifact_identity(host_codegen, "mixed")
