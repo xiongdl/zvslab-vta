@@ -20,7 +20,7 @@
 
 import argparse
 
-from runtime import DEFAULT_OUTPUT_DIR, deploy
+from runtime import DEFAULT_OUTPUT_DIR, deploy, deploy_fsim_matrix
 
 
 def _parser():
@@ -31,15 +31,37 @@ def _parser():
         default=str(DEFAULT_OUTPUT_DIR),
         help="directory for the two generated host libraries",
     )
+    parser.add_argument(
+        "--host-codegen",
+        choices=("llvm", "c", "all"),
+        default="llvm",
+        help="host code generator to execute (all builds the ordered LLVM/C FSIM matrix)",
+    )
     return parser
 
 
 def main(argv=None):
     args = _parser().parse_args(argv)
-    result = deploy(args.output_dir)
-    print(f"Compared samples: {len(result.execution.comparisons)}")
-    print(f"FSIM profiler: {result.execution.profiler_stats}")
-    print("MLPerf ResNet HOST deployment passed")
+    if args.host_codegen == "all":
+        result = deploy_fsim_matrix(args.output_dir)
+        for artifacts, execution in zip(result.artifacts, result.executions):
+            print(f"{artifacts.host_codegen}-fsim partitions: {len(result.prepared.routing.symbols)}")
+            print(f"{artifacts.host_codegen}-fsim compared samples: {len(execution.comparisons)}")
+            print(f"{artifacts.host_codegen}-fsim profiler: {execution.profiler_stats}")
+            print(f"{artifacts.host_codegen}-fsim reference bundle: {artifacts.reference.artifact_dir}")
+            print(f"{artifacts.host_codegen}-fsim mixed bundle: {artifacts.mixed.artifact_dir}")
+        print("MLPerf ResNet LLVM/C FSIM matrix passed")
+    elif args.host_codegen == "llvm":
+        # Keep the original call shape for callers that wrap the compatibility API.
+        result = deploy(args.output_dir)
+        print(f"Compared samples: {len(result.execution.comparisons)}")
+        print(f"FSIM profiler: {result.execution.profiler_stats}")
+        print("MLPerf ResNet HOST deployment passed")
+    else:
+        result = deploy(args.output_dir, host_codegen=args.host_codegen)
+        print(f"{args.host_codegen}-fsim compared samples: {len(result.execution.comparisons)}")
+        print(f"{args.host_codegen}-fsim profiler: {result.execution.profiler_stats}")
+        print("MLPerf ResNet HOST deployment passed")
     return 0
 
 

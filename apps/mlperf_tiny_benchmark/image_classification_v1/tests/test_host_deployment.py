@@ -20,6 +20,7 @@
 import ast
 import importlib.util
 import json
+import re
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -443,6 +444,36 @@ def test_cli_has_only_the_operational_output_directory_option(
         run_module.main(["--target", "c"])
 
 
+@pytest.mark.parametrize("host_codegens", [(), ("c", "llvm"), ("llvm", "llvm"), ("llvm", "cuda")])
+def test_fsim_matrix_rejects_any_host_order_before_model_preparation(
+    deployment_runtime, monkeypatch, tmp_path, host_codegens
+):
+    monkeypatch.setattr(
+        deployment_runtime,
+        "prepare_model",
+        lambda *_: pytest.fail("model preparation must not start for an invalid matrix"),
+    )
+    with pytest.raises(ValueError, match=r"exactly \('llvm', 'c'\)"):
+        deployment_runtime.deploy_fsim_matrix(tmp_path, host_codegens=host_codegens)
+
+
+def test_matrix_identities_and_bundle_layout_are_host_specific(deployment_runtime):
+    assert deployment_runtime._artifact_identity("llvm", "reference") == "mlperf_resnet_llvm"
+    assert deployment_runtime._artifact_identity("llvm", "mixed") == "mlperf_resnet_vta_llvm"
+    assert deployment_runtime._artifact_identity("c", "reference") == "mlperf_resnet_c"
+    assert deployment_runtime._artifact_identity("c", "mixed") == "mlperf_resnet_vta_c"
+    assert deployment_runtime._matrix_artifact_root(Path("out"), "llvm") == Path("out/llvm-fsim")
+    assert deployment_runtime._matrix_artifact_root(Path("out"), "c") == Path("out/c-fsim")
+
+
+def test_cli_exposes_llvm_c_and_all_matrix_modes(deployment_runtime, monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "runtime", deployment_runtime)
+    run_module = _load_module(RUN_PATH, "mlperf_resnet_run_matrix")
+    assert run_module._parser().parse_args([]).host_codegen == "llvm"
+    assert run_module._parser().parse_args(["--host-codegen", "c"]).host_codegen == "c"
+    assert run_module._parser().parse_args(["--host-codegen", "all"]).host_codegen == "all"
+
+
 def test_application_sources_use_only_the_approved_host_flow():
     assert RUNTIME_PATH.is_file(), f"missing Task 12 implementation: {RUNTIME_PATH}"
     assert RUN_PATH.is_file(), f"missing Task 12 implementation: {RUN_PATH}"
@@ -513,3 +544,39 @@ def test_end_to_end_host_fsim_deployment(deployment_runtime, tmp_path):
             and (artifact.artifact_dir / entry["path"]).stat().st_size > 0
             for entry in llvm_sources
         )
+
+
+def test_real_c_mixed_source_has_static_uop_and_safe_constant_contract(
+    deployment_runtime, tmp_path
+):
+    result = deployment_runtime.deploy_fsim_matrix(tmp_path)
+    c_artifacts = result.artifacts[1]
+    source_paths = sorted((c_artifacts.mixed.artifact_dir / "source").glob("*.c"))
+    assert source_paths
+    source = "\n".join(path.read_text(encoding="utf-8") for path in source_paths)
+
+    assert "VTAPushGEMMOp" in source
+    assert "VTAPushALUOp" in source
+    callbacks = set(re.findall(r"static int32_t (__tvm_static_init_lambda(?:_\d+)?)\(", source))
+    handles = set(re.findall(r"static void\* (__tvm_static_handle(?:_\d+)?) = NULL;", source))
+    assert callbacks
+    assert len(callbacks) == len(handles)
+    assert all(
+        re.search(r"VTAPush(?:GEMM|ALU)Op\(&" + re.escape(handle), source)
+        for handle in handles
+    )
+    assert set(re.findall(r"tvmgen_mlperf_resnet_vta_main_\d+", source)) == set(
+        EXPECTED_VTA_SYMBOLS
+    )
+    assert re.search(r"static const (?:int8_t|int32_t).*vta_const_\d+_host", source)
+
+    # Ext-dev allocations are opaque VTA handles.  Constants must be copied
+    # through VTABufferCPUPtr; direct C stores through the handle are unsafe.
+    assert not re.search(r"\(\([^)]*\*\)vta_const_\d+\)\[", source)
+    assert "coproc_uop_scope" not in source
+    assert len(result.executions) == 2
+    assert all(len(execution.comparisons) == 10 for execution in result.executions)
+    assert all(
+        all(execution.profiler_stats[counter] > 0 for counter in REQUIRED_PROFILER_COUNTERS)
+        for execution in result.executions
+    )

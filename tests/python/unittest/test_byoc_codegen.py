@@ -529,6 +529,74 @@ def test_tir_to_runtime_c_executes_constant_initialization(dtype, values, tmp_pa
     assert capture_path.read_bytes() == data.numpy().tobytes(order="C")
 
 
+def test_tir_to_runtime_c_keeps_ext_dev_constants_out_of_opaque_workspace():
+    result = _run_isolated_python(
+        """
+        import numpy as np
+        import tempfile
+
+        import tvm
+        import vta
+
+        symbol = "opaque_ext_dev_constant"
+        buffer_var = tvm.tir.Var(
+            symbol + "_buffer",
+            tvm.ir.PointerType(tvm.ir.PrimType("int8"), "global"),
+        )
+        data = tvm.nd.array(np.asarray([1, 2, 3], dtype="int8"))
+        buffer = tvm.tir.decl_buffer([3], dtype="int8", data=buffer_var)
+        copy = tvm.tir.Evaluate(
+            tvm.tir.call_extern(
+                "int32",
+                "VTABufferCPUPtr",
+                tvm.tir.call_extern("handle", "VTATLSCommandHandle"),
+                tvm.tir.address_of(buffer[0]),
+            )
+        )
+        body = tvm.tir.AttrStmt(
+            buffer_var,
+            "device_id",
+            tvm.tir.IntImm("int32", 0),
+            tvm.tir.AttrStmt(
+                buffer_var,
+                "device_type",
+                tvm.tir.IntImm("int32", 12),
+                tvm.tir.AllocateConst(buffer_var, "int8", [3], data, copy),
+            ),
+        )
+        target = tvm.target.Target("vta", host=tvm.target.Target("c"))
+        attrs = tvm.ir.make_node("DictAttrs", global_symbol=symbol, target=target)
+        mod = tvm.IRModule({symbol: tvm.tir.PrimFunc([], body, attrs=attrs)})
+        runtime_module = tvm.target.Target("vta").get_kind_attr("TIRToRuntime")(mod, target)
+        source = runtime_module.get_source()
+        assert "static const" in source
+        assert "TVMBackendAllocWorkspace(12" not in source
+
+        with tempfile.TemporaryDirectory() as output_dir:
+            stub_path = output_dir + "/opaque_constant_stub.c"
+            with open(stub_path, "w", encoding="utf-8") as stub:
+                stub.write(
+                    "#include <stdint.h>\\n"
+                    "#ifdef __cplusplus\\nextern \\\"C\\\" {\\n#endif\\n"
+                    "void* TVMBackendAllocWorkspace(int d, int i, uint64_t n, int c, int b) "
+                    "{ (void)d; (void)i; (void)n; (void)c; (void)b; return (void*)1; }\\n"
+                    "int TVMBackendFreeWorkspace(int d, int i, void* p) "
+                    "{ (void)d; (void)i; (void)p; return 0; }\\n"
+                    "int32_t VTACheckConfig(int64_t fingerprint) { (void)fingerprint; return 0; }\\n"
+                    "void* VTATLSCommandHandle(void) { return 0; }\\n"
+                    "int32_t VTABufferCPUPtr(void* command, void* data) "
+                    "{ (void)command; (void)data; return 0; }\\n"
+                    "#ifdef __cplusplus\\n}\\n#endif\\n"
+                )
+            artifact_path = output_dir + "/opaque_ext_dev_constant.so"
+            runtime_module.export_library(artifact_path, addons=[stub_path])
+            loaded = tvm.runtime.load_module(artifact_path)
+            loaded.get_function(symbol)()
+        """
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_tir_to_runtime_rejects_malformed_runtime_calls():
     mod, target, symbols = _vta_tir_module()
     symbol = symbols[0]

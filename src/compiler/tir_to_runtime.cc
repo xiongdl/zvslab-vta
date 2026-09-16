@@ -29,11 +29,9 @@
 #include <tvm/tir/transform.h>
 
 #include <cstdint>
-#include <cstring>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
-#include <vector>
 
 namespace tvm {
 namespace vta {
@@ -171,126 +169,12 @@ class CHostCallRewriter : public tir::StmtExprMutator {
   }
 };
 
-Optional<PrimExpr> CHostConstantValue(DataType dtype, const void* value) {
-  if (dtype.lanes() != 1) {
-    return NullOpt;
-  }
-  if (dtype.is_int()) {
-    switch (dtype.bits()) {
-      case 8: {
-        int8_t constant;
-        std::memcpy(&constant, value, sizeof(constant));
-        return tir::make_const(dtype, constant);
-      }
-      case 16: {
-        int16_t constant;
-        std::memcpy(&constant, value, sizeof(constant));
-        return tir::make_const(dtype, constant);
-      }
-      case 32: {
-        int32_t constant;
-        std::memcpy(&constant, value, sizeof(constant));
-        return tir::make_const(dtype, constant);
-      }
-      case 64: {
-        int64_t constant;
-        std::memcpy(&constant, value, sizeof(constant));
-        return tir::make_const(dtype, constant);
-      }
-      default:
-        return NullOpt;
-    }
-  }
-  if (dtype.is_uint()) {
-    switch (dtype.bits()) {
-      case 8: {
-        uint8_t constant;
-        std::memcpy(&constant, value, sizeof(constant));
-        return tir::make_const(dtype, constant);
-      }
-      case 16: {
-        uint16_t constant;
-        std::memcpy(&constant, value, sizeof(constant));
-        return tir::make_const(dtype, constant);
-      }
-      case 32: {
-        uint32_t constant;
-        std::memcpy(&constant, value, sizeof(constant));
-        return tir::make_const(dtype, constant);
-      }
-      case 64: {
-        uint64_t constant;
-        std::memcpy(&constant, value, sizeof(constant));
-        return tir::make_const(dtype, constant);
-      }
-      default:
-        return NullOpt;
-    }
-  }
-  if (dtype.is_float()) {
-    if (dtype.bits() == 32) {
-      float constant;
-      std::memcpy(&constant, value, sizeof(constant));
-      return tir::make_const(dtype, constant);
-    }
-    if (dtype.bits() == 64) {
-      double constant;
-      std::memcpy(&constant, value, sizeof(constant));
-      return tir::make_const(dtype, constant);
-    }
-  }
-  return NullOpt;
-}
-
-class CHostAllocateConstRewriter : public tir::StmtMutator {
- private:
-  tir::Stmt VisitStmt_(const tir::AllocateConstNode* op) final {
-    if (!op->data.defined()) {
-      return tir::StmtMutator::VisitStmt_(op);
-    }
-    const runtime::NDArray& data = op->data.value();
-    if (op->dtype.lanes() != 1 || data.DataType().lanes() != 1) {
-      return tir::StmtMutator::VisitStmt_(op);
-    }
-    int64_t element_count = 1;
-    for (int64_t extent : data.Shape()) {
-      element_count *= extent;
-    }
-    if (element_count <= 0) {
-      return tir::StmtMutator::VisitStmt_(op);
-    }
-    std::vector<uint8_t> bytes(element_count * op->dtype.bytes());
-    data.CopyToBytes(bytes.data(), bytes.size());
-    Array<PrimExpr> shape{tir::make_const(DataType::Int(64), element_count)};
-    tir::Buffer buffer(op->buffer_var, op->dtype, shape, {},
-                       tir::make_const(DataType::Int(64), 0), op->buffer_var->name_hint, 0, 0,
-                       tir::kDefault);
-    std::vector<tir::Stmt> stores;
-    stores.reserve(element_count);
-    for (int64_t index = 0; index < element_count; ++index) {
-      Optional<PrimExpr> value = CHostConstantValue(
-          op->dtype, bytes.data() + static_cast<size_t>(index) * op->dtype.bytes());
-      if (!value.defined()) {
-        return tir::StmtMutator::VisitStmt_(op);
-      }
-      stores.push_back(tir::BufferStore(
-          buffer, value.value(), {tir::make_const(DataType::Int(64), index)}));
-    }
-    tir::Stmt body = tir::StmtMutator::VisitStmt(op->body);
-    stores.push_back(std::move(body));
-    return tir::Allocate(op->buffer_var, op->dtype, shape, tir::const_true(),
-                         tir::SeqStmt(std::move(stores)), op->annotations, op->span);
-  }
-};
-
 IRModule LowerVTAOpsForC(IRModule mod) {
   mod = mod->ShallowCopy();
   for (const auto& [global_var, base_func] : mod->functions) {
     tir::PrimFunc prim_func = Downcast<tir::PrimFunc>(base_func);
     CHostCallRewriter rewriter;
     prim_func.CopyOnWrite()->body = rewriter(std::move(prim_func->body));
-    CHostAllocateConstRewriter const_rewriter;
-    prim_func.CopyOnWrite()->body = const_rewriter(std::move(prim_func->body));
     mod->Update(global_var, std::move(prim_func));
   }
   return mod;
