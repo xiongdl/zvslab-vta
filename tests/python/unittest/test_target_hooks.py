@@ -157,6 +157,10 @@ def test_one_hook_invocation_replaces_every_existing_vta_global_in_place(
         assert updated_global_var.same_as(global_var)
         primfunc = lowered[updated_global_var]
         assert isinstance(primfunc, tvm.tir.PrimFunc)
+        target = primfunc.attrs["target"]
+        assert target.kind.name == "vta"
+        assert target.host is not None
+        assert target.host.kind.name == host_kind
         assert str(primfunc.attrs["global_symbol"]) == global_var.name_hint
         assert primfunc.attrs["relay_attrs"].get_str("Compiler") == "vta"
     assert tvm.get_global_func(LEGACY_COMPILER_GLOBAL, allow_missing=True) is None
@@ -170,7 +174,12 @@ def test_relay_to_tir_outlines_and_replaces_nested_vta_function(host_kind):
         lowered = _relay_to_tir_hook()(mod)
 
     assert _vta_relay_functions(lowered) == []
-    assert isinstance(lowered[symbol], tvm.tir.PrimFunc)
+    primfunc = lowered[symbol]
+    assert isinstance(primfunc, tvm.tir.PrimFunc)
+    target = primfunc.attrs["target"]
+    assert target.kind.name == "vta"
+    assert target.host is not None
+    assert target.host.kind.name == host_kind
     assert tvm.get_global_func(LEGACY_COMPILER_GLOBAL, allow_missing=True) is None
 
 
