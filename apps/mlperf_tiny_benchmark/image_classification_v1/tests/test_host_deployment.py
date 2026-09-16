@@ -23,6 +23,7 @@ import json
 import re
 import sys
 from contextlib import contextmanager
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -464,6 +465,23 @@ def test_matrix_identities_and_bundle_layout_are_host_specific(deployment_runtim
     assert deployment_runtime._artifact_identity("c", "mixed") == "mlperf_resnet_vta_c"
     assert deployment_runtime._matrix_artifact_root(Path("out"), "llvm") == Path("out/llvm-fsim")
     assert deployment_runtime._matrix_artifact_root(Path("out"), "c") == Path("out/c-fsim")
+
+
+def test_fsim_matrix_result_records_simulator_and_is_frozen(deployment_runtime, monkeypatch, tmp_path):
+    prepared = SimpleNamespace(
+        routing=SimpleNamespace(symbols=(), composite_names=(), host_operator_names=())
+    )
+    monkeypatch.setattr(deployment_runtime, "prepare_model", lambda *_: prepared)
+    monkeypatch.setattr(deployment_runtime, "committed_sample_paths", lambda: ())
+    monkeypatch.setattr(deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="sim"))
+    monkeypatch.setattr(deployment_runtime, "build_host_artifacts", lambda *args, **kwargs: ())
+    monkeypatch.setattr(deployment_runtime, "_execute_matrix", lambda *args: ())
+
+    result = deployment_runtime.deploy_fsim_matrix(tmp_path)
+
+    assert result.simulator == "fsim"
+    with pytest.raises(FrozenInstanceError):
+        result.simulator = "tsim"
 
 
 def test_cli_exposes_llvm_c_and_all_matrix_modes(deployment_runtime, monkeypatch, tmp_path):

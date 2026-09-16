@@ -20,6 +20,7 @@
 import importlib.util
 import json
 import sys
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -165,6 +166,23 @@ def test_tsim_matrix_builds_all_hosts_before_single_lazy_load(deployment_runtime
         ("build", "c", "tsim"),
     ]
     assert len(result.artifacts) == 2
+
+
+def test_tsim_matrix_result_records_simulator_and_is_frozen(deployment_runtime, monkeypatch, tmp_path):
+    prepared = SimpleNamespace(
+        routing=SimpleNamespace(symbols=(), composite_names=(), host_operator_names=())
+    )
+    monkeypatch.setattr(deployment_runtime, "prepare_model", lambda *_: prepared)
+    monkeypatch.setattr(deployment_runtime, "committed_sample_paths", lambda: ())
+    monkeypatch.setattr(deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="tsim"))
+    monkeypatch.setattr(deployment_runtime, "build_host_artifacts", lambda *args, **kwargs: ())
+    monkeypatch.setattr(deployment_runtime, "_execute_matrix", lambda *args: ())
+
+    result = deployment_runtime.deploy_tsim_matrix(tmp_path)
+
+    assert result.simulator == "tsim"
+    with pytest.raises(FrozenInstanceError):
+        result.simulator = "fsim"
 
 
 def test_end_to_end_tsim_matrix_with_reloaded_graph_bundles(deployment_runtime, tmp_path):

@@ -98,6 +98,7 @@ class DeploymentResult:
 class SimulationMatrixResult:
     """All host variants from one prepared simulator deployment matrix."""
 
+    simulator: str
     prepared: object
     artifacts: tuple
     executions: tuple
@@ -567,7 +568,9 @@ def _deploy_matrix(output_dir, host_codegens, simulator):
         for host_codegen in host_codegens
     )
     executions = _execute_matrix(artifacts, committed_sample_paths(), simulator)
-    return SimulationMatrixResult(prepared=prepared, artifacts=artifacts, executions=executions)
+    return SimulationMatrixResult(
+        simulator=session.label, prepared=prepared, artifacts=artifacts, executions=executions
+    )
 
 
 def deploy_fsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HOST_CODEGENS):
