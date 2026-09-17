@@ -41,7 +41,10 @@ def _parser():
         "--simulator",
         choices=("fsim", "tsim"),
         default="fsim",
-        help="simulator to execute (default: fsim)",
+        help=(
+            "simulator to execute (default: fsim; tsim uses the configured "
+            "tsim_sample.json hardware model)"
+        ),
     )
     return parser
 

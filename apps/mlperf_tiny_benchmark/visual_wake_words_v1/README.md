@@ -75,7 +75,8 @@ PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
 Successful output reports twelve deterministic VTA regions, ten bounded output
 comparisons per host, and positive simulator counters. FSIM validates GEMM,
 weight-load, and output-store counters; TSIM validates its supported
-`cycle_count` counter only. Missing libraries, unexpected model or routing
+`cycle_count` counter only; FSIM-only counters are not required for TSIM.
+Missing libraries, unexpected model or routing
 structure, output differences, wrong configuration, and absent accelerator
 activity cause a nonzero exit. TSIM initialization and hardware loading remain
 lazy until all four bundles have been built, exported, and reloaded.

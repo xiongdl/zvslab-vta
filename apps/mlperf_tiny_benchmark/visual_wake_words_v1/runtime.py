@@ -40,6 +40,7 @@ REFERENCE_ARTIFACT_STEM = "mlperf_vww_llvm"
 MIXED_ARTIFACT_STEM = "mlperf_vww_vta"
 INPUT_NAME = "input_1"
 REQUIRED_PROFILER_COUNTERS = ("gemm_counter", "wgt_load_nbytes", "out_store_nbytes")
+TSIM_ACTIVITY_COUNTER = "cycle_count"
 SUPPORTED_HOST_CODEGENS = ("llvm", "c")
 DEFAULT_HOST_CODEGEN = "llvm"
 
@@ -237,7 +238,7 @@ def _simulator_session(simulator):
                 "vta.tsim.profiler_status",
                 "runtime.module.loadfile_vta-tsim",
             ),
-            activity_counter="cycle_count",
+            activity_counter=TSIM_ACTIVITY_COUNTER,
             diagnostic="bash scripts/build_vta_lib.sh --target libvta_hw",
         )
     raise ValueError(f"unsupported simulator {simulator!r}; supported simulators are fsim and tsim")
