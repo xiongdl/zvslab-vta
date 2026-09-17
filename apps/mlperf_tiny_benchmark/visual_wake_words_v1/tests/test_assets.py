@@ -18,10 +18,13 @@
 """Byte-level provenance and structural contracts for VWW assets."""
 
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
+import shutil
 
 import numpy as np
+import pytest
 from PIL import Image
 
 
@@ -32,6 +35,7 @@ MODEL_README_PATH = APP_ROOT / "model" / "README.md"
 MLPERF_LICENSE_PATH = APP_ROOT / "LICENSE.mlperf-tiny"
 MANIFEST_PATH = APP_ROOT / "samples" / "manifest.json"
 LOCAL_DATASET_ROOT = VTA_ROOT.parent / ".envs" / "vw_coco2014_96"
+EXTRACTOR_PATH = VTA_ROOT.parent / "scripts" / "extract_mlperf_vww_samples.py"
 
 MODEL_SHA256 = "115bbc094d2119561320a21f01b6500a18bea8cc8589282ab007097bec8af38c"
 EXPECTED_SAMPLES = [
@@ -54,6 +58,21 @@ def _sha256(path):
 
 def _manifest():
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def _extractor_module():
+    spec = importlib.util.spec_from_file_location("extract_mlperf_vww_samples", EXTRACTOR_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _fixture_dataset(root):
+    for class_name, entries in (("non_person", EXPECTED_SAMPLES[:5]), ("person", EXPECTED_SAMPLES[5:])):
+        class_dir = root / class_name
+        class_dir.mkdir(parents=True)
+        for filename, _, _, _, source_relative_path in entries:
+            shutil.copyfile(MANIFEST_PATH.parent / filename, class_dir / Path(source_relative_path).name)
 
 
 def test_model_is_the_authenticated_mlperf_tiny_v14_float_artifact():
@@ -167,3 +186,52 @@ def test_committed_jpegs_match_optional_local_dataset_exactly():
         assert source.is_file()
         assert _sha256(source) == digest
         assert (MANIFEST_PATH.parent / filename).read_bytes() == source.read_bytes()
+
+
+def test_extractor_reproduces_committed_assets_exactly(tmp_path):
+    extractor = _extractor_module()
+    dataset_root = tmp_path / "vw_coco2014_96"
+    _fixture_dataset(dataset_root)
+    output_dir = tmp_path / "output"
+
+    extractor.extract_samples(dataset_root, output_dir)
+
+    assert (output_dir / "manifest.json").read_bytes() == MANIFEST_PATH.read_bytes()
+    for filename, _, _, _, _ in EXPECTED_SAMPLES:
+        assert (output_dir / filename).read_bytes() == (
+            MANIFEST_PATH.parent / filename
+        ).read_bytes()
+
+
+def test_extractor_rejects_selected_jpeg_symlink_without_touching_external_target(tmp_path):
+    extractor = _extractor_module()
+    dataset_root = tmp_path / "dataset"
+    _fixture_dataset(dataset_root)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    sentinel = tmp_path / ".envs" / "sentinel.jpg"
+    sentinel.parent.mkdir()
+    sentinel.write_bytes(b"preserve this JPEG sentinel")
+    (output_dir / EXPECTED_SAMPLES[0][0]).symlink_to(sentinel)
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        extractor.extract_samples(dataset_root, output_dir)
+
+    assert sentinel.read_bytes() == b"preserve this JPEG sentinel"
+
+
+def test_extractor_rejects_manifest_symlink_without_touching_external_target(tmp_path):
+    extractor = _extractor_module()
+    dataset_root = tmp_path / "dataset"
+    _fixture_dataset(dataset_root)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    sentinel = tmp_path / ".envs" / "sentinel.json"
+    sentinel.parent.mkdir()
+    sentinel.write_bytes(b"preserve this manifest sentinel")
+    (output_dir / "manifest.json").symlink_to(sentinel)
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        extractor.extract_samples(dataset_root, output_dir)
+
+    assert sentinel.read_bytes() == b"preserve this manifest sentinel"

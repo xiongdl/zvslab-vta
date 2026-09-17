@@ -26,7 +26,7 @@ from tvm import relay, rpc
 from tvm.contrib import graph_executor, utils
 
 from byoc_utils import make_qnn_conv2d_module, make_qnn_conv2d_near_miss_module
-from vta.relay import partition_for_vta
+from vta.relay import partition_for_vta, plan_devices_for_vta
 from vta.relay.transform import lower_vta_function
 
 
@@ -243,31 +243,167 @@ def test_near_miss_executes_only_on_host():
     assert output.dtype == np.dtype(env.out_dtype)
 
 
-def test_vta_target_compiles_unpacked_nhwc_depthwise_host_fallback():
-    """The single VTA target must schedule an unpacked host depthwise op."""
-    env = vta.get_env()
-    data = relay.var("data", shape=(1, 8, 8, 4), dtype="int8")
-    kernel = relay.const(np.ones((3, 3, 4, 1), dtype="int8"))
-    output = relay.nn.conv2d(
-        data,
-        kernel,
-        channels=4,
+def _make_mixed_depthwise_vta_module(env):
+    data = relay.var(
+        "data", shape=(env.BATCH, 8, 8, env.BLOCK_IN), dtype=env.inp_dtype
+    )
+    depthwise_kernel = relay.const(
+        np.ones((3, 3, env.BLOCK_IN, 1), dtype=env.wgt_dtype)
+    )
+    depthwise = relay.nn.conv2d(
+        relay.abs(data),
+        depthwise_kernel,
+        channels=env.BLOCK_IN,
         kernel_size=(3, 3),
         padding=(1, 1),
         data_layout="NHWC",
         kernel_layout="HWOI",
-        groups=4,
-        out_dtype="int32",
+        groups=env.BLOCK_IN,
+        out_dtype=env.acc_dtype,
     )
-    mod = tvm.IRModule.from_expr(relay.Function([data], output))
-    mod = relay.transform.InferType()(mod)
+    depthwise = relay.cast(
+        relay.clip(
+            relay.right_shift(depthwise, relay.const(1, env.acc_dtype)),
+            a_min=-128,
+            a_max=127,
+        ),
+        env.out_dtype,
+    )
+    base_output = relay.transpose(depthwise, axes=(0, 3, 1, 2))
+    base_kernel = relay.const(
+        np.ones((env.BLOCK_OUT, env.BLOCK_IN, 3, 3), dtype=env.wgt_dtype)
+    )
+    base_output = relay.nn.conv2d(
+        relay.abs(base_output),
+        base_kernel,
+        channels=env.BLOCK_OUT,
+        kernel_size=(3, 3),
+        padding=(1, 1),
+        data_layout="NCHW",
+        kernel_layout="OIHW",
+        out_dtype=env.acc_dtype,
+    )
+    base_output = relay.cast(
+        relay.clip(
+            relay.right_shift(base_output, relay.const(1, env.acc_dtype)),
+            a_min=-128,
+            a_max=127,
+        ),
+        env.out_dtype,
+    )
+    return relay.transform.InferType()(
+        tvm.IRModule.from_expr(relay.Function([data], base_output))
+    )
 
-    with vta.build_config():
-        factory = relay.build(mod, target=tvm.target.Target("vta", host=env.target_host))
 
+def test_plan_devices_for_vta_contract_and_input_immutability():
+    env = vta.get_env()
+    module = partition_for_vta(make_qnn_conv2d_module(env), mod_name="planner_contract")
+    before = module.astext(show_meta_data=True)
+
+    plan = plan_devices_for_vta(module, tvm.target.Target("llvm"))
+
+    assert isinstance(plan.module, tvm.IRModule)
+    assert len(plan.targets) == 2
+    assert plan.targets[0].kind.name == "llvm"
+    assert plan.targets[0].get_target_device_type() == tvm.cpu(0).device_type
+    assert plan.targets[1].kind.name == "vta"
+    assert plan.targets[1].host == plan.targets[0]
+    assert plan.targets[1].get_target_device_type() == tvm.ext_dev(0).device_type
+    assert module.astext(show_meta_data=True) == before
+    with pytest.raises((AttributeError, TypeError)):
+        plan.module = module
+    with pytest.raises(TypeError):
+        plan.targets[0] = plan.targets[1]
+
+    planned_text = plan.module["main"].astext(show_meta_data=False)
+    assert "VirtualDevice(device_type=12" in planned_text
+    assert "VirtualDevice(device_type=1" in planned_text
+    assert "device_copy" not in planned_text
+
+
+def test_plan_devices_for_vta_rejects_invalid_inputs():
+    env = vta.get_env()
+    module = partition_for_vta(make_qnn_conv2d_module(env), mod_name="planner_invalid")
+
+    with pytest.raises(TypeError, match="module must be a tvm.IRModule"):
+        plan_devices_for_vta(None, tvm.target.Target("llvm"))
+    with pytest.raises(TypeError, match="host_target must be a tvm.target.Target"):
+        plan_devices_for_vta(module, "llvm")
+    untyped = tvm.IRModule.from_expr(relay.Function([], relay.const(1, "int8")))
+    with pytest.raises(ValueError, match="inferred types"):
+        plan_devices_for_vta(untyped, tvm.target.Target("llvm"))
+    host_only = relay.transform.InferType()(
+        tvm.IRModule.from_expr(relay.Function([], relay.const(1, "int8")))
+    )
+    with pytest.raises(ValueError, match="outlined VTA function"):
+        plan_devices_for_vta(host_only, tvm.target.Target("llvm"))
+    with pytest.raises(ValueError, match="llvm or c"):
+        plan_devices_for_vta(module, tvm.target.Target("stackvm"))
+    with pytest.raises(ValueError, match="nested host"):
+        plan_devices_for_vta(
+            module,
+            tvm.target.Target("llvm", host=tvm.target.Target("llvm")),
+        )
+
+
+def test_mixed_unpacked_depthwise_host_and_vta_graph_executes_on_simulator():
+    env = vta.get_env()
+    mod = _make_mixed_depthwise_vta_module(env)
+    partitioned = partition_for_vta(mod, mod_name="mixed_depthwise_runtime")
+    external_functions = [
+        function
+        for function in partitioned.functions.values()
+        if isinstance(function, relay.Function)
+        and function.attrs is not None
+        and "Compiler" in function.attrs
+    ]
+    assert len(external_functions) == 1
+    symbol = external_functions[0].attrs.get_str("global_symbol")
+    main_text = partitioned["main"].astext(show_meta_data=False)
+    assert f"groups={env.BLOCK_OUT}" in main_text
+    assert external_functions[0].attrs.get_str("Compiler") == "vta"
+
+    input_shape = tuple(int(dim) for dim in mod["main"].params[0].checked_type.shape)
+    input_data = ((np.arange(np.prod(input_shape)) % 17) - 8).reshape(input_shape).astype(env.inp_dtype)
+    reference_factory = relay.build(mod, target="llvm")
+    expected = _run_graph(reference_factory, tvm.cpu(0), input_data)
+
+    plan = plan_devices_for_vta(partitioned, tvm.target.Target(env.target_host))
+    with plan.targets[1], vta.build_config():
+        factory = relay.build(plan.module, target=plan.targets)
     graph = json.loads(factory.get_graph_json())
-    assert graph["attrs"]["device_index"][1]
-    assert set(graph["attrs"]["device_index"][1]) == {tvm.ext_dev(0).device_type}
+    assert symbol in factory.get_graph_json()
+    assert set(graph["attrs"]["device_index"][1]) == {
+        tvm.cpu(0).device_type,
+        tvm.ext_dev(0).device_type,
+    }
+    assert any(node["name"] == "__copy" for node in graph["nodes"])
+
+    artifact_dir = utils.tempdir()
+    artifact_name = "vta_byoc_mixed_depthwise_runtime.tar"
+    artifact_path = artifact_dir.relpath(artifact_name)
+    factory.export_library(artifact_path)
+    simulator, clear_name, status_name = _require_simulator(env)
+    simulator.clear_stats()
+    remote = rpc.LocalSession()
+    remote.upload(artifact_path)
+    loaded = remote.load_module(artifact_name)
+    _require_runtime_symbol(loaded, symbol)
+    remote.get_function(clear_name)()
+    runtime = graph_executor.create(
+        factory.get_graph_json(), loaded, [remote.cpu(0), remote.ext_dev(0)]
+    )
+    runtime.load_params(tvm.runtime.save_param_dict(factory.get_params()))
+    runtime.set_input("data", input_data)
+    runtime.run()
+    actual = runtime.get_output(0).numpy()
+    runtime_stats = _remote_simulator_stats(remote, status_name)
+
+    assert actual.shape == expected.shape
+    assert actual.dtype == expected.dtype
+    np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
+    _assert_accelerator_activity(env, runtime_stats)
 
 
 def test_missing_simulator_reports_setup_command(monkeypatch):

@@ -18,6 +18,11 @@
 """Relay integration for the VTA target extension."""
 
 from .contract import COMPILER_NAME, VTACompilerConfig
+from .device_plan import VTADevicePlan, plan_devices_for_vta
 from .partition import partition_for_vta
 
-__all__ = ["COMPILER_NAME", "VTACompilerConfig", "partition_for_vta"]
+__all__ = [
+    "COMPILER_NAME",
+    "VTACompilerConfig",
+    "partition_for_vta",
+]
