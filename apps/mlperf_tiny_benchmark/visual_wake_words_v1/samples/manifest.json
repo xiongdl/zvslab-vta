@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "dataset": {
+    "name": "Visual Wake Words COCO 2014-derived dataset",
+    "root": "vw_coco2014_96",
+    "source": "user-provided local dataset directory",
+    "license": {
+      "status": "not-declared-by-source",
+      "notice": "The local COCO-derived image dataset license was not established by the source directory."
+    }
+  },
+  "selection": "lexicographically first five JPEG files from each class directory",
+  "class_mapping": {
+    "0": "non_person",
+    "1": "person"
+  },
+  "samples": [
+    {
+      "filename": "00-non-person-000000000009.jpg",
+      "source_relative_path": "non_person/COCO_train2014_000000000009.jpg",
+      "class_name": "non_person",
+      "label": 0,
+      "sha256": "d8f0e1e6e7635f189ab52e3e98aef1f7d734814a1fbe41fdb2c5ff8cbfc6dcfc"
+    },
+    {
+      "filename": "01-non-person-000000000025.jpg",
+      "source_relative_path": "non_person/COCO_train2014_000000000025.jpg",
+      "class_name": "non_person",
+      "label": 0,
+      "sha256": "d635da6fef7b8968653bdfc1289d8cfa88b551010e8d85ed1f384f7a6e60a2b2"
+    },
+    {
+      "filename": "02-non-person-000000000030.jpg",
+      "source_relative_path": "non_person/COCO_train2014_000000000030.jpg",
+      "class_name": "non_person",
+      "label": 0,
+      "sha256": "c69bcd53f365ec472243f32a4ef9e0a00f389c1c10b3f892ece2392223f92fd6"
+    },
+    {
+      "filename": "03-non-person-000000000034.jpg",
+      "source_relative_path": "non_person/COCO_train2014_000000000034.jpg",
+      "class_name": "non_person",
+      "label": 0,
+      "sha256": "fb4b1a2d533b1935103e5083a7d17b22a7dabfdffb2ddf09f75a98f19337c27d"
+    },
+    {
+      "filename": "04-non-person-000000000064.jpg",
+      "source_relative_path": "non_person/COCO_train2014_000000000064.jpg",
+      "class_name": "non_person",
+      "label": 0,
+      "sha256": "21eab2520d5dd01d3a10ce6b322a882bc7c6856ac50b3fbf1317362dcf7f53a0"
+    },
+    {
+      "filename": "05-person-000000000036.jpg",
+      "source_relative_path": "person/COCO_train2014_000000000036.jpg",
+      "class_name": "person",
+      "label": 1,
+      "sha256": "068b7ad53d46c9c075b47df4505bd6369a14cd4bcbad06c1e679dc7dfc51156f"
+    },
+    {
+      "filename": "06-person-000000000049.jpg",
+      "source_relative_path": "person/COCO_train2014_000000000049.jpg",
+      "class_name": "person",
+      "label": 1,
+      "sha256": "23959ed66eb87f75c51895b174024ea8af0da9fc2e301c52045a8a01332a8bc2"
+    },
+    {
+      "filename": "07-person-000000000077.jpg",
+      "source_relative_path": "person/COCO_train2014_000000000077.jpg",
+      "class_name": "person",
+      "label": 1,
+      "sha256": "18f612634fd4d1636181b96bc7fed3eaf61b0e38d4bf19c26f4011db75130868"
+    },
+    {
+      "filename": "08-person-000000000086.jpg",
+      "source_relative_path": "person/COCO_train2014_000000000086.jpg",
+      "class_name": "person",
+      "label": 1,
+      "sha256": "c4cb9d7b9f7a6e8b2ffc17acbbdcd74d062b43849ef16bd124eca572df316254"
+    },
+    {
+      "filename": "09-person-000000000110.jpg",
+      "source_relative_path": "person/COCO_train2014_000000000110.jpg",
+      "class_name": "person",
+      "label": 1,
+      "sha256": "577704fec55b656ca27e4ce444b9767b9bd20e196b16952e400d52747363abda"
+    }
+  ]
+}
