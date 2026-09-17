@@ -231,6 +231,23 @@ def conv2d_strategy_vta(attrs, inputs, out_type, target):
     return _strategy.arm_cpu.conv2d_strategy_arm_cpu(attrs, inputs, out_type, arm_tgt)
 
 
+# The VTA target intentionally advertises the ``cpu`` key so that host Relay
+# operators are lowered in the same target context as the external VTA
+# functions.  Keep the existing CPU strategy for every other target, while
+# selecting the VTA host fallback when the active target kind is actually VTA.
+# Without this narrow dispatch bridge, unpacked NHWC depthwise convolution is
+# sent to the generic CPU schedule, whose default schedule rejects ``vta``.
+_conv2d_strategy_cpu = _strategy.x86.conv2d_strategy_cpu
+
+
+@_strategy.conv2d_strategy.register("cpu", override=True)
+def conv2d_strategy_cpu_with_vta_fallback(attrs, inputs, out_type, target):
+    """Use the VTA host fallback only while compiling a VTA target."""
+    if target.kind.name == "vta":
+        return conv2d_strategy_vta(attrs, inputs, out_type, target)
+    return _conv2d_strategy_cpu(attrs, inputs, out_type, target)
+
+
 @_strategy.conv2d_transpose_strategy.register("vta")
 def conv2d_transpose_strategy_vta(attrs, inputs, out_type, target):
     """conv2d_transpose vta strategy"""

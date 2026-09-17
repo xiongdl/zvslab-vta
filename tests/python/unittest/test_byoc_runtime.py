@@ -243,6 +243,33 @@ def test_near_miss_executes_only_on_host():
     assert output.dtype == np.dtype(env.out_dtype)
 
 
+def test_vta_target_compiles_unpacked_nhwc_depthwise_host_fallback():
+    """The single VTA target must schedule an unpacked host depthwise op."""
+    env = vta.get_env()
+    data = relay.var("data", shape=(1, 8, 8, 4), dtype="int8")
+    kernel = relay.const(np.ones((3, 3, 4, 1), dtype="int8"))
+    output = relay.nn.conv2d(
+        data,
+        kernel,
+        channels=4,
+        kernel_size=(3, 3),
+        padding=(1, 1),
+        data_layout="NHWC",
+        kernel_layout="HWOI",
+        groups=4,
+        out_dtype="int32",
+    )
+    mod = tvm.IRModule.from_expr(relay.Function([data], output))
+    mod = relay.transform.InferType()(mod)
+
+    with vta.build_config():
+        factory = relay.build(mod, target=tvm.target.Target("vta", host=env.target_host))
+
+    graph = json.loads(factory.get_graph_json())
+    assert graph["attrs"]["device_index"][1]
+    assert set(graph["attrs"]["device_index"][1]) == {tvm.ext_dev(0).device_type}
+
+
 def test_missing_simulator_reports_setup_command(monkeypatch):
     env = vta.get_env()
     _, clear_name, _, build_command = _simulator_setup(env)
