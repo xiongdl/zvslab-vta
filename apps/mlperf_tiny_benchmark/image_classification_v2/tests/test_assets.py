@@ -40,6 +40,16 @@ LOCAL_TEST_BATCH = VTA_ROOT / "apps" / "mlperf_tiny_benchmark" / "cifar-10-batch
 
 MODEL_SHA256 = "fb17ae9c1b6d0e5bd97f0f35024f207556261d7310b249716c87cc0628214b0e"
 MLPERF_LICENSE_SHA256 = "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+EXPECTED_INPUT_NAME = "serving_default_input_5:0"
+EXPECTED_INPUT_SHAPE = [1, 32, 32, 3]
+EXPECTED_OUTPUT_NAME = "StatefulPartitionedCall:0"
+EXPECTED_OUTPUT_SHAPE = [1, 10]
+EXPECTED_TFLITE_OPERATORS = [
+    "CONV_2D", "CONV_2D", "CONV_2D", "ADD",
+    "CONV_2D", "CONV_2D", "CONV_2D", "ADD",
+    "CONV_2D", "CONV_2D", "CONV_2D", "ADD",
+    "AVERAGE_POOL_2D", "RESHAPE", "FULLY_CONNECTED", "SOFTMAX",
+]
 EXPECTED_OPERATOR_CODES = [3, 3, 3, 0, 3, 3, 3, 0, 3, 3, 3, 0, 1, 22, 9, 25]
 EXPECTED_CONV_CHANNELS = [40, 40, 40, 80, 80, 80, 160, 160, 160]
 TEST_BATCH_SHA256 = "f53d8d457504f7cff4ea9e021afcf0e0ad8e24a91f3fc42091b8adef61157831"
@@ -142,6 +152,10 @@ def test_model_is_the_exact_unmodified_mlperf_tiny_v14_large_float_artifact():
         'calibrate_mode="global_scale"',
         "global_scale=8.0",
         "skip_conv_layers=[0]",
+        f"Input tensor: `{EXPECTED_INPUT_NAME}`, float32 NHWC `{EXPECTED_INPUT_SHAPE}`",
+        f"Output tensor: `{EXPECTED_OUTPUT_NAME}`, float32 `{EXPECTED_OUTPUT_SHAPE}`",
+        f"Ordered operators: `{', '.join(EXPECTED_TFLITE_OPERATORS)}`",
+        f"Convolution output channels: `{'/'.join(str(channel) for channel in EXPECTED_CONV_CHANNELS)}`",
     ]
     for expected in required_provenance:
         assert expected in provenance
@@ -159,11 +173,11 @@ def test_model_flatbuffer_has_the_approved_resnet8_large_topology():
     assert graph.OutputsLength() == 1
     input_tensor = graph.Tensors(graph.Inputs(0))
     output_tensor = graph.Tensors(graph.Outputs(0))
-    assert input_tensor.Name().decode("utf-8") == "serving_default_input_5:0"
-    assert output_tensor.Name().decode("utf-8") == "StatefulPartitionedCall:0"
-    assert list(input_tensor.ShapeAsNumpy()) == [1, 32, 32, 3]
+    assert input_tensor.Name().decode("utf-8") == EXPECTED_INPUT_NAME
+    assert output_tensor.Name().decode("utf-8") == EXPECTED_OUTPUT_NAME
+    assert list(input_tensor.ShapeAsNumpy()) == EXPECTED_INPUT_SHAPE
     assert input_tensor.Type() == 0  # TensorType.FLOAT32
-    assert list(output_tensor.ShapeAsNumpy()) == [1, 10]
+    assert list(output_tensor.ShapeAsNumpy()) == EXPECTED_OUTPUT_SHAPE
     assert output_tensor.Type() == 0
 
     operator_codes = []
