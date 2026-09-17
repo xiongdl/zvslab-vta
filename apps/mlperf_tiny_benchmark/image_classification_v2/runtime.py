@@ -36,8 +36,7 @@ APP_ROOT = Path(__file__).resolve().parent
 MODEL_PATH = APP_ROOT / "model" / "pretrainedResnet_large_float.tflite"
 MANIFEST_PATH = APP_ROOT / "samples" / "manifest.json"
 DEFAULT_OUTPUT_DIR = APP_ROOT / "build"
-REFERENCE_ARTIFACT_STEM = "mlperf_resnet_large_llvm"
-MIXED_ARTIFACT_STEM = "mlperf_resnet_vta"
+ARTIFACT_NAME = "resnet8_large"
 INPUT_NAME = "serving_default_input_5:0"
 REQUIRED_PROFILER_COUNTERS = ("gemm_counter", "wgt_load_nbytes", "out_store_nbytes")
 SUPPORTED_HOST_CODEGENS = ("llvm", "c")
@@ -299,9 +298,7 @@ def _artifact_identity(host_codegen, role):
     _validate_host_codegen(host_codegen)
     if role not in {"reference", "mixed"}:
         raise ValueError(f"unsupported artifact role {role!r}")
-    if host_codegen == "llvm":
-        return "mlperf_resnet_large_llvm" if role == "reference" else "mlperf_resnet_large_vta_llvm"
-    return "mlperf_resnet_large_c" if role == "reference" else "mlperf_resnet_large_vta_c"
+    return ARTIFACT_NAME
 
 
 def _matrix_artifact_root(output_dir, host_codegen, simulator="fsim"):

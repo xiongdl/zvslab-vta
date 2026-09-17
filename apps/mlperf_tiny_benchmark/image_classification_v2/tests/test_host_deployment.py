@@ -38,6 +38,7 @@ MANIFEST_PATH = APP_ROOT / "samples" / "manifest.json"
 EXPECTED_VTA_SYMBOLS = tuple(f"tvmgen_mlperf_resnet_large_vta_main_{index}" for index in range(4))
 EXPECTED_ARTIFACT_DIRS = ("reference", "mixed")
 REQUIRED_PROFILER_COUNTERS = ("gemm_counter", "wgt_load_nbytes", "out_store_nbytes")
+EXPECTED_ARTIFACT_NAME = "resnet8_large"
 
 
 def _load_module(path, name):
@@ -163,6 +164,11 @@ def test_build_exports_and_reloads_two_standard_dsos_without_loading_fsim(
     assert artifacts.vta_symbols == EXPECTED_VTA_SYMBOLS
     assert artifacts.reference.path.read_bytes() == b"reference"
     assert artifacts.mixed.path.read_bytes() == b"mixed"
+    for role in EXPECTED_ARTIFACT_DIRS:
+        manifest = json.loads(
+            (tmp_path / role / "manifest.json").read_text(encoding="utf-8")
+        )
+        assert manifest["artifact"]["name"] == EXPECTED_ARTIFACT_NAME
 
     build_events = [event for event in events if event[0] == "build"]
     assert build_events == [
@@ -437,12 +443,131 @@ def test_fsim_matrix_rejects_any_host_order_before_model_preparation(
 
 
 def test_matrix_identities_and_bundle_layout_are_host_specific(deployment_runtime):
-    assert deployment_runtime._artifact_identity("llvm", "reference") == "mlperf_resnet_large_llvm"
-    assert deployment_runtime._artifact_identity("llvm", "mixed") == "mlperf_resnet_large_vta_llvm"
-    assert deployment_runtime._artifact_identity("c", "reference") == "mlperf_resnet_large_c"
-    assert deployment_runtime._artifact_identity("c", "mixed") == "mlperf_resnet_large_vta_c"
+    for host_codegen in ("llvm", "c"):
+        for role in EXPECTED_ARTIFACT_DIRS:
+            assert deployment_runtime._artifact_identity(host_codegen, role) == EXPECTED_ARTIFACT_NAME
     assert deployment_runtime._matrix_artifact_root(Path("out"), "llvm") == Path("out/llvm-fsim")
     assert deployment_runtime._matrix_artifact_root(Path("out"), "c") == Path("out/c-fsim")
+
+
+def test_fsim_matrix_prepares_once_and_records_independent_host_windows(
+    deployment_runtime, monkeypatch, tmp_path
+):
+    prepared = SimpleNamespace(
+        routing=SimpleNamespace(symbols=(), composite_names=(), host_operator_names=())
+    )
+    sample_paths = _expected_sample_paths()
+    events = []
+    prepare_calls = 0
+    artifacts = []
+
+    def fake_prepare(*_):
+        nonlocal prepare_calls
+        prepare_calls += 1
+        return prepared
+
+    def fake_build(_prepared, _output, *, host_codegen, simulator):
+        artifact = SimpleNamespace(
+            host_codegen=host_codegen,
+            reference=SimpleNamespace(module=(host_codegen, "reference")),
+            mixed=SimpleNamespace(module=(host_codegen, "mixed")),
+            vta_symbols=(),
+        )
+        artifacts.append(artifact)
+        return artifact
+
+    class FakeSimulator:
+        def __init__(self):
+            self.window = None
+
+        def clear_stats(self):
+            self.window = ("llvm", "c")[len([event for event in events if event[0] == "clear"])]
+            events.append(("clear", self.window))
+
+        def stats(self):
+            if self.window is None:
+                raise AssertionError("stats read before a profiler window was opened")
+            reads = [event for event in events if event[:2] == ("stats", self.window)]
+            if not reads:
+                value = {"gemm_counter": 0, "wgt_load_nbytes": 0, "out_store_nbytes": 0}
+                events.append(("stats", self.window, "zero"))
+                return value
+            value = {"gemm_counter": 1, "wgt_load_nbytes": 1, "out_store_nbytes": 1}
+            events.append(("stats", self.window, "positive"))
+            return value
+
+    simulator = FakeSimulator()
+
+    def fake_run(artifact, _input):
+        host, role = artifact.module
+        if role == "mixed":
+            events.append(("mixed_execution", host))
+        return np.zeros((1, 10), dtype="float32")
+
+    monkeypatch.setattr(deployment_runtime, "prepare_model", fake_prepare)
+    monkeypatch.setattr(deployment_runtime, "committed_sample_paths", lambda: sample_paths)
+    monkeypatch.setattr(
+        deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="sim")
+    )
+    monkeypatch.setattr(deployment_runtime, "build_host_artifacts", fake_build)
+    monkeypatch.setattr(
+        deployment_runtime,
+        "_load_simulator",
+        lambda label: (deployment_runtime._simulator_session(label), simulator),
+    )
+    monkeypatch.setattr(deployment_runtime, "load_sample", lambda _path: object())
+    monkeypatch.setattr(deployment_runtime, "_run_graph", fake_run)
+    monkeypatch.setattr(deployment_runtime, "validate_mixed_symbols", lambda *_: None)
+
+    result = deployment_runtime.deploy_fsim_matrix(tmp_path)
+
+    assert prepare_calls == 1
+    assert tuple(artifact.host_codegen for artifact in artifacts) == ("llvm", "c")
+    assert len(result.executions) == 2
+    assert [event for event in events if event[0] == "mixed_execution"] == (
+        [("mixed_execution", "llvm")] * 10 + [("mixed_execution", "c")] * 10
+    )
+    for host in ("llvm", "c"):
+        host_events = [
+            event
+            for event in events
+            if len(event) > 1 and event[1] == host and event[0] in {"clear", "stats", "mixed_execution"}
+        ]
+        assert host_events[0][:2] == ("clear", host)
+        assert host_events[1][:3] == ("stats", host, "zero")
+        assert host_events[2][0:2] == ("mixed_execution", host)
+        assert host_events[-1][0:3] == ("stats", host, "positive")
+        assert sum(event[0] == "mixed_execution" for event in host_events) == 10
+
+
+def test_fsim_matrix_rejects_divergent_reference_tensors(
+    deployment_runtime, monkeypatch, tmp_path
+):
+    prepared = SimpleNamespace(
+        routing=SimpleNamespace(symbols=(), composite_names=(), host_operator_names=())
+    )
+    sample_paths = _expected_sample_paths()
+    artifacts = tuple(
+        SimpleNamespace(
+            host_codegen=host,
+            reference=SimpleNamespace(module=(host, "reference")),
+            mixed=SimpleNamespace(module=(host, "mixed")),
+            vta_symbols=(),
+        )
+        for host in ("llvm", "c")
+    )
+
+    monkeypatch.setattr(deployment_runtime, "committed_sample_paths", lambda: sample_paths)
+    monkeypatch.setattr(deployment_runtime, "load_sample", lambda _path: object())
+    monkeypatch.setattr(deployment_runtime, "validate_mixed_symbols", lambda *_: None)
+    monkeypatch.setattr(deployment_runtime, "_load_simulator", lambda *_: pytest.fail("simulator must not load"))
+
+    def fake_run(artifact, _input):
+        return np.zeros((1, 10), dtype="float32") if artifact.module[0] == "llvm" else np.ones((1, 10), dtype="float32")
+
+    monkeypatch.setattr(deployment_runtime, "_run_graph", fake_run)
+    with pytest.raises(RuntimeError, match="elementwise"):
+        deployment_runtime._execute_matrix(artifacts, sample_paths, "fsim")
 
 
 def test_fsim_matrix_result_records_simulator_and_is_frozen(deployment_runtime, monkeypatch, tmp_path):
@@ -519,6 +644,7 @@ def test_end_to_end_host_fsim_deployment(deployment_runtime, tmp_path):
         manifest = json.loads(
             (artifact.artifact_dir / "manifest.json").read_text(encoding="utf-8")
         )
+        assert manifest["artifact"]["name"] == EXPECTED_ARTIFACT_NAME
         llvm_sources = [
             entry
             for entry in manifest["sources"]
