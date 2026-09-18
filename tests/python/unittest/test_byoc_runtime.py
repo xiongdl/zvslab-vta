@@ -25,7 +25,11 @@ import vta
 from tvm import relay, rpc
 from tvm.contrib import graph_executor, utils
 
-from byoc_utils import make_qnn_conv2d_module, make_qnn_conv2d_near_miss_module
+from byoc_utils import (
+    make_adjacent_qnn_conv2d_module,
+    make_qnn_conv2d_module,
+    make_qnn_conv2d_near_miss_module,
+)
 from vta.relay import partition_for_vta, plan_devices_for_vta
 from vta.relay.transform import lower_vta_function
 
@@ -345,6 +349,24 @@ def test_plan_devices_for_vta_rejects_invalid_inputs():
             module,
             tvm.target.Target("llvm", host=tvm.target.Target("llvm")),
         )
+
+
+def test_plan_devices_for_vta_handles_deep_nested_host_graph():
+    """Keep nested host expressions inferable around multiple VTA calls."""
+    env = vta.get_env()
+    module = make_adjacent_qnn_conv2d_module(env, count=2)
+    partitioned = partition_for_vta(module, mod_name="nested_host_planner")
+
+    plan = plan_devices_for_vta(partitioned, tvm.target.Target("llvm"))
+    with vta.build_config():
+        factory = relay.build(plan.module, target=plan.targets)
+
+    graph = json.loads(factory.get_graph_json())
+    assert set(graph["attrs"]["device_index"][1]) == {
+        tvm.cpu(0).device_type,
+        tvm.ext_dev(0).device_type,
+    }
+    assert any(node["name"] == "__copy" for node in graph["nodes"])
 
 
 def test_mixed_unpacked_depthwise_host_and_vta_graph_executes_on_simulator():

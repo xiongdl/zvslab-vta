@@ -80,26 +80,12 @@ def _validate_vta_function(function):
 
 
 class _VTACallAnnotator(relay.ExprMutator):
-    """Constrain host and outlined VTA calls to their virtual devices."""
+    """Constrain outlined VTA calls to their virtual device boundary."""
 
     def __init__(self, cpu_device, vta_device, symbols):
         super().__init__()
-        self._cpu_device = cpu_device
         self._vta_device = vta_device
         self._symbols = symbols
-        self._vta_bindings = set()
-
-    def visit_let(self, let):
-        is_vta_call = (
-            isinstance(let.value, relay.Call)
-            and isinstance(let.value.op, relay.GlobalVar)
-            and let.value.op.name_hint in self._symbols
-        )
-        value = self.visit(let.value)
-        if is_vta_call:
-            self._vta_bindings.add(let.var.name_hint)
-        body = self.visit(let.body)
-        return relay.Let(let.var, value, body, let.span)
 
     def visit_call(self, call):
         updated = super().visit_call(call)
@@ -128,24 +114,11 @@ class _VTACallAnnotator(relay.ExprMutator):
                 constrain_result=True,
                 constrain_body=False,
             )
-        args = [
-            relay.annotation.on_device(
-                arg,
-                self._cpu_device,
-                constrain_result=True,
-                constrain_body=False,
-            )
-            if isinstance(arg, relay.Var) and arg.name_hint in self._vta_bindings
-            else arg
-            for arg in updated.args
-        ]
-        updated = relay.Call(updated.op, args, updated.attrs, updated.type_args, updated.span)
-        return relay.annotation.on_device(
-            updated,
-            self._cpu_device,
-            constrain_result=True,
-            constrain_body=True,
-        )
+        # Ordinary host calls inherit the CPU constraint from the enclosing
+        # main result.  Wrapping each one recursively creates conflicting
+        # nested on_device constraints when host expressions surround or feed
+        # multiple outlined VTA calls.
+        return updated
 
 
 def _canonical_host_target(host_target):
