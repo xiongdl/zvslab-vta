@@ -328,6 +328,16 @@ def test_plan_devices_for_vta_contract_and_input_immutability():
     assert "device_copy" not in planned_text
 
 
+def test_plan_devices_for_vta_public_exports_include_planner_types():
+    namespace = {}
+    exec("from vta.relay import *", namespace)
+
+    assert "VTADevicePlan" in vta.relay.__all__
+    assert "plan_devices_for_vta" in vta.relay.__all__
+    assert isinstance(namespace["VTADevicePlan"], type)
+    assert callable(namespace["plan_devices_for_vta"])
+
+
 def test_plan_devices_for_vta_rejects_invalid_inputs():
     env = vta.get_env()
     module = partition_for_vta(make_qnn_conv2d_module(env), mod_name="planner_invalid")
@@ -353,14 +363,15 @@ def test_plan_devices_for_vta_rejects_invalid_inputs():
         )
 
 
-def test_plan_devices_for_vta_handles_deep_nested_host_graph():
+@pytest.mark.parametrize("host_kind", ["llvm", "c"])
+def test_plan_devices_for_vta_handles_deep_nested_host_graph(host_kind):
     """Keep nested host expressions inferable around multiple VTA calls."""
     env = vta.get_env()
     module = make_adjacent_qnn_conv2d_module(env, count=2)
     partitioned = partition_for_vta(module, mod_name="nested_host_planner")
 
-    plan = plan_devices_for_vta(partitioned, tvm.target.Target("llvm"))
-    with tvm.target.Target("vta", host=plan.targets[0]), vta.build_config():
+    plan = plan_devices_for_vta(partitioned, tvm.target.Target(host_kind))
+    with vta.build_config():
         factory = relay.build(plan.module, target=plan.targets)
 
     graph = json.loads(factory.get_graph_json())

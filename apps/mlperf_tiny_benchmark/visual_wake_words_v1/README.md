@@ -23,7 +23,7 @@ map returned by the planner remains the canonical `ext_dev -device=vta`
 target paired with the selected LLVM or C host target:
 
 ```python
-with tvm.target.Target("vta", host=plan.targets[0]), vta.build_config():
+with vta.build_config():
     mixed_factory = relay.build(plan.module, target=plan.targets)
 ```
 

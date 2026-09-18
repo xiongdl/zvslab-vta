@@ -332,11 +332,6 @@ def _host_target(host_codegen=DEFAULT_HOST_CODEGEN):
     return tvm.target.Target("c")
 
 
-def _active_vta_target(host_target):
-    """Activate the compiler extension while building canonical ext_dev targets."""
-    return tvm.target.Target("vta", host=host_target)
-
-
 def build_host_artifacts(prepared, output_dir, host_codegen=DEFAULT_HOST_CODEGEN, simulator="fsim"):
     """Build, export, and reload both standard host libraries without simulator loading."""
     _validate_host_codegen(host_codegen)
@@ -353,16 +348,13 @@ def build_host_artifacts(prepared, output_dir, host_codegen=DEFAULT_HOST_CODEGEN
                 prepared.reference_module, target=tvm.target.Target("c")
             )
     device_plan = plan_devices_for_vta(prepared.mixed_module, _host_target(host_codegen))
-    # VTA's lower-pass bundle includes CPUAccessRewrite, which is correct for
-    # an all-ext_dev VTA module but would rewrite ordinary CPU host functions
-    # in this explicit CPU+ext_dev graph.  Keep C host lowering native while
-    # still disabling unsupported vectorized C codegen.
-    build_config = (
-        tvm.transform.PassContext(config={"tir.disable_vectorize": True})
-        if host_codegen == "c"
-        else vta.build_config()
-    )
-    with _active_vta_target(device_plan.targets[0]), build_config:
+    if host_codegen == "c":
+        mixed_build_context = tvm.transform.PassContext(
+            config={"tir.disable_vectorize": True}
+        )
+    else:
+        mixed_build_context = vta.build_config()
+    with mixed_build_context:
         mixed_factory = relay.build(device_plan.module, target=device_plan.targets)
 
     reference_identity = _artifact_identity(host_codegen, "reference")

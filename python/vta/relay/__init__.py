@@ -18,11 +18,29 @@
 """Relay integration for the VTA target extension."""
 
 from .contract import COMPILER_NAME, VTACompilerConfig
-from .device_plan import VTADevicePlan, plan_devices_for_vta
+from .device_plan import VTADevicePlan, plan_devices_for_vta as _plan_devices_for_vta
 from .partition import partition_for_vta
+from tvm import relay
+
+
+def plan_devices_for_vta(module, host_target):
+    """Return a heterogeneous VTA build plan with its host target attached."""
+    plan = _plan_devices_for_vta(module, host_target)
+    planned_module = plan.module
+    for global_var, function in list(planned_module.functions.items()):
+        if not isinstance(function, relay.Function):
+            continue
+        if function.attrs is None or "Compiler" not in function.attrs:
+            continue
+        if function.attrs.get_str("Compiler") != COMPILER_NAME:
+            continue
+        planned_module[global_var] = function.with_attr("vta.host_target", plan.targets[0])
+    return VTADevicePlan(module=planned_module, targets=plan.targets)
 
 __all__ = [
     "COMPILER_NAME",
     "VTACompilerConfig",
     "partition_for_vta",
+    "VTADevicePlan",
+    "plan_devices_for_vta",
 ]

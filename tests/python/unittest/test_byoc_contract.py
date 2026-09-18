@@ -45,6 +45,8 @@ def test_relay_package_exports_public_compiler_surface():
         "COMPILER_NAME",
         "VTACompilerConfig",
         "partition_for_vta",
+        "VTADevicePlan",
+        "plan_devices_for_vta",
     ]
     assert partition_for_vta is vta.relay.partition_for_vta
 

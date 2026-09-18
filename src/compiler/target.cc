@@ -35,14 +35,29 @@ void ValidateActiveVTAHost(const Target& target);
 
 transform::Pass ModernRelayToTIR() {
   auto bind_vta_target = tir::transform::CreatePrimFuncPass(
-      [](tir::PrimFunc func, IRModule, transform::PassContext) {
+      [](tir::PrimFunc func, IRModule module, transform::PassContext) {
         Optional<Target> lowered_target = func->GetAttr<Target>(tvm::attr::kTarget);
         if (!lowered_target.defined() || !lowered_target.value()->HasKey("vta")) {
           return func;
         }
-        Target active_target = Target::Current(true);
-        ValidateActiveVTAHost(active_target);
-        Target host = active_target->GetHost().value();
+        Target host(nullptr);
+        Optional<Target> planned_host;
+        Optional<DictAttrs> relay_attrs = func->GetAttr<DictAttrs>("relay_attrs");
+        if (relay_attrs.defined()) {
+          planned_host = relay_attrs.value().GetAttr<Target>("vta.host_target");
+        }
+        if (!planned_host.defined()) {
+          planned_host = module->GetAttr<Target>("vta.host_target");
+        }
+        if (planned_host.defined()) {
+          Target planned_vta_target = Target::WithHost(Target("vta"), planned_host.value());
+          ValidateActiveVTAHost(planned_vta_target);
+          host = planned_host.value();
+        } else {
+          Target active_target = Target::Current(true);
+          ValidateActiveVTAHost(active_target);
+          host = active_target->GetHost().value();
+        }
         return WithAttrs(std::move(func),
                          {{tvm::attr::kTarget, Target::WithHost(Target("vta"), host)},
                           {"vta.route_to_runtime", Bool(true)}});

@@ -138,6 +138,25 @@ def test_relay_to_tir_rejects_vta_functions_without_active_target():
         _relay_to_tir_hook()(mod)
 
 
+@pytest.mark.parametrize("host_kind", ["llvm", "c"])
+def test_relay_to_tir_uses_planned_host_without_active_target(host_kind):
+    mod, _ = _module_with_global_vta_functions(1)
+    mod = mod.with_attr("vta.host_target", tvm.target.Target(host_kind))
+
+    lowered = _relay_to_tir_hook()(mod)
+
+    primfunc = lowered[lowered.get_global_var("tvmgen_target_hooks_vta_0")]
+    assert primfunc.attrs["target"].host.kind.name == host_kind
+
+
+def test_relay_to_tir_rejects_invalid_planned_host():
+    mod, _ = _module_with_global_vta_functions(1)
+    mod = mod.with_attr("vta.host_target", tvm.target.Target("stackvm"))
+
+    with pytest.raises(tvm.error.TVMError, match="stackvm.*llvm and c"):
+        _relay_to_tir_hook()(mod)
+
+
 @pytest.mark.parametrize("vta_function_count", [1, 3])
 @pytest.mark.parametrize("host_kind", ["llvm", "c"])
 def test_one_hook_invocation_replaces_every_existing_vta_global_in_place(

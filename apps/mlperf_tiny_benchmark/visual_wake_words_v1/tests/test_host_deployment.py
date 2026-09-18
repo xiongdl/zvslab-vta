@@ -22,7 +22,7 @@ import importlib.util
 import json
 import re
 import sys
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from types import SimpleNamespace
@@ -131,7 +131,7 @@ def test_build_exports_and_reloads_two_standard_dsos_without_loading_fsim(
         return serialized_params_by_kind[kind]
 
     @contextmanager
-    def fake_build_config():
+    def fake_build_config(**kwargs):
         events.append(("build_config_enter",))
         yield
         events.append(("build_config_exit",))
@@ -145,13 +145,6 @@ def test_build_exports_and_reloads_two_standard_dsos_without_loading_fsim(
     monkeypatch.setattr(deployment_runtime.relay, "save_param_dict", fake_save_param_dict)
     monkeypatch.setattr(deployment_runtime.tvm.runtime, "load_module", fake_load)
     monkeypatch.setattr(deployment_runtime.vta, "build_config", fake_build_config)
-    @contextmanager
-    def fake_active_vta_target(host_target):
-        events.append(("active_vta_target_enter", host_target))
-        yield
-        events.append(("active_vta_target_exit", host_target))
-
-    monkeypatch.setattr(deployment_runtime, "_active_vta_target", fake_active_vta_target)
     monkeypatch.setattr(
         deployment_runtime,
         "_host_target",
@@ -191,8 +184,6 @@ def test_build_exports_and_reloads_two_standard_dsos_without_loading_fsim(
     ]
     assert events.index(("build_config_enter",)) < events.index(build_events[1])
     assert events.index(build_events[1]) < events.index(("build_config_exit",))
-    assert events.index(("active_vta_target_enter", planned_targets[0])) < events.index(build_events[1])
-    assert events.index(build_events[1]) < events.index(("active_vta_target_exit", planned_targets[0]))
     assert [event[0] for event in events].count("export") == 2
     assert [event[0] for event in events].count("reload") == 4
     param_events = [event for event in events if event[0] in {"get_params", "serialize_params"}]
@@ -307,7 +298,7 @@ def test_partial_artifacts_are_removed_when_export_fails(deployment_runtime, mon
                 raise RuntimeError("synthetic export failure")
 
     @contextmanager
-    def fake_build_config():
+    def fake_build_config(**kwargs):
         yield
 
     factories = iter((FailingFactory("reference"), FailingFactory("mixed")))
@@ -318,7 +309,6 @@ def test_partial_artifacts_are_removed_when_export_fails(deployment_runtime, mon
         lambda params: b"serialized-" + next(iter(params)).encode("ascii"),
     )
     monkeypatch.setattr(deployment_runtime.vta, "build_config", fake_build_config)
-    monkeypatch.setattr(deployment_runtime, "_active_vta_target", lambda host_target: nullcontext())
     monkeypatch.setattr(
         deployment_runtime,
         "plan_devices_for_vta",
