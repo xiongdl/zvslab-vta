@@ -338,6 +338,23 @@ def test_plan_devices_for_vta_public_exports_include_planner_types():
     assert callable(namespace["plan_devices_for_vta"])
 
 
+def test_plan_devices_for_vta_propagates_host_target_from_canonical_module():
+    env = vta.get_env()
+    module = partition_for_vta(make_qnn_conv2d_module(env), mod_name="planner_host_target")
+    plan = plan_devices_for_vta(module, tvm.target.Target("c"))
+
+    vta_functions = [
+        function
+        for function in plan.module.functions.values()
+        if isinstance(function, relay.Function)
+        and function.attrs is not None
+        and "Compiler" in function.attrs
+        and function.attrs.get_str("Compiler") == "vta"
+    ]
+    assert vta_functions
+    assert all(function.attrs["vta.host_target"] == plan.targets[0] for function in vta_functions)
+
+
 def test_plan_devices_for_vta_rejects_invalid_inputs():
     env = vta.get_env()
     module = partition_for_vta(make_qnn_conv2d_module(env), mod_name="planner_invalid")

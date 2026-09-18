@@ -34,6 +34,43 @@ def EarlyRewrite():
     return tvm.transform.module_pass(_transform, opt_level=0, name="tir.vta.EarlyRewrite")
 
 
+def _VTAOnlyCPUAccessRewrite():
+    """Rewrite CPU accesses only inside VTA-targeted PrimFuncs.
+
+    ``tir.add_lower_pass`` is shared by every target in a heterogeneous
+    Relay build.  Applying CPUAccessRewrite to the generated host graph
+    rewrites ordinary host buffers as if they were VTA buffers, which makes
+    the resulting C host module call the VTA pointer ABI.  Keep the legacy
+    rewrite for VTA PrimFuncs while leaving host PrimFuncs untouched.
+    """
+    rewrite = transform.CPUAccessRewrite()
+
+    def _transform(func, _mod, _ctx):
+        attrs = func.attrs
+        target = attrs.get("target") if attrs else None
+        if target is None:
+            target = tvm.target.Target.current(allow_none=True)
+        if target is None:
+            return func
+        target_is_vta = target.kind.name == "vta" or "vta" in target.keys
+        host = target.host if target.kind.name == "vta" else target
+        # Legacy Target("vta", host="llvm") builds rely on the historical
+        # pass being applied to every PrimFunc.  Canonical heterogeneous
+        # builds must restrict it to VTA PrimFuncs so C host buffers retain
+        # their ordinary pointer ABI.
+        legacy_vta_build = target.kind.name == "vta" and (
+            host is None or host.kind.name == "llvm"
+        )
+        if not legacy_vta_build and not target_is_vta:
+            return func
+        rewritten = rewrite(tvm.IRModule({"main": func}))
+        return rewritten["main"]
+
+    return tvm.tir.transform.prim_func_pass(
+        _transform, opt_level=0, name="tir.vta.CPUAccessRewriteForVTA"
+    )
+
+
 def build_config(debug_flag=0, **kwargs):
     """Build a build config for VTA.
 
@@ -82,9 +119,16 @@ def build_config(debug_flag=0, **kwargs):
     pass_list.append((2, transform.InjectALUIntrin()))
     pass_list.append((3, tvm.tir.transform.LowerDeviceStorageAccessInfo()))
     pass_list.append((3, transform.FoldUopLoop()))
-    pass_list.append((3, transform.CPUAccessRewrite()))
+    pass_list.append((3, _VTAOnlyCPUAccessRewrite()))
     pass_list.append((3, transform.NormalizeVTAAddressArgs()))
-    config = {"tir.add_lower_pass": pass_list}
+    # VTA's C host codegen does not accept vector lane types such as
+    # float32x64.  Keep vectorization disabled by default for the complete
+    # heterogeneous build while allowing callers to explicitly override the
+    # setting through ``config``.
+    config = {
+        "tir.add_lower_pass": pass_list,
+        "tir.disable_vectorize": True,
+    }
     user_config = kwargs.pop("config", {})
     config.update(user_config)
 

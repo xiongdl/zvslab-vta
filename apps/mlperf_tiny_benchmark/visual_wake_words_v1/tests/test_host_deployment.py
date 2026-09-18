@@ -629,3 +629,17 @@ def test_real_c_mixed_source_has_static_uop_and_safe_constant_contract(
         all(execution.profiler_stats[counter] > 0 for counter in REQUIRED_PROFILER_COUNTERS)
         for execution in result.executions
     )
+
+
+def test_real_vww_c_mixed_build_uses_the_exact_public_plan_contract(
+    deployment_runtime,
+):
+    prepared = deployment_runtime.prepare_model(MODEL_PATH)
+    plan = deployment_runtime.plan_devices_for_vta(
+        prepared.mixed_module, deployment_runtime.tvm.target.Target("c")
+    )
+
+    with deployment_runtime.vta.build_config():
+        factory = deployment_runtime.relay.build(plan.module, target=plan.targets)
+
+    assert factory.get_lib().type_key == "c"

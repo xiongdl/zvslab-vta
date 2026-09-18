@@ -213,6 +213,15 @@ def plan_devices_for_vta(module, host_target):
         main.type_params,
         main.attrs,
     )
+    for global_var, function in list(planned.functions.items()):
+        if not isinstance(function, relay.Function):
+            continue
+        attrs = function.attrs
+        if attrs is None or "Compiler" not in attrs:
+            continue
+        if attrs.get_str("Compiler") != COMPILER_NAME:
+            continue
+        planned[global_var] = function.with_attr("vta.host_target", cpu_target)
     planned = relay.transform.InferType()(planned)
     targets = tvm.runtime.convert([cpu_target, vta_target])
     return VTADevicePlan(module=planned, targets=targets)

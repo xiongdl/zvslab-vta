@@ -348,13 +348,7 @@ def build_host_artifacts(prepared, output_dir, host_codegen=DEFAULT_HOST_CODEGEN
                 prepared.reference_module, target=tvm.target.Target("c")
             )
     device_plan = plan_devices_for_vta(prepared.mixed_module, _host_target(host_codegen))
-    if host_codegen == "c":
-        mixed_build_context = tvm.transform.PassContext(
-            config={"tir.disable_vectorize": True}
-        )
-    else:
-        mixed_build_context = vta.build_config()
-    with mixed_build_context:
+    with vta.build_config():
         mixed_factory = relay.build(device_plan.module, target=device_plan.targets)
 
     reference_identity = _artifact_identity(host_codegen, "reference")

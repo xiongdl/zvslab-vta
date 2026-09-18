@@ -105,10 +105,15 @@ def _llvm_function_body(llvm_source, symbol):
 def test_build_config_accepts_empty_config_and_merges_nonempty_config():
     with vta.build_config(config={}) as empty_context:
         assert empty_context.config["tir.add_lower_pass"]
+        assert bool(empty_context.config["tir.disable_vectorize"]) is True
 
     with vta.build_config(config={"tir.disable_vectorize": True}) as configured_context:
         assert configured_context.config["tir.add_lower_pass"]
         assert bool(configured_context.config["tir.disable_vectorize"]) is True
+
+    with vta.build_config(config={"tir.disable_vectorize": False}) as overridden_context:
+        assert overridden_context.config["tir.add_lower_pass"]
+        assert bool(overridden_context.config["tir.disable_vectorize"]) is False
 
 
 @pytest.mark.parametrize("function_count", [1, 3])

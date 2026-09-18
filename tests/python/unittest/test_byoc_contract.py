@@ -31,6 +31,7 @@ from byoc_utils import (
     run_isolated_python,
 )
 from vta.relay import COMPILER_NAME, VTACompilerConfig, partition_for_vta
+from vta.relay.device_plan import plan_devices_for_vta as direct_plan_devices_for_vta
 
 
 LEGACY_COMPILER_GLOBAL = "relay.ext." + "vta"
@@ -49,6 +50,7 @@ def test_relay_package_exports_public_compiler_surface():
         "plan_devices_for_vta",
     ]
     assert partition_for_vta is vta.relay.partition_for_vta
+    assert vta.relay.plan_devices_for_vta is direct_plan_devices_for_vta
 
 
 def test_partition_for_vta_has_public_api_documentation():
