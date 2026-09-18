@@ -10,11 +10,22 @@ LLVM and C variants below separate `llvm-fsim/` and `c-fsim/` (FSIM) or
 `llvm-tsim/` and `c-tsim/` (TSIM) bundle roots.
 
 Importing `vta` loads and validates the compiler target extension. The mixed
-branch explicitly applies `vta.relay.partition_for_vta()` once, then passes
-`tvm.target.Target("vta", host=...)` to `relay.build`; unsupported operators remain
-in the host portion of the same standard runtime module. The VTA Relay strategy
-provides a host fallback for unpacked NHWC depthwise convolutions, so the compiler
-produces the mixed graph without post-build graph JSON edits.
+branch explicitly applies `vta.relay.partition_for_vta()` once, then uses
+`vta.relay.plan_devices_for_vta()` to constrain host operators to CPU and
+outlined VTA functions to `ext_dev`. The resulting CPU/VTA target map is passed
+to `relay.build`, which inserts compiler-owned device copies and produces the
+standard mixed runtime module without post-build graph JSON edits. The plan
+keeps the thirteen depthwise convolutions on CPU and the twelve deterministic
+VTA regions on `ext_dev`.
+
+The VTA compiler target is activated only as the lowering context; the target
+map returned by the planner remains the canonical `ext_dev -device=vta`
+target paired with the selected LLVM or C host target:
+
+```python
+with tvm.target.Target("vta", host=plan.targets[0]), vta.build_config():
+    mixed_factory = relay.build(plan.module, target=plan.targets)
+```
 
 The application is an execution-equivalence example. It does not report model
 accuracy, performance, energy, or MLPerf submission results.

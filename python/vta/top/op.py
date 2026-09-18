@@ -55,9 +55,22 @@ def compute_clip_vta(attrs, inputs, output_type):
 
 def clip_strategy_vta(attrs, inputs, out_type, target):
     strategy = OpStrategy()
+
+    # Canonical heterogeneous builds use the environment's ext_dev target
+    # (keys=vta,cpu).  Clip remains a host-side injective operation, so its
+    # generic schedule must run under the selected host target rather than
+    # the ext_dev compiler target.
+    schedule_target = target.host if target.kind.name == "ext_dev" else target
+
+    def schedule_clip(_, outs, _target):
+        with schedule_target:
+            if schedule_target.kind.name == "c":
+                return topi.x86.schedule_injective(outs)
+            return topi.generic.schedule_injective(outs)
+
     strategy.add_implementation(
         compute_clip_vta,
-        _strategy.wrap_topi_schedule(topi.generic.schedule_injective),
+        schedule_clip,
         name="clip.vta",
     )
     return strategy
@@ -229,23 +242,6 @@ def conv2d_strategy_vta(attrs, inputs, out_type, target):
     # If it's not packed, run on ARM CPU
     arm_tgt = tvm.target.arm_cpu(target.model)
     return _strategy.arm_cpu.conv2d_strategy_arm_cpu(attrs, inputs, out_type, arm_tgt)
-
-
-# The VTA target intentionally advertises the ``cpu`` key so that host Relay
-# operators are lowered in the same target context as the external VTA
-# functions.  Keep the existing CPU strategy for every other target, while
-# selecting the VTA host fallback when the active target kind is actually VTA.
-# Without this narrow dispatch bridge, unpacked NHWC depthwise convolution is
-# sent to the generic CPU schedule, whose default schedule rejects ``vta``.
-_conv2d_strategy_cpu = _strategy.x86.conv2d_strategy_cpu
-
-
-@_strategy.conv2d_strategy.register("cpu", override=True)
-def conv2d_strategy_cpu_with_vta_fallback(attrs, inputs, out_type, target):
-    """Use the VTA host fallback only while compiling a VTA target."""
-    if target.kind.name == "vta":
-        return conv2d_strategy_vta(attrs, inputs, out_type, target)
-    return _conv2d_strategy_cpu(attrs, inputs, out_type, target)
 
 
 @_strategy.conv2d_transpose_strategy.register("vta")

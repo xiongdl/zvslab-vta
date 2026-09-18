@@ -27,6 +27,7 @@ import tvm
 import vta
 from tvm import relay
 from tvm.contrib import graph_executor
+from vta.relay import plan_devices_for_vta
 
 from graph_artifacts import export_graph_bundle
 from model_pipeline import MODEL_SHA256, load_sample, prepare_model
@@ -324,11 +325,16 @@ def _matrix_artifact_root(output_dir, host_codegen, simulator="fsim"):
     return Path(output_dir) / f"{host_codegen}-{simulator}"
 
 
-def _mixed_target(host_codegen=DEFAULT_HOST_CODEGEN):
+def _host_target(host_codegen=DEFAULT_HOST_CODEGEN):
     _validate_host_codegen(host_codegen)
-    environment = vta.get_env()
-    host = environment.target_host if host_codegen == "llvm" else "c"
-    return tvm.target.Target("vta", host=host)
+    if host_codegen == "llvm":
+        return tvm.target.Target(vta.get_env().target_host)
+    return tvm.target.Target("c")
+
+
+def _active_vta_target(host_target):
+    """Activate the compiler extension while building canonical ext_dev targets."""
+    return tvm.target.Target("vta", host=host_target)
 
 
 def build_host_artifacts(prepared, output_dir, host_codegen=DEFAULT_HOST_CODEGEN, simulator="fsim"):
@@ -346,22 +352,18 @@ def build_host_artifacts(prepared, output_dir, host_codegen=DEFAULT_HOST_CODEGEN
             reference_factory = relay.build(
                 prepared.reference_module, target=tvm.target.Target("c")
             )
-    if host_codegen == "c":
-        with vta.build_config(config={"tir.disable_vectorize": True}):
-            mixed_factory = relay.build(
-                prepared.mixed_module,
-                target=_mixed_target(
-                    *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
-                ),
-            )
-    else:
-        with vta.build_config():
-            mixed_factory = relay.build(
-                prepared.mixed_module,
-                target=_mixed_target(
-                    *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
-                ),
-            )
+    device_plan = plan_devices_for_vta(prepared.mixed_module, _host_target(host_codegen))
+    # VTA's lower-pass bundle includes CPUAccessRewrite, which is correct for
+    # an all-ext_dev VTA module but would rewrite ordinary CPU host functions
+    # in this explicit CPU+ext_dev graph.  Keep C host lowering native while
+    # still disabling unsupported vectorized C codegen.
+    build_config = (
+        tvm.transform.PassContext(config={"tir.disable_vectorize": True})
+        if host_codegen == "c"
+        else vta.build_config()
+    )
+    with _active_vta_target(device_plan.targets[0]), build_config:
+        mixed_factory = relay.build(device_plan.module, target=device_plan.targets)
 
     reference_identity = _artifact_identity(host_codegen, "reference")
     mixed_identity = _artifact_identity(host_codegen, "mixed")

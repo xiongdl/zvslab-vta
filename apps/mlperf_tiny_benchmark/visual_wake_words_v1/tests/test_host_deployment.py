@@ -22,7 +22,7 @@ import importlib.util
 import json
 import re
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from types import SimpleNamespace
@@ -139,12 +139,31 @@ def test_build_exports_and_reloads_two_standard_dsos_without_loading_fsim(
     def forbidden_fsim_load():
         raise AssertionError("FSIM must not load during build, export, or reload")
 
-    mixed_target = object()
+    planned_module = object()
+    planned_targets = ("host-target", "vta-target")
     monkeypatch.setattr(deployment_runtime.relay, "build", fake_build)
     monkeypatch.setattr(deployment_runtime.relay, "save_param_dict", fake_save_param_dict)
     monkeypatch.setattr(deployment_runtime.tvm.runtime, "load_module", fake_load)
     monkeypatch.setattr(deployment_runtime.vta, "build_config", fake_build_config)
-    monkeypatch.setattr(deployment_runtime, "_mixed_target", lambda: mixed_target)
+    @contextmanager
+    def fake_active_vta_target(host_target):
+        events.append(("active_vta_target_enter", host_target))
+        yield
+        events.append(("active_vta_target_exit", host_target))
+
+    monkeypatch.setattr(deployment_runtime, "_active_vta_target", fake_active_vta_target)
+    monkeypatch.setattr(
+        deployment_runtime,
+        "_host_target",
+        lambda host_codegen: ("host-target", host_codegen),
+    )
+    monkeypatch.setattr(
+        deployment_runtime,
+        "plan_devices_for_vta",
+        lambda module, host_target: SimpleNamespace(
+            module=planned_module, targets=planned_targets
+        ),
+    )
     monkeypatch.setattr(deployment_runtime, "_load_fsim", forbidden_fsim_load)
 
     artifacts = deployment_runtime.build_host_artifacts(prepared, tmp_path)
@@ -168,10 +187,12 @@ def test_build_exports_and_reloads_two_standard_dsos_without_loading_fsim(
     build_events = [event for event in events if event[0] == "build"]
     assert build_events == [
         ("build", "reference", quantized, "llvm"),
-        ("build", "mixed", mixed, mixed_target),
+        ("build", "mixed", planned_module, planned_targets),
     ]
     assert events.index(("build_config_enter",)) < events.index(build_events[1])
     assert events.index(build_events[1]) < events.index(("build_config_exit",))
+    assert events.index(("active_vta_target_enter", planned_targets[0])) < events.index(build_events[1])
+    assert events.index(build_events[1]) < events.index(("active_vta_target_exit", planned_targets[0]))
     assert [event[0] for event in events].count("export") == 2
     assert [event[0] for event in events].count("reload") == 4
     param_events = [event for event in events if event[0] in {"get_params", "serialize_params"}]
@@ -297,7 +318,14 @@ def test_partial_artifacts_are_removed_when_export_fails(deployment_runtime, mon
         lambda params: b"serialized-" + next(iter(params)).encode("ascii"),
     )
     monkeypatch.setattr(deployment_runtime.vta, "build_config", fake_build_config)
-    monkeypatch.setattr(deployment_runtime, "_mixed_target", object)
+    monkeypatch.setattr(deployment_runtime, "_active_vta_target", lambda host_target: nullcontext())
+    monkeypatch.setattr(
+        deployment_runtime,
+        "plan_devices_for_vta",
+            lambda module, host_target: SimpleNamespace(
+                module=module, targets=("host-target", "vta-target")
+            ),
+    )
     monkeypatch.setattr(
         deployment_runtime.tvm.runtime,
         "load_module",
@@ -538,7 +566,8 @@ def test_application_sources_use_only_the_approved_host_flow():
     assert "tvm.runtime.load_module" in combined
     assert "graph_executor.create" in combined
     assert 'target="llvm"' in combined
-    assert 'tvm.target.Target("vta", host=host)' in sources["runtime.py"]
+    assert "plan_devices_for_vta" in sources["runtime.py"]
+    assert "_mixed_target" not in combined
     assert "_patch_mixed_graph_devices" not in combined
     assert "device_index" not in sources["runtime.py"]
 

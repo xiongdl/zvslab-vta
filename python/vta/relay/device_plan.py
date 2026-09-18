@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import tvm
 from tvm import relay
 
+from ..environment import get_env
 from .contract import COMPILER_NAME
 
 
@@ -84,6 +85,7 @@ class _VTACallAnnotator(relay.ExprMutator):
 
     def __init__(self, cpu_device, vta_device, symbols):
         super().__init__()
+        self._cpu_device = cpu_device
         self._vta_device = vta_device
         self._symbols = symbols
 
@@ -114,11 +116,16 @@ class _VTACallAnnotator(relay.ExprMutator):
                 constrain_result=True,
                 constrain_body=False,
             )
-        # Ordinary host calls inherit the CPU constraint from the enclosing
-        # main result.  Wrapping each one recursively creates conflicting
-        # nested on_device constraints when host expressions surround or feed
-        # multiple outlined VTA calls.
-        return updated
+        # Keep every ordinary host call on CPU.  Once a VTA call is followed
+        # by host computation, Relay's inferred device would otherwise flow
+        # through the subsequent let bindings and select the ext_dev target
+        # for those operators as well.
+        return relay.annotation.on_device(
+            updated,
+            self._cpu_device,
+            constrain_result=True,
+            constrain_body=False,
+        )
 
 
 def _canonical_host_target(host_target):
@@ -156,9 +163,11 @@ def plan_devices_for_vta(module, host_target):
     if not vta_functions:
         raise ValueError("module must contain an outlined VTA function")
 
-    # The registered compiler target kind is ``vta``.  Its device type is
-    # ext_dev, which is the virtual device used by Relay annotations.
-    vta_target = tvm.target.Target("vta", host=cpu_target)
+    # Use the environment's canonical compiler target.  The VTA compiler
+    # contract is an ``ext_dev`` target with device=vta and keys=vta,cpu;
+    # ``Target("vta")`` is a separate target kind used by the compiler
+    # extension and does not carry the environment's target contract.
+    vta_target = tvm.target.Target(get_env().target, host=cpu_target)
     if vta_target.get_target_device_type() != tvm.runtime.Device.kDLExtDev:
         raise ValueError("VTA target must use the ext_dev device")
 

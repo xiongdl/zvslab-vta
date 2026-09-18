@@ -311,7 +311,9 @@ def test_plan_devices_for_vta_contract_and_input_immutability():
     assert len(plan.targets) == 2
     assert plan.targets[0].kind.name == "llvm"
     assert plan.targets[0].get_target_device_type() == tvm.cpu(0).device_type
-    assert plan.targets[1].kind.name == "vta"
+    assert plan.targets[1].kind.name == "ext_dev"
+    assert plan.targets[1].device_name == "vta"
+    assert set(plan.targets[1].keys) == {"vta", "cpu"}
     assert plan.targets[1].host == plan.targets[0]
     assert plan.targets[1].get_target_device_type() == tvm.ext_dev(0).device_type
     assert module.astext(show_meta_data=True) == before
@@ -358,7 +360,7 @@ def test_plan_devices_for_vta_handles_deep_nested_host_graph():
     partitioned = partition_for_vta(module, mod_name="nested_host_planner")
 
     plan = plan_devices_for_vta(partitioned, tvm.target.Target("llvm"))
-    with vta.build_config():
+    with tvm.target.Target("vta", host=plan.targets[0]), vta.build_config():
         factory = relay.build(plan.module, target=plan.targets)
 
     graph = json.loads(factory.get_graph_json())
@@ -392,7 +394,7 @@ def test_mixed_unpacked_depthwise_host_and_vta_graph_executes_on_simulator():
     expected = _run_graph(reference_factory, tvm.cpu(0), input_data)
 
     plan = plan_devices_for_vta(partitioned, tvm.target.Target(env.target_host))
-    with plan.targets[1], vta.build_config():
+    with tvm.target.Target("vta", host=plan.targets[0]), vta.build_config():
         factory = relay.build(plan.module, target=plan.targets)
     graph = json.loads(factory.get_graph_json())
     assert symbol in factory.get_graph_json()
