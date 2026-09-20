@@ -1,6 +1,7 @@
 """HOST/FSIM runtime contracts for the fixed anomaly sample set."""
 
 import importlib.util
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -50,12 +51,108 @@ def _records(runtime_module):
     return runtime_module.committed_sample_records()
 
 
+def _write_manifest(tmp_path, mutate=None):
+    samples_dir = tmp_path / "samples"
+    samples_dir.mkdir()
+    samples = []
+    for order, (label, class_name) in enumerate(
+        [(0, "normal")] * 5 + [(1, "anomaly")] * 5
+    ):
+        filename = f"{class_name}_{order}.wav"
+        payload = f"sample-{order}".encode("ascii")
+        (samples_dir / filename).write_bytes(payload)
+        samples.append(
+            {
+                "order": order,
+                "filename": filename,
+                "class_name": class_name,
+                "label": label,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "byte_length": len(payload),
+            }
+        )
+    if mutate is not None:
+        mutate(samples, samples_dir, tmp_path)
+    manifest_path = samples_dir / "manifest.json"
+    manifest_path.write_text(json.dumps({"samples": samples}), encoding="utf-8")
+    return manifest_path
+
+
 def test_manifest_order_and_balanced_labels_are_fixed(runtime_module):
     records = _records(runtime_module)
     assert len(records) == 10
     assert [item.label for item in records] == [0] * 5 + [1] * 5
     assert [item.order for item in records] == list(range(10))
     assert all(".envs" not in str(item.path) for item in records)
+
+
+def test_custom_manifest_requires_sample_hash(runtime_module, tmp_path):
+    def remove_hash(samples, samples_dir, root):
+        del samples[0]["sha256"]
+
+    manifest_path = _write_manifest(tmp_path, remove_hash)
+    with pytest.raises(ValueError, match="sha256"):
+        runtime_module.committed_sample_records(manifest_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("sha256", "0" * 64), ("byte_length", 0)),
+)
+def test_custom_manifest_rejects_sample_metadata_mismatch(
+    runtime_module, tmp_path, field, value
+):
+    def change_metadata(samples, samples_dir, root):
+        samples[0][field] = value
+
+    manifest_path = _write_manifest(tmp_path, change_metadata)
+    with pytest.raises(ValueError, match=field):
+        runtime_module.committed_sample_records(manifest_path)
+
+
+def test_custom_manifest_rejects_duplicate_filenames(runtime_module, tmp_path):
+    def duplicate_filename(samples, samples_dir, root):
+        samples[1]["filename"] = samples[0]["filename"]
+
+    manifest_path = _write_manifest(tmp_path, duplicate_filename)
+    with pytest.raises(ValueError, match="unique"):
+        runtime_module.committed_sample_records(manifest_path)
+
+
+@pytest.mark.parametrize("path_kind", ("parent", "absolute", "symlink"))
+def test_custom_manifest_rejects_external_sample_paths(runtime_module, tmp_path, path_kind):
+    def external_path(samples, samples_dir, root):
+        outside = root / "outside.wav"
+        outside.write_bytes(b"outside")
+        if path_kind == "parent":
+            samples[0]["filename"] = "../outside.wav"
+        elif path_kind == "absolute":
+            samples[0]["filename"] = str(outside)
+        else:
+            link = samples_dir / "escaped.wav"
+            link.symlink_to(outside)
+            samples[0]["filename"] = link.name
+            samples[0]["sha256"] = hashlib.sha256(outside.read_bytes()).hexdigest()
+            samples[0]["byte_length"] = outside.stat().st_size
+
+    manifest_path = _write_manifest(tmp_path, external_path)
+    with pytest.raises(ValueError, match="unsafe|outside|symlink"):
+        runtime_module.committed_sample_records(manifest_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("order", 1), ("label", 1), ("class_name", "anomaly")),
+)
+def test_custom_manifest_rejects_wrong_order_or_class_label(
+    runtime_module, tmp_path, field, value
+):
+    def change_contract(samples, samples_dir, root):
+        samples[0][field] = value
+
+    manifest_path = _write_manifest(tmp_path, change_contract)
+    with pytest.raises(ValueError, match="order|label|class"):
+        runtime_module.committed_sample_records(manifest_path)
 
 
 def test_host_execution_returns_ten_reconstruction_scores_without_fsim(

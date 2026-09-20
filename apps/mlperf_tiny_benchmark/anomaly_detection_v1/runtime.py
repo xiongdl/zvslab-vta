@@ -1,7 +1,9 @@
 """Build and execute the fixed anomaly autoencoder on HOST or FSIM."""
 
 import json
+import hashlib
 import os
+import stat
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -268,27 +270,73 @@ def resolve_tsim_window_budget(value=None):
 
 
 def _manifest_records(manifest_path):
-    manifest_path = Path(manifest_path).expanduser().resolve()
-    if ".envs" in manifest_path.parts:
+    manifest_path = Path(manifest_path).expanduser().resolve(strict=True)
+    samples_dir = manifest_path.parent.resolve(strict=True)
+    if ".envs" in manifest_path.parts or ".envs" in samples_dir.parts:
         raise ValueError("manifest must not be read from .envs")
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
     samples = data.get("samples")
     if not isinstance(samples, list) or len(samples) != 10:
         raise ValueError("sample manifest must contain exactly ten samples")
     records = []
+    filenames = set()
+    resolved_paths = set()
     for expected_order, item in enumerate(samples):
+        if not isinstance(item, dict):
+            raise ValueError("manifest samples must be objects")
         filename = item.get("filename")
-        if not isinstance(filename, str) or Path(filename).name != filename:
+        relative_path = Path(filename) if isinstance(filename, str) else None
+        if (
+            not isinstance(filename, str)
+            or not filename
+            or relative_path.is_absolute()
+            or ".." in relative_path.parts
+        ):
             raise ValueError(f"manifest has an unsafe filename: {filename!r}")
-        path = manifest_path.parent / filename
-        if ".envs" in path.resolve().parts or not path.is_file():
-            raise ValueError(f"manifest sample is missing or unsafe: {path}")
-        if item.get("order") != expected_order:
+        if filename in filenames:
+            raise ValueError("manifest sample filenames must be unique")
+        filenames.add(filename)
+        path = samples_dir / relative_path
+        current = samples_dir
+        for part in relative_path.parts:
+            current /= part
+            if current.is_symlink():
+                raise ValueError(f"manifest sample must not be a symlink: {path}")
+        if not path.exists() or not path.is_file() or not stat.S_ISREG(path.stat().st_mode):
+            raise ValueError(f"manifest sample is missing or not a regular file: {path}")
+        try:
+            resolved_path = path.resolve(strict=True)
+            resolved_path.relative_to(samples_dir)
+        except ValueError as error:
+            raise ValueError(f"manifest sample path is outside samples directory: {path}") from error
+        if ".envs" in resolved_path.parts:
+            raise ValueError("manifest sample must not be read from .envs")
+        if resolved_path in resolved_paths:
+            raise ValueError("manifest sample paths must be unique")
+        resolved_paths.add(resolved_path)
+
+        order = item.get("order")
+        if type(order) is not int or order != expected_order:
             raise ValueError("manifest sample order must be zero through nine")
-        label = int(item.get("label"))
+        label = item.get("label")
         class_name = item.get("class_name")
-        if (label, class_name) not in ((0, "normal"), (1, "anomaly")):
+        if type(label) is not int or (label, class_name) not in ((0, "normal"), (1, "anomaly")):
             raise ValueError("manifest labels must use 0=normal and 1=anomaly")
+        sha256 = item.get("sha256")
+        if (
+            not isinstance(sha256, str)
+            or len(sha256) != 64
+            or any(character not in "0123456789abcdef" for character in sha256)
+        ):
+            raise ValueError(f"manifest sample sha256 is invalid: {filename!r}")
+        byte_length = item.get("byte_length")
+        if type(byte_length) is not int or byte_length < 0:
+            raise ValueError(f"manifest sample byte_length is invalid: {filename!r}")
+        sample_bytes = path.read_bytes()
+        if len(sample_bytes) != byte_length:
+            raise ValueError(f"manifest sample byte_length mismatch: {filename!r}")
+        if hashlib.sha256(sample_bytes).hexdigest() != sha256:
+            raise ValueError(f"manifest sample sha256 mismatch: {filename!r}")
         records.append(SampleRecord(expected_order, path, filename, class_name, label))
     if [item.label for item in records] != [0] * 5 + [1] * 5:
         raise ValueError("manifest order must contain five normal then five anomaly samples")
