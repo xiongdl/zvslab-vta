@@ -171,10 +171,29 @@ class SimulatorSession:
                 f"{self.label.upper()} profiler registry is unavailable; build the "
                 f"required libraries with {self.diagnostic}"
             )
-        clear()
+        try:
+            clear()
+        except Exception as error:
+            raise RuntimeError(f"{self.label.upper()} profiler failed to clear counters") from error
         stats = self.read_stats(status)
         if self.label == "tsim" and stats != {"cycle_count": 0}:
             raise RuntimeError(f"TSIM profiler did not reset to {{'cycle_count': 0}}: {stats}")
+        if self.label == "fsim":
+            invalid = []
+            for counter in REQUIRED_PROFILER_COUNTERS:
+                value = stats.get(counter)
+                if (
+                    counter not in stats
+                    or isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or value != 0
+                ):
+                    invalid.append(counter)
+            if invalid:
+                raise RuntimeError(
+                    "FSIM profiler did not reset required counters to zero: "
+                    f"{invalid}; stats={stats}"
+                )
         return stats
 
     def read_stats(self, status):
@@ -604,7 +623,8 @@ def execute_fsim(artifacts, records):
     raw = [_score_record(artifacts.reference, record) for record in records]
     validate_mixed_symbols(artifacts.mixed.module, artifacts.vta_symbols)
     simulator = _load_fsim()
-    simulator.clear_stats()
+    session = _simulator_session("fsim")
+    session.clear_and_validate(simulator)
     with _fsim_context():
         for item, record in zip(raw, records):
             mixed_score, shape, dtype = _sample_score(artifacts.mixed, record)
@@ -613,8 +633,8 @@ def execute_fsim(artifacts, records):
             if not np.isclose(mixed_score, item["reference_score"], rtol=1e-6, atol=1e-6):
                 raise RuntimeError(f"{record.filename} reconstruction score differs")
             item["mixed_score"] = mixed_score
-    stats = dict(simulator.stats())
-    _validate_profiler_stats(stats)
+    stats = session.read_stats(simulator.stats)
+    session.validate_activity(stats)
     samples, threshold = _with_predictions(raw)
     return ExecutionSummary("fsim", artifacts.host_codegen, samples, _summary(samples, threshold), stats, {})
 

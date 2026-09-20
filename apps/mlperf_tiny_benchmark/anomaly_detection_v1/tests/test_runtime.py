@@ -198,11 +198,65 @@ def test_fsim_execution_requires_matching_reference_and_mixed_scores(runtime_mod
     mixed = SimpleNamespace(params=b"m", graph_json="m", module=object(), device="ext_dev")
     artifacts = SimpleNamespace(reference=reference, mixed=mixed, host_codegen="llvm", vta_symbols=("symbol",))
     monkeypatch.setattr(runtime_module, "load_sample", lambda path: np.zeros((1, 640), dtype=np.float32))
-    monkeypatch.setattr(runtime_module, "_run_graph", lambda artifact, value, output=None: np.zeros((1, 640), dtype=np.float32))
+    profiler = {
+        "gemm_counter": 7,
+        "wgt_load_nbytes": 11,
+        "out_store_nbytes": 13,
+    }
+
+    def run_graph(artifact, value, output=None):
+        for counter in profiler:
+            profiler[counter] += 1
+        return np.zeros((1, 640), dtype=np.float32)
+
+    monkeypatch.setattr(runtime_module, "_run_graph", run_graph)
     monkeypatch.setattr(runtime_module, "validate_mixed_symbols", lambda *args: None)
-    simulator = SimpleNamespace(clear_stats=lambda: None, stats=lambda: {"gemm_counter": 1, "wgt_load_nbytes": 1, "out_store_nbytes": 1})
+
+    def clear_stats():
+        for counter in profiler:
+            profiler[counter] = 0
+
+    simulator = SimpleNamespace(clear_stats=clear_stats, stats=lambda: dict(profiler))
     monkeypatch.setattr(runtime_module, "_load_fsim", lambda: simulator)
 
     result = runtime_module.execute_fsim(artifacts, records)
     assert len(result.samples) == 10
-    assert result.profiler_stats["gemm_counter"] == 1
+    assert result.profiler_stats["gemm_counter"] == 10
+
+
+def test_fsim_execution_rejects_profiler_stats_that_clear_stats_did_not_reset(
+    runtime_module, monkeypatch
+):
+    records = _records(runtime_module)
+    reference = SimpleNamespace(params=b"r", graph_json="r", module=object(), device="cpu")
+    mixed = SimpleNamespace(params=b"m", graph_json="m", module=object(), device="ext_dev")
+    artifacts = SimpleNamespace(reference=reference, mixed=mixed, host_codegen="llvm", vta_symbols=("symbol",))
+    monkeypatch.setattr(runtime_module, "load_sample", lambda path: np.zeros((1, 640), dtype=np.float32))
+    monkeypatch.setattr(runtime_module, "_run_graph", lambda artifact, value, output=None: np.zeros((1, 640), dtype=np.float32))
+    monkeypatch.setattr(runtime_module, "validate_mixed_symbols", lambda *args: None)
+    simulator = SimpleNamespace(
+        clear_stats=lambda: None,
+        stats=lambda: {"gemm_counter": 1, "wgt_load_nbytes": 1, "out_store_nbytes": 1},
+    )
+    monkeypatch.setattr(runtime_module, "_load_fsim", lambda: simulator)
+
+    with pytest.raises(RuntimeError, match="did not reset|required counters|zero"):
+        runtime_module.execute_fsim(artifacts, records)
+
+
+def test_fsim_execution_rejects_nonzero_profiler_stats_after_clear(
+    runtime_module, monkeypatch
+):
+    records = _records(runtime_module)
+    reference = SimpleNamespace(params=b"r", graph_json="r", module=object(), device="cpu")
+    mixed = SimpleNamespace(params=b"m", graph_json="m", module=object(), device="ext_dev")
+    artifacts = SimpleNamespace(reference=reference, mixed=mixed, host_codegen="llvm", vta_symbols=("symbol",))
+    monkeypatch.setattr(runtime_module, "load_sample", lambda path: np.zeros((1, 640), dtype=np.float32))
+    monkeypatch.setattr(runtime_module, "_run_graph", lambda artifact, value, output=None: np.zeros((1, 640), dtype=np.float32))
+    monkeypatch.setattr(runtime_module, "validate_mixed_symbols", lambda *args: None)
+    profiler = {"gemm_counter": 0, "wgt_load_nbytes": 1, "out_store_nbytes": 0}
+    simulator = SimpleNamespace(clear_stats=lambda: None, stats=lambda: dict(profiler))
+    monkeypatch.setattr(runtime_module, "_load_fsim", lambda: simulator)
+
+    with pytest.raises(RuntimeError, match="did not reset|required counters|zero"):
+        runtime_module.execute_fsim(artifacts, records)
