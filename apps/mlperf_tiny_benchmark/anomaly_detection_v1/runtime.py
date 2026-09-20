@@ -175,7 +175,11 @@ def build_host_artifacts(prepared, build_dir=DEFAULT_BUILD_DIR, host_codegen=DEF
     if prepared.reference_module is not prepared.quantized_module:
         raise RuntimeError("reference must be the shared quantized module")
     build_root = Path(build_dir) / f"{host_codegen}-{mode}"
-    reference_factory = relay.build(prepared.reference_module, target="llvm" if host_codegen == "llvm" else tvm.target.Target("c"))
+    if host_codegen == "c":
+        with tvm.transform.PassContext(config={"tir.disable_vectorize": True}):
+            reference_factory = relay.build(prepared.reference_module, target=tvm.target.Target("c"))
+    else:
+        reference_factory = relay.build(prepared.reference_module, target="llvm")
     if host_codegen == "c":
         with vta.build_config(config={"tir.disable_vectorize": True}):
             mixed_factory = relay.build(prepared.mixed_module, target=_mixed_target(host_codegen))
