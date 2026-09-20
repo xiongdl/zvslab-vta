@@ -11,6 +11,7 @@ import pytest
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_PATH = APP_ROOT / "runtime.py"
+RUN_PATH = APP_ROOT / "run.py"
 
 
 @pytest.fixture(scope="module")
@@ -39,6 +40,28 @@ def test_tsim_mapping_is_explicit_and_requires_hardware_library(deployment_runti
     )
     assert session.activity_counter == "cycle_count"
     assert "--target libvta_hw" in session.diagnostic
+
+
+def test_cli_exposes_host_codegen_simulator_and_output_directory_options(deployment_runtime):
+    assert RUN_PATH.is_file(), f"missing Task 6 CLI: {RUN_PATH}"
+    spec = importlib.util.spec_from_file_location("mlperf_kws_run", RUN_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    sys.path.insert(0, str(APP_ROOT))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+
+    defaults = module._parser().parse_args([])
+    assert defaults.output_dir == str(deployment_runtime.DEFAULT_OUTPUT_DIR)
+    assert defaults.host_codegen == "llvm"
+    assert defaults.simulator == "fsim"
+    assert module._parser().parse_args(["--output-dir", "out"]).output_dir == "out"
+    assert module._parser().parse_args(["--host-codegen", "c"]).host_codegen == "c"
+    assert module._parser().parse_args(["--host-codegen", "all"]).host_codegen == "all"
+    assert module._parser().parse_args(["--simulator", "host"]).simulator == "host"
+    assert module._parser().parse_args(["--simulator", "tsim"]).simulator == "tsim"
 
 
 def test_tsim_rejects_wrong_target_before_model_preparation(deployment_runtime, monkeypatch, tmp_path):
