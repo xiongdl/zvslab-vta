@@ -179,3 +179,19 @@ def test_real_model_partition_keeps_int8_io_and_vta_convolutions(model_pipeline)
     assert tuple(int(d) for d in prepared.mixed_module["main"].ret_type.shape) == (1, 3)
     assert prepared.routing.symbols
     assert all(count > 0 for count in prepared.routing.convolutions_per_partition)
+
+
+def test_normalization_preserves_all_per_axis_fixed_point_nodes(model_pipeline):
+    imported = model_pipeline.import_model(MODEL_PATH)
+    canonical = model_pipeline.relay.qnn.transform.CanonicalizeOps()(imported.module)
+    canonical = model_pipeline.relay.transform.InferType()(canonical)
+    canonical_count = model_pipeline._relay_operator_names(canonical["main"]).count(
+        "fixed_point_multiply_per_axis"
+    )
+
+    normalized = model_pipeline.normalize_model(imported)
+
+    assert canonical_count == 8
+    assert model_pipeline._relay_operator_names(normalized["main"]).count(
+        "fixed_point_multiply_per_axis"
+    ) == canonical_count
