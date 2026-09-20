@@ -85,11 +85,11 @@ PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
 The command reports each sample's reference and mixed top-1 class, artifact
 bundle paths, and positive FSIM profiler counters. A nonzero exit means a
 contract failed; output comparison is never approximate and errors are not
-swallowed. In the current Checkpoint 3 evidence, HOST passed, while the real
-FSIM mixed/reference comparison failed strictly with reference
-`[-43, -43, -43]` versus mixed `[-128, -128, 127]`; profiler activity was
-normal. This known mismatch remains visible until its owning task addresses
-it.
+swallowed. The current validated state is that HOST and the real FSIM
+LLVM/C matrix both pass: each host variant builds one non-empty VTA partition,
+all three committed samples compare elementwise equal, and profiler activity
+is positive for both variants. The earlier FSIM mismatch evidence is obsolete
+and must not be used to interpret a current run.
 
 ## TSIM
 
