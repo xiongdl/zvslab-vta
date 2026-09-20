@@ -77,9 +77,29 @@ deployment score demonstration and does not claim classification accuracy.
 The JSON result is sorted and contains model/input/output metadata,
 per-sample results, the summary, and FSIM profiler counters when applicable.
 
-## TSIM follow-up
+## TSIM
 
-TSIM is intentionally not implemented in checkpoint 2. The planned follow-up
-will use `vta/config/tsim_sample.json`, validate lazy TSIM initialization and
-positive cycle activity, and add the corresponding CLI matrix after the
-checkpoint 3 runtime work is completed.
+TSIM uses the existing VTA software-simulation flow and must run in a fresh
+process with `VTA_CONFIG_FILE` set to `vta/config/tsim_sample.json`. Build the
+hardware/TSIM library before running it:
+
+```bash
+bash scripts/build_vta_lib.sh --target libvta_hw
+```
+
+Then run the complete LLVM/C matrix from the repository root:
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/tsim_sample.json" \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/anomaly_detection_v1/run.py \
+  --simulator tsim --host-codegen all
+```
+
+The command builds and reloads both host variants before lazy TSIM
+initialization. Successful output contains ten comparisons per host, with
+`normal_count: 5`, `anomaly_count: 5`, and a positive integer `cycle_count`.
+Missing TSIM registries, a non-TSIM VTA target, or absent `libvta_hw` causes a
+nonzero exit. The scores and labels are deployment contracts only; they do not
+claim classification accuracy.

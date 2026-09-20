@@ -33,7 +33,7 @@ DEFAULT_BUILD_DIR = APP_ROOT / "build"
 DEFAULT_OUTPUT_DIR = DEFAULT_BUILD_DIR
 SUPPORTED_HOST_CODEGENS = ("llvm", "c")
 DEFAULT_HOST_CODEGEN = "llvm"
-SUPPORTED_MODES = ("host", "fsim")
+SUPPORTED_MODES = ("host", "fsim", "tsim")
 REQUIRED_PROFILER_COUNTERS = ("gemm_counter", "wgt_load_nbytes", "out_store_nbytes")
 
 
@@ -98,9 +98,134 @@ class DeploymentResult:
     execution: ExecutionSummary
 
 
+@dataclass(frozen=True)
+class SimulatorSession:
+    """Validated registry adaptor for one configured VTA simulator process."""
+
+    label: str
+    environment_target: str
+    clear_registry: str
+    status_registry: str
+    required_registries: tuple
+    activity_counter: str
+    diagnostic: str
+
+    def validate_environment(self):
+        active_target = getattr(vta.get_env(), "TARGET", None)
+        if active_target != self.environment_target:
+            raise RuntimeError(
+                f"simulator {self.label!r} requires VTA target "
+                f"{self.environment_target!r}, active target is {active_target!r}"
+            )
+        return self
+
+    def load(self):
+        try:
+            from vta.testing import simulator
+        except Exception as error:
+            missing = [
+                name
+                for name in self.required_registries
+                if tvm.get_global_func(name, allow_missing=True) is None
+            ]
+            detail = (
+                f"missing registry functions: {', '.join(missing)}"
+                if missing
+                else "standard simulator initialization failed"
+            )
+            raise RuntimeError(
+                f"{self.label.upper()} is unavailable; {detail}. Build the required "
+                f"libraries with {self.diagnostic}"
+            ) from error
+
+        missing = [
+            name
+            for name in self.required_registries
+            if tvm.get_global_func(name, allow_missing=True) is None
+        ]
+        if missing:
+            raise RuntimeError(
+                f"{self.label.upper()} is unavailable; missing registry functions: "
+                f"{', '.join(missing)}. Build the required libraries with "
+                f"{self.diagnostic}"
+            )
+        return simulator
+
+    def clear_and_validate(self, simulator):
+        clear = getattr(simulator, "clear_stats", None)
+        status = getattr(simulator, "stats", None)
+        if clear is None or status is None:
+            raise RuntimeError(
+                f"{self.label.upper()} profiler registry is unavailable; build the "
+                f"required libraries with {self.diagnostic}"
+            )
+        clear()
+        stats = self.read_stats(status)
+        if self.label == "tsim" and stats != {"cycle_count": 0}:
+            raise RuntimeError(f"TSIM profiler did not reset to {{'cycle_count': 0}}: {stats}")
+        return stats
+
+    def read_stats(self, status):
+        try:
+            raw = status()
+            stats = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"{self.label.upper()} profiler returned malformed counters") from error
+        if not isinstance(stats, dict):
+            raise RuntimeError(f"{self.label.upper()} profiler counters must be a JSON object")
+        return stats
+
+    def validate_activity(self, stats):
+        if self.label == "tsim":
+            value = stats.get("cycle_count")
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise RuntimeError(
+                    f"TSIM profiler counter cycle_count must be a positive integer: {stats}"
+                )
+            return
+        _validate_profiler_stats(stats)
+
+
+def _simulator_session(simulator):
+    if simulator == "fsim":
+        return SimulatorSession(
+            label="fsim",
+            environment_target="sim",
+            clear_registry="vta.simulator.profiler_clear",
+            status_registry="vta.simulator.profiler_status",
+            required_registries=(
+                "vta.simulator.profiler_clear",
+                "vta.simulator.profiler_status",
+            ),
+            activity_counter="gemm_counter",
+            diagnostic="bash scripts/build_vta_lib.sh --target libvta_fsim",
+        )
+    if simulator == "tsim":
+        return SimulatorSession(
+            label="tsim",
+            environment_target="tsim",
+            clear_registry="vta.tsim.profiler_clear",
+            status_registry="vta.tsim.profiler_status",
+            required_registries=(
+                "vta.tsim.init",
+                "vta.tsim.profiler_clear",
+                "vta.tsim.profiler_status",
+                "runtime.module.loadfile_vta-tsim",
+            ),
+            activity_counter="cycle_count",
+            diagnostic="bash scripts/build_vta_lib.sh --target libvta_hw",
+        )
+    raise ValueError(f"unsupported simulator {simulator!r}; supported simulators are fsim and tsim")
+
+
+def _load_simulator(simulator):
+    session = _simulator_session(simulator).validate_environment()
+    return session, session.load()
+
+
 def _validate_mode(mode):
     if mode not in SUPPORTED_MODES:
-        raise ValueError(f"unsupported mode {mode!r}; use host or fsim")
+        raise ValueError(f"unsupported mode {mode!r}; use host, fsim, or tsim")
     return mode
 
 
@@ -191,21 +316,21 @@ def build_host_artifacts(prepared, build_dir=DEFAULT_BUILD_DIR, host_codegen=DEF
         reference_factory, build_root, "reference",
         artifact_name=_artifact_identity(host_codegen, "reference"),
         artifact_role="reference", model_sha256=prepared.imported.model_sha256,
-        host_codegen=host_codegen, simulator="fsim" if mode == "fsim" else "host",
+        host_codegen=host_codegen, simulator=mode if mode in ("fsim", "tsim") else "host",
         forbidden_vta_symbols=prepared.routing.symbols, metadata=metadata,
     )
     mixed = export_graph_bundle(
         mixed_factory, build_root, "mixed",
         artifact_name=_artifact_identity(host_codegen, "mixed"),
         artifact_role="mixed", model_sha256=prepared.imported.model_sha256,
-        host_codegen=host_codegen, simulator="fsim" if mode == "fsim" else "host",
+        host_codegen=host_codegen, simulator=mode if mode in ("fsim", "tsim") else "host",
         expected_vta_symbols=prepared.routing.symbols, metadata=metadata,
     )
     return HostArtifacts(
         host_codegen=host_codegen,
         mode=mode,
         reference=ReloadedArtifact(reference.artifact_dir, reference.library_path, reference.graph_json, reference.params, reference.module, tvm.cpu(0)),
-        mixed=ReloadedArtifact(mixed.artifact_dir, mixed.library_path, mixed.graph_json, mixed.params, mixed.module, tvm.ext_dev(0) if mode == "fsim" else tvm.cpu(0)),
+        mixed=ReloadedArtifact(mixed.artifact_dir, mixed.library_path, mixed.graph_json, mixed.params, mixed.module, tvm.ext_dev(0) if mode in ("fsim", "tsim") else tvm.cpu(0)),
         vta_symbols=tuple(prepared.routing.symbols),
     )
 
@@ -242,6 +367,17 @@ def _sample_score(artifact, record):
     if outputs.shape != features.shape:
         raise RuntimeError(f"{record.filename} reconstructed tensor shape differs")
     return float(np.mean((features.astype(np.float32) - outputs) ** 2)), features.shape, outputs.dtype
+
+
+def _reference_raw(artifact, records):
+    raw = []
+    for record in records:
+        score, shape, dtype = _sample_score(artifact.reference, record)
+        raw.append({"order": record.order, "filename": record.filename, "label": record.label,
+                    "class_name": record.class_name, "reference_score": score,
+                    "input_shape": INPUT_SHAPE, "output_shape": OUTPUT_SHAPE,
+                    "feature_shape": shape, "output_dtype": str(dtype)})
+    return raw
 
 
 def _with_predictions(results):
@@ -330,13 +466,53 @@ def execute_fsim(artifacts, records):
     return ExecutionSummary("fsim", artifacts.host_codegen, samples, _summary(samples, threshold), stats, {})
 
 
+def _execute_tsim_artifact(artifacts, records, raw, session, simulator):
+    validate_mixed_symbols(artifacts.mixed.module, artifacts.vta_symbols)
+    session.clear_and_validate(simulator)
+    for item, record in zip(raw, records):
+        mixed_score, shape, dtype = _sample_score(artifacts.mixed, record)
+        if shape != item["feature_shape"] or dtype != np.dtype(item["output_dtype"]):
+            raise RuntimeError(f"{record.filename} mixed tensor contract differs")
+        if not np.isclose(mixed_score, item["reference_score"], rtol=1e-6, atol=1e-6):
+            raise RuntimeError(f"{record.filename} reconstruction score differs")
+        item["mixed_score"] = mixed_score
+    stats = session.read_stats(simulator.stats)
+    session.validate_activity(stats)
+    samples, threshold = _with_predictions(raw)
+    return ExecutionSummary("tsim", artifacts.host_codegen, samples, _summary(samples, threshold), stats, {})
+
+
+def execute_tsim(artifacts, records):
+    """Run one host variant through the lazy VTA TSIM simulator."""
+    raw = _reference_raw(artifacts, records)
+    session, simulator = _load_simulator("tsim")
+    return _execute_tsim_artifact(artifacts, records, raw, session, simulator)
+
+
+def _execute_tsim_matrix(artifacts, records, reference_raw, session, simulator):
+    """Execute LLVM/C mixed graphs with one TSIM load and isolated counter windows."""
+    executions = []
+    for host_artifacts, raw in zip(artifacts, reference_raw):
+        executions.append(
+            _execute_tsim_artifact(host_artifacts, records, raw, session, simulator)
+        )
+    return tuple(executions)
+
+
 def deploy(build_dir=DEFAULT_BUILD_DIR, host_codegen=DEFAULT_HOST_CODEGEN, mode="host",
            manifest_path=MANIFEST_PATH):
     _validate_mode(mode)
+    if mode in ("fsim", "tsim"):
+        _simulator_session(mode).validate_environment()
     prepared = prepare_model(MODEL_PATH)
     records = committed_sample_records(manifest_path)
     artifacts = build_host_artifacts(prepared, build_dir, host_codegen, mode)
-    execution = execute_host(artifacts, records) if mode == "host" else execute_fsim(artifacts, records)
+    if mode == "host":
+        execution = execute_host(artifacts, records)
+    elif mode == "fsim":
+        execution = execute_fsim(artifacts, records)
+    else:
+        execution = execute_tsim(artifacts, records)
     execution = ExecutionSummary(execution.mode, execution.host_codegen, execution.samples,
                                  execution.summary, execution.profiler_stats, _model_metadata(prepared))
     return DeploymentResult(prepared, artifacts, execution)
@@ -344,8 +520,11 @@ def deploy(build_dir=DEFAULT_BUILD_DIR, host_codegen=DEFAULT_HOST_CODEGEN, mode=
 
 def deploy_matrix(build_dir=DEFAULT_BUILD_DIR, mode="fsim", manifest_path=MANIFEST_PATH):
     _validate_mode(mode)
-    if mode != "fsim":
-        raise ValueError("host mode uses one selected host codegen; matrix mode is FSIM only")
+    if mode not in ("fsim", "tsim"):
+        raise ValueError("host mode uses one selected host codegen; matrix mode is FSIM or TSIM")
+    if mode == "tsim":
+        return deploy_tsim_matrix(build_dir, manifest_path)
+    _simulator_session(mode).validate_environment()
     prepared = prepare_model(MODEL_PATH)
     records = committed_sample_records(manifest_path)
     artifacts = tuple(build_host_artifacts(prepared, build_dir, codegen, mode) for codegen in SUPPORTED_HOST_CODEGENS)
@@ -363,3 +542,29 @@ def deploy_matrix(build_dir=DEFAULT_BUILD_DIR, mode="fsim", manifest_path=MANIFE
             )
         )
     return prepared, artifacts, tuple(executions)
+
+
+def deploy_tsim_matrix(build_dir=DEFAULT_BUILD_DIR, manifest_path=MANIFEST_PATH):
+    """Build LLVM/C bundles before one lazy TSIM load and ten-sample execution."""
+    session = _simulator_session("tsim").validate_environment()
+    prepared = prepare_model(MODEL_PATH)
+    records = committed_sample_records(manifest_path)
+    artifacts = tuple(
+        build_host_artifacts(prepared, build_dir, codegen, "tsim")
+        for codegen in SUPPORTED_HOST_CODEGENS
+    )
+    reference_raw = tuple(_reference_raw(artifact, records) for artifact in artifacts)
+    session, simulator = _load_simulator("tsim")
+    executions = _execute_tsim_matrix(artifacts, records, reference_raw, session, simulator)
+    executions = tuple(
+        ExecutionSummary(
+            execution.mode,
+            execution.host_codegen,
+            execution.samples,
+            execution.summary,
+            execution.profiler_stats,
+            _model_metadata(prepared),
+        )
+        for execution in executions
+    )
+    return prepared, artifacts, executions

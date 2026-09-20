@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the MLPerf Tiny anomaly autoencoder on HOST or FSIM."""
+"""Run the MLPerf Tiny anomaly autoencoder on HOST, FSIM, or TSIM."""
 
 import argparse
 import json
@@ -13,12 +13,12 @@ import runtime
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--mode", choices=("host", "fsim"), default="host",
+        "--mode", choices=("host", "fsim", "tsim"), default="host",
         help="execution backend (default: host)",
     )
     parser.add_argument(
         "--simulator", choices=("host", "fsim", "tsim"),
-        help="compatibility alias for --mode; tsim is reserved for checkpoint 3",
+        help="compatibility alias for --mode",
     )
     parser.add_argument(
         "--build-dir", "--output-dir", dest="build_dir",
@@ -31,7 +31,7 @@ def _parser():
     )
     parser.add_argument(
         "--host-codegen", choices=("llvm", "c", "all"), default="llvm",
-        help="host code generator; all is supported for FSIM matrices",
+        help="host code generator; all builds the ordered LLVM/C simulator matrix",
     )
     parser.add_argument(
         "--output-json", type=str,
@@ -74,9 +74,6 @@ def main(argv=None):
     args = _parser().parse_args(argv)
     mode = args.mode
     if args.simulator:
-        if args.simulator == "tsim":
-            print("TSIM is reserved for checkpoint 3; use --mode host or --mode fsim", file=sys.stderr)
-            return 2
         if args.mode != "host" and args.mode != args.simulator:
             print("--mode and --simulator select different backends", file=sys.stderr)
             return 2
@@ -84,8 +81,8 @@ def main(argv=None):
 
     try:
         if args.host_codegen == "all":
-            if mode != "fsim":
-                raise ValueError("--host-codegen all currently requires --mode fsim")
+            if mode not in ("fsim", "tsim"):
+                raise ValueError("--host-codegen all requires --mode fsim or tsim")
             prepared, artifacts, executions = runtime.deploy_matrix(args.build_dir, mode, args.manifest)
             payloads = []
             for current_artifacts, execution in zip(artifacts, executions):
