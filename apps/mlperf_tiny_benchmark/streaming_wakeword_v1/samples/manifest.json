@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "model": {
+    "filename": "model/str_ww_ref_model.tflite",
+    "byte_length": 74520,
+    "sha256": "3af8550895ba7d5c584277102b5075c52dcfa63ba9d2b2240f37c4e6abd5dd2b",
+    "source_relative_path": "benchmark/training/streaming_wakeword/trained_models/str_ww_ref_model.tflite"
+  },
+  "sample_rate": 16000,
+  "sample_width_bytes": 2,
+  "channels": 1,
+  "clip_frames": 16000,
+  "class_mapping": {
+    "0": "Marvin",
+    "1": "Silence",
+    "2": "Unknown"
+  },
+  "selection": "lexicographically first WAV in marvin, deterministic first second of lexicographically first WAV in _background_noise_, and lexicographically first WAV in the first non-marvin class directory",
+  "source_dataset": "Speech Commands v0.02",
+  "samples": [
+    {
+      "order": 0,
+      "label": 0,
+      "label_name": "Marvin",
+      "filename": "marvin-00176480_nohash_0.wav",
+      "byte_length": 32044,
+      "sha256": "b95e103110b89a0d4dff88023edd537a92834f565cb8e3f38b16f725f3d58451",
+      "source_relative_path": "marvin/00176480_nohash_0.wav",
+      "source_start_frame": 0,
+      "source_frame_count": 16000,
+      "selection_provenance": "lexicographically first WAV in the marvin directory"
+    },
+    {
+      "order": 1,
+      "label": 1,
+      "label_name": "Silence",
+      "filename": "silence-doing_the_dishes-00000000.wav",
+      "byte_length": 32044,
+      "sha256": "372026037b1d1615e5335eae7149b90f7ac9b75b0a7016279d9f11adff15cdce",
+      "source_relative_path": "_background_noise_/doing_the_dishes.wav",
+      "source_start_frame": 0,
+      "source_frame_count": 16000,
+      "selection_provenance": "first 16000 frames (one second) from the lexicographically first WAV in the _background_noise_ directory"
+    },
+    {
+      "order": 2,
+      "label": 2,
+      "label_name": "Unknown",
+      "filename": "unknown-0165e0e8_nohash_0.wav",
+      "byte_length": 32044,
+      "sha256": "cf65db13461bb82fe5edff74b21e38d4ea7e54b895be59d13f698c0f616688db",
+      "source_relative_path": "backward/0165e0e8_nohash_0.wav",
+      "source_start_frame": 0,
+      "source_frame_count": 16000,
+      "selection_provenance": "lexicographically first WAV in the first non-marvin class directory (backward)"
+    }
+  ]
+}
