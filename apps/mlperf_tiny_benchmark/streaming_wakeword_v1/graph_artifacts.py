@@ -48,8 +48,19 @@ def _file_sha256(path):
     return _sha256(path.read_bytes())
 
 
-def _resolve_artifact_dir(output_root, relative_artifact_dir):
+def validate_output_root(output_root):
+    """Resolve an artifact root and reject the repository environment tree."""
     root = Path(output_root).expanduser().resolve(strict=False)
+    environment_directory = "." + "envs"
+    if environment_directory in root.parts:
+        raise ValueError(
+            f"artifact output root must not be inside {environment_directory}"
+        )
+    return root
+
+
+def _resolve_artifact_dir(output_root, relative_artifact_dir):
+    root = validate_output_root(output_root)
     relative = Path(relative_artifact_dir)
     if not str(relative) or relative.is_absolute() or relative == Path("."):
         raise ValueError("artifact directory must be a non-empty relative path")

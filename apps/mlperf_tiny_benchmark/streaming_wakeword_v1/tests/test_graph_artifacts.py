@@ -155,6 +155,34 @@ def test_unsafe_artifact_paths_are_rejected_before_mutation(
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize("relative_root", (".envs", ".envs/nested"))
+def test_output_root_rejects_environment_directory_before_mutation(
+    artifacts_module, tmp_path, relative_root
+):
+    output_root = tmp_path / relative_root
+
+    with pytest.raises(ValueError, match=r"\.envs"):
+        artifacts_module.export_graph_bundle(
+            FakeFactory(FakeModule()),
+            output_root,
+            "bundle",
+            artifact_name="bad",
+            artifact_role="reference",
+            model_sha256="a" * 64,
+            host_codegen="llvm",
+            simulator="host",
+        )
+
+    assert not output_root.exists()
+
+
+def test_ordinary_output_root_remains_allowed(artifacts_module, tmp_path):
+    output_root = tmp_path / "ordinary-output"
+
+    assert artifacts_module.validate_output_root(output_root) == output_root.resolve()
+    assert not output_root.exists()
+
+
 def test_tampered_file_is_rejected_before_loading_library(
     artifacts_module, monkeypatch, tmp_path
 ):

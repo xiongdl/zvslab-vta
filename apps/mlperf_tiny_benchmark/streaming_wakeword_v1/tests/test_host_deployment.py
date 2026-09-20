@@ -110,6 +110,32 @@ def test_build_exports_reference_and_mixed_without_loading_fsim(
     assert exports[1][3]["expected_vta_symbols"] == EXPECTED_VTA_SYMBOLS
 
 
+@pytest.mark.parametrize("relative_root", (".envs", ".envs/nested"))
+def test_build_rejects_environment_output_root_before_compile(
+    deployment_runtime, monkeypatch, tmp_path, relative_root
+):
+    prepared = SimpleNamespace(
+        reference_module=object(),
+        mixed_module=object(),
+        routing=SimpleNamespace(symbols=EXPECTED_VTA_SYMBOLS),
+    )
+    compile_calls = []
+
+    monkeypatch.setattr(
+        deployment_runtime.relay,
+        "build",
+        lambda *args, **kwargs: compile_calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(ValueError, match=r"\.envs"):
+        deployment_runtime.build_host_artifacts(
+            prepared, tmp_path / relative_root, "llvm", "host"
+        )
+
+    assert compile_calls == []
+    assert not (tmp_path / relative_root).exists()
+
+
 def test_run_graph_rejects_input_and_output_contract_mismatches(deployment_runtime, monkeypatch):
     class Graph:
         def load_params(self, params):

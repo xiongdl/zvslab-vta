@@ -18,7 +18,7 @@ from tvm import relay
 from tvm.contrib import graph_executor
 from vta.relay import plan_devices_for_vta
 
-from graph_artifacts import export_graph_bundle
+from graph_artifacts import export_graph_bundle, validate_output_root
 from model_pipeline import (
     INPUT_DTYPE,
     INPUT_NAME,
@@ -366,6 +366,7 @@ def build_host_artifacts(prepared, output_dir=DEFAULT_OUTPUT_DIR,
     """Build and reload reference/mixed bundles without loading a simulator."""
     _validate_host_codegen(host_codegen)
     _validate_simulator(simulator)
+    output_dir = validate_output_root(output_dir)
     if host_codegen == "llvm":
         reference_factory = relay.build(prepared.reference_module, target="llvm")
     else:
@@ -564,6 +565,7 @@ def _execute_matrix(artifacts, sample_paths, simulator="fsim"):
 
 def deploy_fsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HOST_CODEGENS):
     """Build the ordered LLVM/C matrix and execute it on FSIM."""
+    output_dir = validate_output_root(output_dir)
     host_codegens = _validate_host_codegens(host_codegens)
     _simulator_session("fsim").validate_environment()
     prepared = prepare_model(MODEL_PATH)
@@ -582,6 +584,7 @@ def deploy_fsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HO
 
 def deploy_tsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HOST_CODEGENS):
     """Build the ordered LLVM/C matrix and execute it on TSIM."""
+    output_dir = validate_output_root(output_dir)
     host_codegens = _validate_host_codegens(host_codegens)
     _simulator_session("tsim").validate_environment()
     prepared = prepare_model(MODEL_PATH)
@@ -600,6 +603,7 @@ def deploy_tsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HO
 
 def deploy(output_dir=DEFAULT_OUTPUT_DIR, host_codegen=DEFAULT_HOST_CODEGEN, simulator="fsim"):
     """Build one artifact pair and execute HOST reference or FSIM mixed output."""
+    output_dir = validate_output_root(output_dir)
     _validate_host_codegen(host_codegen)
     _validate_simulator(simulator)
     if simulator in {"fsim", "tsim"}:
