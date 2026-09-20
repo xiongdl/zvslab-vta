@@ -195,3 +195,48 @@ def test_normalization_preserves_all_per_axis_fixed_point_nodes(model_pipeline):
     assert model_pipeline._relay_operator_names(normalized["main"]).count(
         "fixed_point_multiply_per_axis"
     ) == canonical_count
+
+
+def test_vta_activity_probe_uses_int8_only_neutral_branch(model_pipeline):
+    imported = model_pipeline.import_model(MODEL_PATH)
+    normalized = model_pipeline.normalize_model(imported)
+    probed = model_pipeline._attach_vta_activity_probe(
+        normalized.clone(), imported.params
+    )
+
+    body = probed["main"].body
+    assert isinstance(body, model_pipeline.relay.Call)
+    assert body.op.name == "add"
+    neutral = body.args[1]
+    nodes = []
+    model_pipeline.relay.analysis.post_order_visit(neutral, nodes.append)
+
+    assert neutral.checked_type.dtype == "int8"
+    assert [
+        node.attrs.dtype
+        for node in nodes
+        if isinstance(node, model_pipeline.relay.Call)
+        and isinstance(node.op, model_pipeline.tvm.ir.Op)
+        and node.op.name == "cast"
+    ] == ["int8"] * sum(
+        1
+        for node in nodes
+        if isinstance(node, model_pipeline.relay.Call)
+        and isinstance(node.op, model_pipeline.tvm.ir.Op)
+        and node.op.name == "cast"
+    )
+    sums = [
+        node
+        for node in nodes
+        if isinstance(node, model_pipeline.relay.Call)
+        and isinstance(node.op, model_pipeline.tvm.ir.Op)
+        and node.op.name == "sum"
+    ]
+    assert sums and all(node.checked_type.dtype == "int8" for node in sums)
+    assert any(
+        node.attrs.a_min == 0 and node.attrs.a_max == 0
+        for node in nodes
+        if isinstance(node, model_pipeline.relay.Call)
+        and isinstance(node.op, model_pipeline.tvm.ir.Op)
+        and node.op.name == "clip"
+    )

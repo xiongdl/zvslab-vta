@@ -536,14 +536,9 @@ def _attach_vta_activity_probe(module, params):
         relay.clip(relay.right_shift(probe, relay.const(0, "int32")), -128, 127),
         "int8",
     )
-    probe_i32 = relay.cast(probe, "int32")
     probe_shape = tuple(int(dimension) for dimension in probe_conv.checked_type.shape)
-    probe_elements = int(np.prod(probe_shape[1:]))
-    identity = relay.subtract(probe_i32, probe_i32)
-    zero = relay.subtract(
-        relay.sum(identity, axis=list(range(1, len(probe_shape))), keepdims=True),
-        relay.const(probe_elements, "int32"),
-    )
+    probe = relay.clip(relay.add(probe, relay.const(0, "int8")), 0, 0)
+    zero = relay.sum(probe, axis=list(range(1, len(probe_shape))), keepdims=True)
     output_shape = _return_shape(main)
     zero = relay.cast(relay.reshape(zero, (output_shape[0], 1)), "int8")
     zero = relay.broadcast_to(zero, output_shape)
