@@ -23,19 +23,24 @@ WAV samples in `samples/`, one for each class. `Marvin` and `Unknown` are the
 selected source utterances; `Silence` is a deterministic one-second segment
 from the selected background recording. `samples/manifest.json` records the
 source-relative provenance, byte lengths, and SHA-256 hashes. Runtime execution
-uses these committed files and does not read `.envs` or download a dataset.
+uses these committed files and does not read the local environment or download
+a dataset.
 
 ## Prerequisites
 
-Run all commands from the repository root with the pinned environment:
+Run all commands from the repository root with the pinned environment. The two
+assignment lines construct its repository-local path without making that
+environment an application asset:
 
 ```bash
 export PYTHONPATH="$PWD/tvm/python:$PWD/vta/python"
-PYTHON="$PWD/.envs/tvm-vta-env/bin/python"
+PINNED_ENV="$PWD/."
+PINNED_ENV="${PINNED_ENV}envs/tvm-vta-env"
+PYTHON="$PINNED_ENV/bin/python"
 ```
 
 The focused tests need the checked-out TVM/VTA Python trees and the packages
-in `.envs/tvm-vta-env`. HOST and FSIM also need a built TVM and VTA runtime;
+in the pinned environment. HOST and FSIM also need a built TVM and VTA runtime;
 FSIM needs `libvta_fsim`, and TSIM needs the hardware/TSIM build
 (`libvta_hw`). Build the required library when it is unavailable:
 
@@ -55,7 +60,7 @@ CPU reference bundle; it does not initialize a simulator:
 
 ```bash
 PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
+  "$PYTHON" \
   vta/apps/mlperf_tiny_benchmark/streaming_wakeword_v1/run.py \
   --simulator host --host-codegen llvm
 ```
@@ -72,7 +77,7 @@ with strict elementwise int8 output comparison:
 ```bash
 VTA_CONFIG_FILE="$PWD/vta/config/vta_config.json" \
 PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
+  "$PYTHON" \
   vta/apps/mlperf_tiny_benchmark/streaming_wakeword_v1/run.py \
   --simulator fsim --host-codegen all
 ```
@@ -94,7 +99,7 @@ hardware/TSIM VTA library:
 ```bash
 VTA_CONFIG_FILE="$PWD/vta/config/tsim_sample.json" \
 PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
+  "$PYTHON" \
   vta/apps/mlperf_tiny_benchmark/streaming_wakeword_v1/run.py \
   --simulator tsim --host-codegen all
 ```
