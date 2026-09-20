@@ -483,12 +483,17 @@ def _reference_comparisons(artifacts, sample_paths):
 
 
 def execute_host(artifacts, sample_paths=None):
-    """Run only the CPU reference graph; HOST never imports or loads FSIM."""
+    """Run only the CPU reference graph; HOST never loads or executes mixed."""
     paths = _validate_execution_paths(sample_paths or committed_sample_paths())
     _, reference_outputs = _reference_comparisons(artifacts, paths)
     comparisons = tuple(
-        OutputComparison(path, output, None, int(np.argmax(output, axis=1)[0]))
-        for path, output in reference_outputs
+        OutputComparison(
+            path,
+            reference_output,
+            None,
+            int(np.argmax(reference_output, axis=1)[0]),
+        )
+        for path, reference_output in reference_outputs
     )
     return ExecutionSummary(comparisons, {}, "host", artifacts.host_codegen)
 

@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "dataset": "Google Speech Commands v0.02",
+  "dataset_root_provenance": ".envs/speech_commands_v0.02",
+  "model_source": "MLPerf Tiny v1.4 benchmark/training/keyword_spotting/trained_models/kws_ref_model.tflite",
+  "model_sha256": "aeea436800704fce17b17292e4412630ad856e9d777c044c64ef748a880bd0ae",
+  "sample_rate": 16000,
+  "clip_frames": 16000,
+  "class_mapping": {
+    "0": "Down",
+    "1": "Go",
+    "2": "Left",
+    "3": "No",
+    "4": "Off",
+    "5": "On",
+    "6": "Right",
+    "7": "Stop",
+    "8": "Up",
+    "9": "Yes",
+    "10": "Silence",
+    "11": "Unknown"
+  },
+  "samples": [
+    {
+      "order": 0,
+      "label": 0,
+      "label_name": "Down",
+      "filename": "down-00176480_nohash_0.wav",
+      "source_relative_path": "down/00176480_nohash_0.wav",
+      "selection": "lexicographically first WAV in the target directory",
+      "transform": "zero-pad or trim to one second",
+      "byte_length": 32044,
+      "sha256": "68d8077e68d9c2c02a9eb744061e934f514fc523aa90ee63fd56bfec0227e65d"
+    },
+    {
+      "order": 1,
+      "label": 1,
+      "label_name": "Go",
+      "filename": "go-004ae714_nohash_0.wav",
+      "source_relative_path": "go/004ae714_nohash_0.wav",
+      "selection": "lexicographically first WAV in the target directory",
+      "transform": "zero-pad or trim to one second",
+      "byte_length": 32044,
+      "sha256": "0abf627a51de5a640c4b6e1fdb470ba9d302801acaa36faa38d748d314388dc7"
+    },
+    {
+      "order": 2,
+      "label": 2,
+      "label_name": "Left",
+      "filename": "left-00176480_nohash_0.wav",
+      "source_relative_path": "left/00176480_nohash_0.wav",
+      "selection": "lexicographically first WAV in the target directory",
+      "transform": "zero-pad or trim to one second",
+      "byte_length": 32044,
+      "sha256": "eff8ab04f41b132e9ab71da0a60386fb4de33e0f80e98b6bac5754ab38d83962"
+    },
+    {
+      "order": 3,
+      "label": 3,
+      "label_name": "No",
+      "filename": "no-012c8314_nohash_0.wav",
+      "source_relative_path": "no/012c8314_nohash_0.wav",
+      "selection": "lexicographically first WAV in the target directory",
+      "transform": "zero-pad or trim to one second",
+      "byte_length": 32044,
+      "sha256": "5d7193eb0fe19dccc8ae0cdf4a15280c8b94c5465ee3e3e55b0aec72f76b15c3"
+    },
+    {
+      "order": 4,
+      "label": 4,
+      "label_name": "Off",
+      "filename": "off-00176480_nohash_0.wav",
+      "source_relative_path": "off/00176480_nohash_0.wav",
+      "selection": "lexicographically first WAV in the target directory",
+      "transform": "zero-pad or trim to one second",
+      "byte_length": 32044,
+      "sha256": "e71623ea8a6822cd67f109fdddf0415cd1a287520ed5ab9e8b13026415294bfe"
+    },
+    {
+      "order": 5,
+      "label": 5,
+      "label_name": "On",
+      "filename": "on-004ae714_nohash_0.wav",
+      "source_relative_path": "on/004ae714_nohash_0.wav",
+      "selection": "lexicographically first WAV in the target directory",
+      "transform": "zero-pad or trim to one second",
+      "byte_length": 32044,
+      "sha256": "df3160922e5f9744889b8477a7b775147f3771d296433937330bc837908563dc"
+    },
+    {
+      "order": 6,
+      "label": 6,
+      "label_name": "Right",
+      "filename": "right-00b01445_nohash_0.wav",
+      "source_relative_path": "right/00b01445_nohash_0.wav",
+      "selection": "lexicographically first WAV in the target directory",
+      "transform": "zero-pad or trim to one second",
+      "byte_length": 32044,
+      "sha256": "8edfbc4815ad276617e931e4f89e916d629a27cbd11cc7e621ae5a29ffc3fb3a"
+    },
+    {
+      "order": 7,
+      "label": 7,
+      "label_name": "Stop",
+      "filename": "stop-004ae714_nohash_0.wav",
+      "source_relative_path": "stop/004ae714_nohash_0.wav",
+      "selection": "lexicographically first WAV in the target directory",
+      "transform": "zero-pad or trim to one second",
+      "byte_length": 32044,
+      "sha256": "94e04c6b0650eb533aa835d3b76e6f37a7b2b149ae6ae666b6058a06bf679fd7"
+    },
+    {
+      "order": 8,
+      "label": 8,
+      "label_name": "Up",
+      "filename": "up-004ae714_nohash_0.wav",
+      "source_relative_path": "up/004ae714_nohash_0.wav",
+      "selection": "lexicographically first WAV in the target directory",
+      "transform": "zero-pad or trim to one second",
+      "byte_length": 32044,
+      "sha256": "3f35383800c6f28b965bcfe9f0abb0c36bf8f617431b667009edef1c3852c47a"
+    },
+    {
+      "order": 9,
+      "label": 9,
+      "label_name": "Yes",
+      "filename": "yes-004ae714_nohash_0.wav",
+      "source_relative_path": "yes/004ae714_nohash_0.wav",
+      "selection": "lexicographically first WAV in the target directory",
+      "transform": "zero-pad or trim to one second",
+      "byte_length": 32044,
+      "sha256": "2e38228747f53aab91ed5fdd0d9be74f834cf43f136e59c4de33c428bcb98fba"
+    },
+    {
+      "order": 10,
+      "label": 10,
+      "label_name": "Silence",
+      "filename": "silence-doing_the_dishes-00000000.wav",
+      "source_relative_path": "_background_noise_/doing_the_dishes.wav",
+      "selection": "lexicographically first background-noise WAV",
+      "transform": "first one-second PCM segment",
+      "byte_length": 32044,
+      "sha256": "372026037b1d1615e5335eae7149b90f7ac9b75b0a7016279d9f11adff15cdce"
+    },
+    {
+      "order": 11,
+      "label": 11,
+      "label_name": "Unknown",
+      "filename": "unknown-0165e0e8_nohash_0.wav",
+      "source_relative_path": "backward/0165e0e8_nohash_0.wav",
+      "selection": "lexicographically first WAV in the first non-target-word directory",
+      "transform": "zero-pad or trim to one second",
+      "byte_length": 32044,
+      "sha256": "cf65db13461bb82fe5edff74b21e38d4ea7e54b895be59d13f698c0f616688db"
+    }
+  ]
+}

@@ -177,7 +177,7 @@ def test_output_comparison_rejects_contract_mismatch(deployment_runtime, referen
         deployment_runtime.compare_outputs(Path("sample.wav"), reference, mixed)
 
 
-def test_host_executes_all_samples_without_fsim(deployment_runtime, monkeypatch):
+def test_host_executes_all_reference_samples_without_fsim(deployment_runtime, monkeypatch):
     paths = _expected_sample_paths()
     reference = SimpleNamespace()
     artifacts = SimpleNamespace(reference=reference, host_codegen="llvm")
@@ -206,6 +206,7 @@ def test_host_executes_all_samples_without_fsim(deployment_runtime, monkeypatch)
     result = deployment_runtime.execute_host(artifacts, paths)
     assert len(result.comparisons) == 12
     assert [item.top1 for item in result.comparisons] == list(range(12))
+    assert [item.mixed for item in result.comparisons] == [None] * 12
     assert events == list(range(12))
     assert result.profiler_stats == {}
 

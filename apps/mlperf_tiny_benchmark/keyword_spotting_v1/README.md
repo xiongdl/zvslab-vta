@@ -29,7 +29,8 @@ Run commands from the repository root with the pinned environment:
 
 ```bash
 ./scripts/setup_tvm_vta_env.sh
-./.envs/tvm-vta-env/bin/python -m pytest \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python -m pytest \
   vta/apps/mlperf_tiny_benchmark/keyword_spotting_v1/tests
 bash scripts/build_vta_lib.sh --target libtvm-vta-ext
 bash scripts/build_vta_lib.sh --target libvta_fsim
