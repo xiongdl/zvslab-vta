@@ -38,7 +38,7 @@ MANIFEST_PATH = APP_ROOT / "samples" / "manifest.json"
 DEFAULT_OUTPUT_DIR = APP_ROOT / "build"
 SUPPORTED_HOST_CODEGENS = ("llvm", "c")
 DEFAULT_HOST_CODEGEN = "llvm"
-SUPPORTED_SIMULATORS = ("host", "fsim")
+SUPPORTED_SIMULATORS = ("host", "fsim", "tsim")
 EXPECTED_LABEL_NAMES = (
     "Down", "Go", "Left", "No", "Off", "On", "Right", "Stop", "Up", "Yes", "Silence", "Unknown"
 )
@@ -114,6 +114,7 @@ class SimulatorSession:
     clear_registry: str
     status_registry: str
     required_registries: tuple
+    activity_counter: str
     diagnostic: str
 
     def validate_environment(self):
@@ -148,12 +149,14 @@ class SimulatorSession:
             )
         return simulator
 
-    def clear_and_validate(self, simulator):
-        clear = getattr(simulator, "clear_stats", None)
-        status = getattr(simulator, "stats", None)
+    def clear_and_validate(self, simulator=None):
+        clear = getattr(simulator, "clear_stats", None) if simulator is not None else None
+        status = getattr(simulator, "stats", None) if simulator is not None else None
+        clear = clear or tvm.get_global_func(self.clear_registry, allow_missing=True)
+        status = status or tvm.get_global_func(self.status_registry, allow_missing=True)
         if clear is None or status is None:
             raise RuntimeError(
-                f"FSIM profiler registry is unavailable; build the required libraries with {self.diagnostic}"
+                f"{self.label.upper()} profiler registry is unavailable; build the required libraries with {self.diagnostic}"
             )
         try:
             clear()
@@ -161,41 +164,76 @@ class SimulatorSession:
         except RuntimeError:
             raise
         except Exception as error:
-            raise RuntimeError("FSIM profiler failed to clear counters") from error
-        invalid = [
-            counter for counter in REQUIRED_PROFILER_COUNTERS
-            if counter not in stats or isinstance(stats[counter], bool)
-            or not isinstance(stats[counter], (int, float)) or stats[counter] != 0
-        ]
-        if invalid:
-            raise RuntimeError(f"FSIM profiler did not reset required counters to zero: {invalid}; stats={stats}")
+            raise RuntimeError(f"{self.label.upper()} profiler failed to clear counters") from error
+        if self.label == "tsim":
+            if stats != {"cycle_count": 0}:
+                raise RuntimeError(f"TSIM profiler did not reset to {{'cycle_count': 0}}: {stats}")
+        else:
+            invalid = [
+                counter for counter in REQUIRED_PROFILER_COUNTERS
+                if counter not in stats or isinstance(stats[counter], bool)
+                or not isinstance(stats[counter], (int, float)) or stats[counter] != 0
+            ]
+            if invalid:
+                raise RuntimeError(
+                    f"FSIM profiler did not reset required counters to zero: {invalid}; stats={stats}"
+                )
         return stats
 
-    def read_stats(self, status):
+    def read_stats(self, status=None, simulator=None):
+        status = status or getattr(simulator, "stats", None)
+        status = status or tvm.get_global_func(self.status_registry, allow_missing=True)
+        if status is None:
+            raise RuntimeError(
+                f"{self.label.upper()} profiler status is unavailable; build the required libraries with {self.diagnostic}"
+            )
         try:
             raw = status()
             stats = json.loads(raw) if isinstance(raw, str) else raw
         except (TypeError, ValueError, json.JSONDecodeError) as error:
-            raise RuntimeError("FSIM profiler returned malformed counters") from error
+            raise RuntimeError(f"{self.label.upper()} profiler returned malformed counters") from error
         if not isinstance(stats, dict):
-            raise RuntimeError("FSIM profiler counters must be a JSON object")
+            raise RuntimeError(f"{self.label.upper()} profiler counters must be a JSON object")
         return stats
 
     def validate_activity(self, stats):
+        if self.label == "tsim":
+            value = stats.get(self.activity_counter)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise RuntimeError(
+                    f"TSIM profiler counter cycle_count must be a positive integer: {stats}"
+                )
+            return
         validate_profiler_stats(stats)
 
 
 def _simulator_session(simulator):
-    if simulator != "fsim":
-        raise ValueError(f"unsupported simulator {simulator!r}; supported simulator is fsim")
-    return SimulatorSession(
-        label="fsim",
-        environment_target="sim",
-        clear_registry="vta.simulator.profiler_clear",
-        status_registry="vta.simulator.profiler_status",
-        required_registries=("vta.simulator.profiler_clear", "vta.simulator.profiler_status"),
-        diagnostic="bash scripts/build_vta_lib.sh --target libvta_fsim",
-    )
+    if simulator == "fsim":
+        return SimulatorSession(
+            label="fsim",
+            environment_target="sim",
+            clear_registry="vta.simulator.profiler_clear",
+            status_registry="vta.simulator.profiler_status",
+            required_registries=("vta.simulator.profiler_clear", "vta.simulator.profiler_status"),
+            activity_counter="gemm_counter",
+            diagnostic="bash scripts/build_vta_lib.sh --target libvta_fsim",
+        )
+    if simulator == "tsim":
+        return SimulatorSession(
+            label="tsim",
+            environment_target="tsim",
+            clear_registry="vta.tsim.profiler_clear",
+            status_registry="vta.tsim.profiler_status",
+            required_registries=(
+                "vta.tsim.init",
+                "vta.tsim.profiler_clear",
+                "vta.tsim.profiler_status",
+                "runtime.module.loadfile_vta-tsim",
+            ),
+            activity_counter="cycle_count",
+            diagnostic="bash scripts/build_vta_lib.sh --target libvta_hw",
+        )
+    raise ValueError(f"unsupported simulator {simulator!r}; supported simulators are fsim and tsim")
 
 
 def shared_library_suffix():
@@ -220,7 +258,9 @@ def _validate_host_codegens(host_codegens):
 
 def _validate_simulator(simulator):
     if simulator not in SUPPORTED_SIMULATORS:
-        raise ValueError(f"unsupported simulator {simulator!r}; supported simulators are host and fsim")
+        raise ValueError(
+            f"unsupported simulator {simulator!r}; supported simulators are host, fsim, and tsim"
+        )
     return simulator
 
 
@@ -458,6 +498,12 @@ def _load_fsim():
     return _simulator_session("fsim").load()
 
 
+def _load_simulator(simulator):
+    session = _simulator_session(simulator)
+    session.validate_environment()
+    return session, session.load()
+
+
 def validate_profiler_stats(stats):
     for counter in REQUIRED_PROFILER_COUNTERS:
         value = stats.get(counter)
@@ -509,8 +555,7 @@ def _execute_matrix(artifacts, sample_paths, simulator="fsim"):
             for (path, expected), (_, actual) in zip(baseline, outputs):
                 compare_outputs(path, expected, actual)
         references[host_artifacts.host_codegen] = outputs
-    session = _simulator_session(simulator)
-    simulator_module = _load_fsim()
+    session, simulator_module = _load_simulator(simulator)
     executions = []
     for host_artifacts in artifacts:
         validate_mixed_symbols(host_artifacts.mixed.module, host_artifacts.vta_symbols)
@@ -519,7 +564,7 @@ def _execute_matrix(artifacts, sample_paths, simulator="fsim"):
         for (path, data), (_, reference_output) in zip(inputs, references[host_artifacts.host_codegen]):
             mixed_output = _run_graph(host_artifacts.mixed, data)
             comparisons.append(compare_outputs(path, reference_output, mixed_output))
-        stats = session.read_stats(simulator_module.stats)
+        stats = session.read_stats(simulator=simulator_module)
         session.validate_activity(stats)
         executions.append(ExecutionSummary(tuple(comparisons), dict(stats), simulator, host_artifacts.host_codegen))
     return tuple(executions)
@@ -547,10 +592,31 @@ def deploy_fsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HO
     return SimulationMatrixResult("fsim", prepared, artifacts, executions)
 
 
+def deploy_tsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HOST_CODEGENS):
+    """Build LLVM/C before one lazy TSIM load and execute both variants."""
+    host_codegens = _validate_host_codegens(host_codegens)
+    _simulator_session("tsim").validate_environment()
+    prepared = prepare_model(MODEL_PATH)
+    artifacts = tuple(
+        build_host_artifacts(
+            prepared,
+            _matrix_artifact_root(output_dir, codegen, "tsim"),
+            host_codegen=codegen,
+            simulator="tsim",
+        )
+        for codegen in host_codegens
+    )
+    executions = _execute_matrix(artifacts, committed_sample_paths(), "tsim")
+    return SimulationMatrixResult("tsim", prepared, artifacts, executions)
+
+
 def deploy_matrix(build_dir=DEFAULT_OUTPUT_DIR, mode="fsim", manifest_path=MANIFEST_PATH):
-    if mode != "fsim":
-        raise ValueError("matrix mode supports only fsim in Checkpoint 2")
-    result = deploy_fsim_matrix(build_dir)
+    if mode == "fsim":
+        result = deploy_fsim_matrix(build_dir)
+    elif mode == "tsim":
+        result = deploy_tsim_matrix(build_dir)
+    else:
+        raise ValueError("matrix mode supports fsim and tsim")
     return result.prepared, result.artifacts, result.executions
 
 
@@ -558,11 +624,16 @@ def deploy(build_dir=DEFAULT_OUTPUT_DIR, host_codegen=DEFAULT_HOST_CODEGEN,
            simulator="fsim", manifest_path=MANIFEST_PATH):
     _validate_host_codegen(host_codegen)
     _validate_simulator(simulator)
-    if simulator == "fsim":
-        _simulator_session("fsim").validate_environment()
+    if simulator in {"fsim", "tsim"}:
+        _simulator_session(simulator).validate_environment()
     prepared = prepare_model(MODEL_PATH)
     records = committed_sample_records(manifest_path)
     paths = tuple(record.path for record in records)
     artifacts = build_host_artifacts(prepared, build_dir, host_codegen, simulator)
-    execution = execute_host(artifacts, paths) if simulator == "host" else execute_fsim(artifacts, paths)
+    if simulator == "host":
+        execution = execute_host(artifacts, paths)
+    elif simulator == "fsim":
+        execution = execute_fsim(artifacts, paths)
+    else:
+        execution = _execute_matrix((artifacts,), paths, "tsim")[0]
     return DeploymentResult(prepared, artifacts, execution)
