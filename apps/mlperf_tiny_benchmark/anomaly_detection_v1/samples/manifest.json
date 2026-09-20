@@ -59,6 +59,51 @@
       "label": 0,
       "byte_length": 352044,
       "sha256": "e0f1974c00eee5a3793a68f0fcadc15f0b1ddb3c3a751938a00bed9f7c9dd6b1"
+    },
+    {
+      "order": 5,
+      "filename": "anomaly_id_01_00000000.wav",
+      "source_relative_path": "test/anomaly_id_01_00000000.wav",
+      "class_name": "anomaly",
+      "label": 1,
+      "byte_length": 352044,
+      "sha256": "bb9d793188bcc1ed7d0f48124cf49a06b082ac14184f683913374182e31df9d8"
+    },
+    {
+      "order": 6,
+      "filename": "anomaly_id_01_00000001.wav",
+      "source_relative_path": "test/anomaly_id_01_00000001.wav",
+      "class_name": "anomaly",
+      "label": 1,
+      "byte_length": 352044,
+      "sha256": "e6fde8cf4f2b8b6c8d3956f1ffbe00cebaef21d6a8a1e09e8f27506a87daba23"
+    },
+    {
+      "order": 7,
+      "filename": "anomaly_id_01_00000002.wav",
+      "source_relative_path": "test/anomaly_id_01_00000002.wav",
+      "class_name": "anomaly",
+      "label": 1,
+      "byte_length": 352044,
+      "sha256": "a26c520bd0fb0bbf7d8438aa3646729487bcc64ff1f85810411574ed1b36894a"
+    },
+    {
+      "order": 8,
+      "filename": "anomaly_id_01_00000003.wav",
+      "source_relative_path": "test/anomaly_id_01_00000003.wav",
+      "class_name": "anomaly",
+      "label": 1,
+      "byte_length": 352044,
+      "sha256": "6f582a6c775b3e97eb8d6c2eb451902d19c336d51c04d7dc04691284ed040c1a"
+    },
+    {
+      "order": 9,
+      "filename": "anomaly_id_01_00000004.wav",
+      "source_relative_path": "test/anomaly_id_01_00000004.wav",
+      "class_name": "anomaly",
+      "label": 1,
+      "byte_length": 352044,
+      "sha256": "3baddd82cb4335efed8db89351e735d2c01959e901d6e855efef96d352978c33"
     }
   ]
 }
