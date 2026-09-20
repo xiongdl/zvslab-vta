@@ -218,7 +218,10 @@ class _VTAReadyMutator(relay.ExprMutator):
             shifts = rewritten.args[-1].data.numpy().reshape(-1)
             return relay.right_shift(rewritten.args[0], relay.const(int(max(shifts)), "int32"))
         if operator_name == "fixed_point_multiply":
-            return relay.right_shift(rewritten.args[0], relay.const(int(rewritten.attrs.shift), "int32"))
+            shift = int(rewritten.attrs.shift)
+            if shift < 0:
+                return relay.left_shift(rewritten.args[0], relay.const(-shift, "int32"))
+            return relay.right_shift(rewritten.args[0], relay.const(shift, "int32"))
 
         if operator_name == "cast" and str(rewritten.attrs.dtype) == "int32":
             original_type = getattr(call.args[0], "checked_type", None)
