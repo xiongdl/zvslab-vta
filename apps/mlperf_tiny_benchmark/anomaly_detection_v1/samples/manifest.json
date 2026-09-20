@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "dataset": {
+    "name": "MLPerf Tiny v1.4 ToyCar anomaly detection test set",
+    "root": "ToyCar",
+    "source": "local MLPerf Tiny v1.4 dataset directory",
+    "license": {
+      "status": "covered-by-LICENSE.mlperf-tiny",
+      "notice": "The committed samples are byte-for-byte copies from the local ToyCar test set."
+    }
+  },
+  "selection": "lexicographically first five normal_id_01 WAV files followed by the first five anomaly_id_01 WAV files",
+  "class_mapping": {
+    "0": "normal",
+    "1": "anomaly"
+  },
+  "samples": [
+    {
+      "order": 0,
+      "filename": "normal_id_01_00000000.wav",
+      "source_relative_path": "test/normal_id_01_00000000.wav",
+      "class_name": "normal",
+      "label": 0,
+      "byte_length": 352044,
+      "sha256": "0385da04d6cf8c1f9d0df775f98fda55409a71890c02ed53bb5d2c66171f6828"
+    },
+    {
+      "order": 1,
+      "filename": "normal_id_01_00000001.wav",
+      "source_relative_path": "test/normal_id_01_00000001.wav",
+      "class_name": "normal",
+      "label": 0,
+      "byte_length": 352044,
+      "sha256": "9288e70692964b005c6247ecb9ce689ad00171f569b1a7752e497f07347fb243"
+    },
+    {
+      "order": 2,
+      "filename": "normal_id_01_00000002.wav",
+      "source_relative_path": "test/normal_id_01_00000002.wav",
+      "class_name": "normal",
+      "label": 0,
+      "byte_length": 352044,
+      "sha256": "bfb7b845cf3b21e1dc20a47d5b032141da289e959e11c1ecb9f68fd1bf398331"
+    },
+    {
+      "order": 3,
+      "filename": "normal_id_01_00000003.wav",
+      "source_relative_path": "test/normal_id_01_00000003.wav",
+      "class_name": "normal",
+      "label": 0,
+      "byte_length": 352044,
+      "sha256": "6769c42c426ffedda9ff7ac1ed6da9937b2668d0518ef5e40ae48ee6e8302bd2"
+    },
+    {
+      "order": 4,
+      "filename": "normal_id_01_00000004.wav",
+      "source_relative_path": "test/normal_id_01_00000004.wav",
+      "class_name": "normal",
+      "label": 0,
+      "byte_length": 352044,
+      "sha256": "e0f1974c00eee5a3793a68f0fcadc15f0b1ddb3c3a751938a00bed9f7c9dd6b1"
+    }
+  ]
+}
