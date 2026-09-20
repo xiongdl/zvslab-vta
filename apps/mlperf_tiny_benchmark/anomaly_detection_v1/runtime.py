@@ -349,5 +349,17 @@ def deploy_matrix(build_dir=DEFAULT_BUILD_DIR, mode="fsim", manifest_path=MANIFE
     prepared = prepare_model(MODEL_PATH)
     records = committed_sample_records(manifest_path)
     artifacts = tuple(build_host_artifacts(prepared, build_dir, codegen, mode) for codegen in SUPPORTED_HOST_CODEGENS)
-    executions = tuple(execute_fsim(item, records) for item in artifacts)
-    return prepared, artifacts, executions
+    executions = []
+    for artifact in artifacts:
+        execution = execute_fsim(artifact, records)
+        executions.append(
+            ExecutionSummary(
+                execution.mode,
+                execution.host_codegen,
+                execution.samples,
+                execution.summary,
+                execution.profiler_stats,
+                _model_metadata(prepared),
+            )
+        )
+    return prepared, artifacts, tuple(executions)
