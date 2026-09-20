@@ -65,6 +65,7 @@ def _write_manifest(tmp_path, mutate=None):
             {
                 "order": order,
                 "filename": filename,
+                "source_relative_path": f"test/{filename}",
                 "class_name": class_name,
                 "label": label,
                 "sha256": hashlib.sha256(payload).hexdigest(),
@@ -96,6 +97,24 @@ def test_custom_manifest_requires_sample_hash(runtime_module, tmp_path):
 
 
 @pytest.mark.parametrize(
+    "source_relative_path",
+    (None, "", "/test/sample.wav", "../sample.wav", "dataset/sample.wav", "test/other.wav"),
+)
+def test_custom_manifest_rejects_invalid_source_relative_path(
+    runtime_module, tmp_path, source_relative_path
+):
+    def change_source_path(samples, samples_dir, root):
+        if source_relative_path is None:
+            del samples[0]["source_relative_path"]
+        else:
+            samples[0]["source_relative_path"] = source_relative_path
+
+    manifest_path = _write_manifest(tmp_path, change_source_path)
+    with pytest.raises(ValueError, match="source_relative_path"):
+        runtime_module.committed_sample_records(manifest_path)
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     (("sha256", "0" * 64), ("byte_length", 0)),
 )
@@ -113,6 +132,7 @@ def test_custom_manifest_rejects_sample_metadata_mismatch(
 def test_custom_manifest_rejects_duplicate_filenames(runtime_module, tmp_path):
     def duplicate_filename(samples, samples_dir, root):
         samples[1]["filename"] = samples[0]["filename"]
+        samples[1]["source_relative_path"] = f"test/{samples[1]['filename']}"
 
     manifest_path = _write_manifest(tmp_path, duplicate_filename)
     with pytest.raises(ValueError, match="unique"):
@@ -132,6 +152,7 @@ def test_custom_manifest_rejects_external_sample_paths(runtime_module, tmp_path,
             link = samples_dir / "escaped.wav"
             link.symlink_to(outside)
             samples[0]["filename"] = link.name
+            samples[0]["source_relative_path"] = f"test/{link.name}"
             samples[0]["sha256"] = hashlib.sha256(outside.read_bytes()).hexdigest()
             samples[0]["byte_length"] = outside.stat().st_size
 
@@ -260,3 +281,12 @@ def test_fsim_execution_rejects_nonzero_profiler_stats_after_clear(
 
     with pytest.raises(RuntimeError, match="did not reset|required counters|zero"):
         runtime_module.execute_fsim(artifacts, records)
+
+
+@pytest.mark.parametrize("value", (True, "1", 0, -1, float("nan"), float("inf"), float("-inf")))
+def test_fsim_profiler_rejects_invalid_counter_values(runtime_module, value):
+    stats = {counter: 1 for counter in runtime_module.REQUIRED_PROFILER_COUNTERS}
+    stats["gemm_counter"] = value
+
+    with pytest.raises(RuntimeError, match="must be positive"):
+        runtime_module._validate_profiler_stats(stats)

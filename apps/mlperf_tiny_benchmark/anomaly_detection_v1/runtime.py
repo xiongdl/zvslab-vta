@@ -2,6 +2,7 @@
 
 import json
 import hashlib
+import math
 import os
 import stat
 import sys
@@ -312,6 +313,21 @@ def _manifest_records(manifest_path):
             or ".." in relative_path.parts
         ):
             raise ValueError(f"manifest has an unsafe filename: {filename!r}")
+        source_relative_path = item.get("source_relative_path")
+        source_path = (
+            Path(source_relative_path) if isinstance(source_relative_path, str) else None
+        )
+        if (
+            not isinstance(source_relative_path, str)
+            or not source_relative_path
+            or source_path.is_absolute()
+            or ".." in source_path.parts
+            or source_relative_path != f"test/{filename}"
+        ):
+            raise ValueError(
+                "manifest source_relative_path must be a safe path equal to "
+                f"test/{filename!s}: {source_relative_path!r}"
+            )
         if filename in filenames:
             raise ValueError("manifest sample filenames must be unique")
         filenames.add(filename)
@@ -608,7 +624,12 @@ def _load_fsim():
 def _validate_profiler_stats(stats):
     for counter in REQUIRED_PROFILER_COUNTERS:
         value = stats.get(counter, 0)
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or (isinstance(value, float) and not math.isfinite(value))
+            or value <= 0
+        ):
             raise RuntimeError(f"FSIM profiler counter {counter} must be positive")
 
 
