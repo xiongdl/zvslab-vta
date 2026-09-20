@@ -10,6 +10,16 @@ from pathlib import Path
 import runtime
 
 
+def _positive_int(value):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -37,6 +47,13 @@ def _parser():
         "--output-json", type=str,
         help="write deterministic result JSON to this path",
     )
+    parser.add_argument(
+        "--tsim-window-budget", type=_positive_int, default=None,
+        help=(
+            "TSIM-only maximum representative windows per sample; default 1, "
+            f"or {runtime.TSIM_WINDOW_BUDGET_ENV}"
+        ),
+    )
     return parser
 
 
@@ -55,6 +72,7 @@ def _json_result(result):
         "input": execution.model_metadata["input"],
         "output": execution.model_metadata["output"],
         "score_semantics": execution.model_metadata["score"],
+        "execution": execution.model_metadata["execution"],
         "per_sample_results": [asdict(item) for item in execution.samples],
         "summary": execution.summary,
         "profiler_stats": execution.profiler_stats,
@@ -83,14 +101,28 @@ def main(argv=None):
         if args.host_codegen == "all":
             if mode not in ("fsim", "tsim"):
                 raise ValueError("--host-codegen all requires --mode fsim or tsim")
-            prepared, artifacts, executions = runtime.deploy_matrix(args.build_dir, mode, args.manifest)
+            if args.tsim_window_budget is None:
+                prepared, artifacts, executions = runtime.deploy_matrix(
+                    args.build_dir, mode, args.manifest
+                )
+            else:
+                prepared, artifacts, executions = runtime.deploy_matrix(
+                    args.build_dir, mode, args.manifest,
+                    tsim_window_budget=args.tsim_window_budget,
+                )
             payloads = []
             for current_artifacts, execution in zip(artifacts, executions):
                 result = runtime.DeploymentResult(prepared, current_artifacts, execution)
                 payloads.append(_json_result(result))
             payload = {"mode": mode, "host_codegen": "all", "runs": payloads}
         else:
-            result = runtime.deploy(args.build_dir, args.host_codegen, mode, args.manifest)
+            if args.tsim_window_budget is None:
+                result = runtime.deploy(args.build_dir, args.host_codegen, mode, args.manifest)
+            else:
+                result = runtime.deploy(
+                    args.build_dir, args.host_codegen, mode, args.manifest,
+                    tsim_window_budget=args.tsim_window_budget,
+                )
             payload = _json_result(result)
         _write_or_print(payload, args.output_json)
         return 0

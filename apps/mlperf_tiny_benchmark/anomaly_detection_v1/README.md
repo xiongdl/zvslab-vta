@@ -67,15 +67,19 @@ Generated build outputs are ignored and should not be committed.
 
 The default manifest contains exactly ten committed WAV files in fixed order:
 five `normal` samples labeled `0`, followed by five `anomaly` samples labeled
-`1`. Each WAV produces a deterministic `(N, 640)` feature matrix and one
-sample score: the mean squared error between all input feature vectors and
-their reconstructed output vectors. Higher MSE is treated as more anomalous.
+`1`. HOST and FSIM preserve the complete feature-window contract: each WAV
+produces a deterministic `(N, 640)` feature matrix and one score, the mean
+squared error between all input feature vectors and their reconstructed output
+vectors. Higher MSE is treated as more anomalous.
 The reported `label` is the manifest label; `predicted_label` uses the
 documented fixed-run threshold equal to the largest normal score. This is a
 deployment score demonstration and does not claim classification accuracy.
 
 The JSON result is sorted and contains model/input/output metadata,
-per-sample results, the summary, and FSIM profiler counters when applicable.
+per-sample results, the summary, and profiler counters when applicable. Each
+sample records its total `feature_shape` and `total_window_count`, the actual
+`executed_feature_shape` and `executed_window_count`, plus `sampled` and
+`score_scope` so a limited run cannot be mistaken for a complete-window score.
 
 ## TSIM
 
@@ -97,9 +101,38 @@ PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   --simulator tsim --host-codegen all
 ```
 
-The command builds and reloads both host variants before lazy TSIM
-initialization. Successful output contains ten comparisons per host, with
-`normal_count: 5`, `anomaly_count: 5`, and a positive integer `cycle_count`.
+By default TSIM executes one deterministic representative window per sample.
+This is an intentional TSIM smoke/representative-window run: it executes the
+real mixed VTA graph for every one of the ten samples, but it does not cover
+every audio feature window and its score is not a complete-window MSE. The
+default keeps the aggregate matrix within the simulator time budget while
+preserving five normal and five anomaly samples. Request a larger positive
+integer budget with either CLI or environment configuration:
+
+```bash
+VTA_ANOMALY_TSIM_WINDOW_BUDGET=4 \
+  VTA_CONFIG_FILE="$PWD/vta/config/tsim_sample.json" \
+  PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/anomaly_detection_v1/run.py \
+  --simulator tsim --host-codegen all
+
+# CLI takes precedence over the environment variable.
+.../run.py --simulator tsim --host-codegen all --tsim-window-budget 4
+```
+
+`--tsim-window-budget` and `VTA_ANOMALY_TSIM_WINDOW_BUDGET` accept only positive
+integers; invalid values fail with a clear error. The selection is deterministic
+and evenly spaced across the full feature matrix. If the budget reaches the
+sample's total window count, the result records `sampled: false` and uses the
+complete-window MSE semantics.
+
+The command builds and reloads both host variants before one lazy TSIM
+initialization. Successful output contains ten results per host, with
+`normal_count: 5`, `anomaly_count: 5`, the actual per-sample window counts, and
+a positive integer `cycle_count`. Missing TSIM registries, a non-TSIM VTA
+target, or absent `libvta_hw` causes a nonzero exit. The scores and labels are
+deployment contracts only; they do not claim classification accuracy.
 Missing TSIM registries, a non-TSIM VTA target, or absent `libvta_hw` causes a
 nonzero exit. The scores and labels are deployment contracts only; they do not
 claim classification accuracy.

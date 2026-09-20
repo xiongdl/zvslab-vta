@@ -1,6 +1,7 @@
 """Build and execute the fixed anomaly autoencoder on HOST or FSIM."""
 
 import json
+import os
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -35,6 +36,10 @@ SUPPORTED_HOST_CODEGENS = ("llvm", "c")
 DEFAULT_HOST_CODEGEN = "llvm"
 SUPPORTED_MODES = ("host", "fsim", "tsim")
 REQUIRED_PROFILER_COUNTERS = ("gemm_counter", "wgt_load_nbytes", "out_store_nbytes")
+DEFAULT_TSIM_WINDOW_BUDGET = 1
+TSIM_WINDOW_BUDGET_ENV = "VTA_ANOMALY_TSIM_WINDOW_BUDGET"
+FULL_SCORE_SCOPE = "full_windows"
+TSIM_SCORE_SCOPE = "representative_windows"
 
 
 @dataclass(frozen=True)
@@ -77,6 +82,11 @@ class SampleResult:
     output_shape: tuple
     output_dtype: str
     feature_shape: tuple
+    executed_feature_shape: tuple
+    total_window_count: int
+    executed_window_count: int
+    sampled: bool
+    score_scope: str
     reference_score: float
     mixed_score: float | None
 
@@ -235,6 +245,28 @@ def _validate_host_codegen(host_codegen):
     return host_codegen
 
 
+def _validate_tsim_window_budget(value):
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError("TSIM window budget must be a positive integer")
+    return value
+
+
+def resolve_tsim_window_budget(value=None):
+    """Resolve the TSIM-only representative-window budget from CLI or env."""
+    if value is not None:
+        return _validate_tsim_window_budget(value)
+    configured = os.environ.get(TSIM_WINDOW_BUDGET_ENV)
+    if configured is None:
+        return DEFAULT_TSIM_WINDOW_BUDGET
+    try:
+        configured_value = int(configured)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"{TSIM_WINDOW_BUDGET_ENV} must be a positive integer; received {configured!r}"
+        ) from error
+    return _validate_tsim_window_budget(configured_value)
+
+
 def _manifest_records(manifest_path):
     manifest_path = Path(manifest_path).expanduser().resolve()
     if ".envs" in manifest_path.parts:
@@ -292,6 +324,22 @@ def _model_metadata(prepared):
     }
 
 
+def _execution_metadata(prepared, execution):
+    metadata = _model_metadata(prepared)
+    metadata["score"] = execution.summary["score_semantics"]
+    metadata["execution"] = {
+        "score_scope": execution.summary["score_scope"],
+        "sampled": execution.summary["sampled"],
+        "tsim_window_budget": execution.summary["tsim_window_budget"],
+        "window_selection": (
+            "deterministic evenly spaced representative windows"
+            if execution.summary["sampled"]
+            else "all feature windows"
+        ),
+    }
+    return metadata
+
+
 def build_host_artifacts(prepared, build_dir=DEFAULT_BUILD_DIR, host_codegen=DEFAULT_HOST_CODEGEN,
                          mode="host"):
     """Build and reload reference/mixed artifacts without loading a simulator."""
@@ -341,13 +389,18 @@ def validate_mixed_symbols(module, expected_symbols):
             raise RuntimeError(f"reloaded mixed artifact is missing VTA symbol {symbol}")
 
 
-def _run_graph(artifact, input_data, output=None):
+def _create_graph_executor(artifact):
+    runtime = graph_executor.create(artifact.graph_json, artifact.module, artifact.device)
+    runtime.load_params(artifact.params)
+    return runtime
+
+
+def _run_graph(artifact, input_data, output=None, graph_runtime=None):
     input_data = np.asarray(input_data)
     if input_data.shape != INPUT_SHAPE or input_data.dtype != np.dtype(INPUT_DTYPE):
         raise RuntimeError(f"input must have shape {INPUT_SHAPE} and dtype {INPUT_DTYPE}")
     if output is None:
-        runtime = graph_executor.create(artifact.graph_json, artifact.module, artifact.device)
-        runtime.load_params(artifact.params)
+        runtime = graph_runtime if graph_runtime is not None else _create_graph_executor(artifact)
         runtime.set_input(INPUT_NAME, input_data)
         runtime.run()
         output = runtime.get_output(0).numpy()
@@ -359,25 +412,74 @@ def _run_graph(artifact, input_data, output=None):
     return output
 
 
-def _sample_score(artifact, record):
+def _score_feature_matrix(artifact, features, reuse_executor=False):
+    graph_runtime = _create_graph_executor(artifact) if reuse_executor else None
+    outputs = np.concatenate(
+        tuple(
+            _run_graph(artifact, row[None, :], graph_runtime=graph_runtime)
+            if reuse_executor
+            else _run_graph(artifact, row[None, :])
+            for row in features
+        ),
+        axis=0,
+    )
+    if outputs.shape != features.shape:
+        raise RuntimeError("reconstructed tensor shape differs from input feature matrix")
+    return float(np.mean((features.astype(np.float32) - outputs) ** 2)), outputs.dtype
+
+
+def _select_tsim_windows(features, window_budget):
+    if window_budget is None:
+        return features, False, FULL_SCORE_SCOPE
+    window_budget = resolve_tsim_window_budget(window_budget)
+    total_windows = features.shape[0]
+    executed_windows = min(window_budget, total_windows)
+    if executed_windows == total_windows:
+        return features, False, FULL_SCORE_SCOPE
+    indices = np.linspace(0, total_windows - 1, executed_windows, dtype=np.int64)
+    return features[indices], True, TSIM_SCORE_SCOPE
+
+
+def _score_record(artifact, record, window_budget=None, reuse_executor=False):
     features = np.asarray(load_sample(record.path))
     if features.ndim != 2 or features.shape[1] != INPUT_SHAPE[1] or features.dtype != np.float32:
         raise RuntimeError(f"{record.filename} preprocessing must return (N, 640) float32")
-    outputs = np.concatenate(tuple(_run_graph(artifact, row[None, :]) for row in features), axis=0)
-    if outputs.shape != features.shape:
-        raise RuntimeError(f"{record.filename} reconstructed tensor shape differs")
-    return float(np.mean((features.astype(np.float32) - outputs) ** 2)), features.shape, outputs.dtype
+    selected, sampled, score_scope = _select_tsim_windows(features, window_budget)
+    score, output_dtype = _score_feature_matrix(artifact, selected, reuse_executor=reuse_executor)
+    return {
+        "order": record.order,
+        "filename": record.filename,
+        "label": record.label,
+        "class_name": record.class_name,
+        "reference_score": score,
+        "input_shape": INPUT_SHAPE,
+        "output_shape": OUTPUT_SHAPE,
+        "feature_shape": features.shape,
+        "executed_feature_shape": selected.shape,
+        "total_window_count": features.shape[0],
+        "executed_window_count": selected.shape[0],
+        "sampled": sampled,
+        "score_scope": score_scope,
+        "output_dtype": str(output_dtype),
+        "_executed_features": selected,
+    }
 
 
-def _reference_raw(artifact, records):
-    raw = []
-    for record in records:
-        score, shape, dtype = _sample_score(artifact.reference, record)
-        raw.append({"order": record.order, "filename": record.filename, "label": record.label,
-                    "class_name": record.class_name, "reference_score": score,
-                    "input_shape": INPUT_SHAPE, "output_shape": OUTPUT_SHAPE,
-                    "feature_shape": shape, "output_dtype": str(dtype)})
-    return raw
+def _sample_score(artifact, record):
+    item = _score_record(artifact, record)
+    return item["reference_score"], item["feature_shape"], np.dtype(item["output_dtype"])
+
+
+def _reference_raw(artifact, records, window_budget=None):
+    return [
+        _score_record(
+            artifact.reference,
+            record,
+            window_budget=window_budget,
+            reuse_executor=window_budget is not None,
+        )
+        for record in records
+    ]
 
 
 def _with_predictions(results):
@@ -390,6 +492,10 @@ def _with_predictions(results):
             score=float(item["reference_score"]), input_shape=INPUT_SHAPE,
             output_shape=OUTPUT_SHAPE, output_dtype=item["output_dtype"],
             feature_shape=tuple(item["feature_shape"]),
+            executed_feature_shape=tuple(item["executed_feature_shape"]),
+            total_window_count=int(item["total_window_count"]),
+            executed_window_count=int(item["executed_window_count"]),
+            sampled=bool(item["sampled"]), score_scope=item["score_scope"],
             reference_score=float(item["reference_score"]), mixed_score=item.get("mixed_score"),
         )
         for item in results
@@ -397,26 +503,31 @@ def _with_predictions(results):
     return completed, threshold
 
 
-def _summary(samples, threshold):
+def _summary(samples, threshold, tsim_window_budget=None):
+    sampled = any(item.sampled for item in samples)
+    score_scope = TSIM_SCORE_SCOPE if sampled else FULL_SCORE_SCOPE
+    score_semantics = (
+        "mean squared reconstruction error over executed representative windows; "
+        "not a complete audio-window MSE"
+        if sampled
+        else "mean squared reconstruction error over all feature windows"
+    )
     return {
         "sample_count": len(samples),
         "normal_count": sum(item.label == 0 for item in samples),
         "anomaly_count": sum(item.label == 1 for item in samples),
         "predicted_anomaly_count": sum(item.predicted_label == 1 for item in samples),
         "anomaly_score_threshold": threshold,
-        "score_semantics": "mean squared reconstruction error; higher means less like the autoencoder training distribution",
+        "score_semantics": score_semantics,
+        "score_scope": score_scope,
+        "tsim_window_budget": tsim_window_budget,
+        "sampled": sampled,
     }
 
 
 def execute_host(artifacts, records):
     """Execute only the CPU reference artifact; this path never imports simulator."""
-    raw = []
-    for record in records:
-        score, shape, dtype = _sample_score(artifacts.reference, record)
-        raw.append({"order": record.order, "filename": record.filename, "label": record.label,
-                    "class_name": record.class_name, "reference_score": score,
-                    "input_shape": INPUT_SHAPE, "output_shape": OUTPUT_SHAPE,
-                    "feature_shape": shape, "output_dtype": str(dtype)})
+    raw = [_score_record(artifacts.reference, record) for record in records]
     samples, threshold = _with_predictions(raw)
     return ExecutionSummary("host", artifacts.host_codegen, samples, _summary(samples, threshold), {}, {})
 
@@ -442,13 +553,7 @@ def _fsim_context():
 
 def execute_fsim(artifacts, records):
     """Run reference first, then enter the lazy FSIM backend for the mixed graph."""
-    raw = []
-    for record in records:
-        score, shape, dtype = _sample_score(artifacts.reference, record)
-        raw.append({"order": record.order, "filename": record.filename, "label": record.label,
-                    "class_name": record.class_name, "reference_score": score,
-                    "input_shape": INPUT_SHAPE, "output_shape": OUTPUT_SHAPE,
-                    "feature_shape": shape, "output_dtype": str(dtype)})
+    raw = [_score_record(artifacts.reference, record) for record in records]
     validate_mixed_symbols(artifacts.mixed.module, artifacts.vta_symbols)
     simulator = _load_fsim()
     simulator.clear_stats()
@@ -466,12 +571,16 @@ def execute_fsim(artifacts, records):
     return ExecutionSummary("fsim", artifacts.host_codegen, samples, _summary(samples, threshold), stats, {})
 
 
-def _execute_tsim_artifact(artifacts, records, raw, session, simulator):
+def _execute_tsim_artifact(artifacts, records, raw, session, simulator, window_budget):
     validate_mixed_symbols(artifacts.mixed.module, artifacts.vta_symbols)
     session.clear_and_validate(simulator)
     for item, record in zip(raw, records):
-        mixed_score, shape, dtype = _sample_score(artifacts.mixed, record)
-        if shape != item["feature_shape"] or dtype != np.dtype(item["output_dtype"]):
+        mixed_score, dtype = _score_feature_matrix(
+            artifacts.mixed, item["_executed_features"], reuse_executor=True
+        )
+        if item["executed_feature_shape"] != item["_executed_features"].shape:
+            raise RuntimeError(f"{record.filename} TSIM feature selection contract differs")
+        if dtype != np.dtype(item["output_dtype"]):
             raise RuntimeError(f"{record.filename} mixed tensor contract differs")
         if not np.isclose(mixed_score, item["reference_score"], rtol=1e-6, atol=1e-6):
             raise RuntimeError(f"{record.filename} reconstruction score differs")
@@ -479,31 +588,40 @@ def _execute_tsim_artifact(artifacts, records, raw, session, simulator):
     stats = session.read_stats(simulator.stats)
     session.validate_activity(stats)
     samples, threshold = _with_predictions(raw)
-    return ExecutionSummary("tsim", artifacts.host_codegen, samples, _summary(samples, threshold), stats, {})
+    return ExecutionSummary(
+        "tsim", artifacts.host_codegen, samples,
+        _summary(samples, threshold, tsim_window_budget=window_budget), stats, {}
+    )
 
 
-def execute_tsim(artifacts, records):
+def execute_tsim(artifacts, records, tsim_window_budget=None):
     """Run one host variant through the lazy VTA TSIM simulator."""
-    raw = _reference_raw(artifacts, records)
+    window_budget = resolve_tsim_window_budget(tsim_window_budget)
+    raw = _reference_raw(artifacts, records, window_budget=window_budget)
     session, simulator = _load_simulator("tsim")
-    return _execute_tsim_artifact(artifacts, records, raw, session, simulator)
+    return _execute_tsim_artifact(artifacts, records, raw, session, simulator, window_budget)
 
 
-def _execute_tsim_matrix(artifacts, records, reference_raw, session, simulator):
+def _execute_tsim_matrix(artifacts, records, reference_raw, session, simulator, window_budget):
     """Execute LLVM/C mixed graphs with one TSIM load and isolated counter windows."""
     executions = []
     for host_artifacts, raw in zip(artifacts, reference_raw):
         executions.append(
-            _execute_tsim_artifact(host_artifacts, records, raw, session, simulator)
+            _execute_tsim_artifact(
+                host_artifacts, records, raw, session, simulator, window_budget
+            )
         )
     return tuple(executions)
 
 
 def deploy(build_dir=DEFAULT_BUILD_DIR, host_codegen=DEFAULT_HOST_CODEGEN, mode="host",
-           manifest_path=MANIFEST_PATH):
+           manifest_path=MANIFEST_PATH, tsim_window_budget=None):
     _validate_mode(mode)
+    window_budget = None
     if mode in ("fsim", "tsim"):
         _simulator_session(mode).validate_environment()
+    if mode == "tsim":
+        window_budget = resolve_tsim_window_budget(tsim_window_budget)
     prepared = prepare_model(MODEL_PATH)
     records = committed_sample_records(manifest_path)
     artifacts = build_host_artifacts(prepared, build_dir, host_codegen, mode)
@@ -512,18 +630,20 @@ def deploy(build_dir=DEFAULT_BUILD_DIR, host_codegen=DEFAULT_HOST_CODEGEN, mode=
     elif mode == "fsim":
         execution = execute_fsim(artifacts, records)
     else:
-        execution = execute_tsim(artifacts, records)
+        execution = execute_tsim(artifacts, records, window_budget)
     execution = ExecutionSummary(execution.mode, execution.host_codegen, execution.samples,
-                                 execution.summary, execution.profiler_stats, _model_metadata(prepared))
+                                 execution.summary, execution.profiler_stats,
+                                 _execution_metadata(prepared, execution))
     return DeploymentResult(prepared, artifacts, execution)
 
 
-def deploy_matrix(build_dir=DEFAULT_BUILD_DIR, mode="fsim", manifest_path=MANIFEST_PATH):
+def deploy_matrix(build_dir=DEFAULT_BUILD_DIR, mode="fsim", manifest_path=MANIFEST_PATH,
+                  tsim_window_budget=None):
     _validate_mode(mode)
     if mode not in ("fsim", "tsim"):
         raise ValueError("host mode uses one selected host codegen; matrix mode is FSIM or TSIM")
     if mode == "tsim":
-        return deploy_tsim_matrix(build_dir, manifest_path)
+        return deploy_tsim_matrix(build_dir, manifest_path, tsim_window_budget)
     _simulator_session(mode).validate_environment()
     prepared = prepare_model(MODEL_PATH)
     records = committed_sample_records(manifest_path)
@@ -538,24 +658,30 @@ def deploy_matrix(build_dir=DEFAULT_BUILD_DIR, mode="fsim", manifest_path=MANIFE
                 execution.samples,
                 execution.summary,
                 execution.profiler_stats,
-                _model_metadata(prepared),
+                _execution_metadata(prepared, execution),
             )
         )
     return prepared, artifacts, tuple(executions)
 
 
-def deploy_tsim_matrix(build_dir=DEFAULT_BUILD_DIR, manifest_path=MANIFEST_PATH):
-    """Build LLVM/C bundles before one lazy TSIM load and ten-sample execution."""
+def deploy_tsim_matrix(build_dir=DEFAULT_BUILD_DIR, manifest_path=MANIFEST_PATH,
+                       tsim_window_budget=None):
+    """Build LLVM/C bundles before one lazy TSIM load and sampled execution."""
     session = _simulator_session("tsim").validate_environment()
+    window_budget = resolve_tsim_window_budget(tsim_window_budget)
     prepared = prepare_model(MODEL_PATH)
     records = committed_sample_records(manifest_path)
     artifacts = tuple(
         build_host_artifacts(prepared, build_dir, codegen, "tsim")
         for codegen in SUPPORTED_HOST_CODEGENS
     )
-    reference_raw = tuple(_reference_raw(artifact, records) for artifact in artifacts)
+    reference_raw = tuple(
+        _reference_raw(artifact, records, window_budget=window_budget) for artifact in artifacts
+    )
     session, simulator = _load_simulator("tsim")
-    executions = _execute_tsim_matrix(artifacts, records, reference_raw, session, simulator)
+    executions = _execute_tsim_matrix(
+        artifacts, records, reference_raw, session, simulator, window_budget
+    )
     executions = tuple(
         ExecutionSummary(
             execution.mode,
@@ -563,7 +689,7 @@ def deploy_tsim_matrix(build_dir=DEFAULT_BUILD_DIR, manifest_path=MANIFEST_PATH)
             execution.samples,
             execution.summary,
             execution.profiler_stats,
-            _model_metadata(prepared),
+            _execution_metadata(prepared, execution),
         )
         for execution in executions
     )
