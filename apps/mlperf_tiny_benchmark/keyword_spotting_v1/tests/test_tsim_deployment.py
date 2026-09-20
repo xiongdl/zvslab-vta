@@ -64,6 +64,42 @@ def test_cli_exposes_host_codegen_simulator_and_output_directory_options(deploym
     assert module._parser().parse_args(["--simulator", "tsim"]).simulator == "tsim"
 
 
+@pytest.mark.parametrize(
+    ("prefix", "mixed", "mixed_top1"),
+    [
+        ("llvm-host", None, "not-run"),
+        ("llvm-fsim", np.array([[0, 0, 0, 5]], dtype=np.int8), "3"),
+        ("llvm-tsim", np.array([[0, 0, 0, 5]], dtype=np.int8), "3"),
+    ],
+)
+def test_cli_prints_deterministic_per_sample_top1_results(
+    deployment_runtime, capsys, prefix, mixed, mixed_top1
+):
+    spec = importlib.util.spec_from_file_location("mlperf_kws_run_output", RUN_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    sys.path.insert(0, str(APP_ROOT))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+
+    comparison = SimpleNamespace(
+        sample_path=Path("samples/go-004ae714_nohash_0.wav"),
+        top1=1,
+        mixed=mixed,
+    )
+    execution = SimpleNamespace(comparisons=(comparison,), profiler_stats={"cycles": 7})
+
+    module._print_execution(prefix, execution)
+
+    assert capsys.readouterr().out.splitlines() == [
+        f"{prefix} compared samples: 1",
+        f"{prefix} sample: go-004ae714_nohash_0.wav reference top-1: 1 mixed top-1: {mixed_top1}",
+        f"{prefix} profiler: {{'cycles': 7}}",
+    ]
+
+
 def test_tsim_rejects_wrong_target_before_model_preparation(deployment_runtime, monkeypatch, tmp_path):
     monkeypatch.setattr(deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="sim"))
     monkeypatch.setattr(

@@ -31,6 +31,16 @@ def _parser():
 
 def _print_execution(prefix, execution):
     print(f"{prefix} compared samples: {len(execution.comparisons)}")
+    for comparison in execution.comparisons:
+        mixed_top1 = (
+            "not-run"
+            if comparison.mixed is None
+            else str(int(comparison.mixed.argmax(axis=1)[0]))
+        )
+        print(
+            f"{prefix} sample: {comparison.sample_path.name} "
+            f"reference top-1: {comparison.top1} mixed top-1: {mixed_top1}"
+        )
     print(f"{prefix} profiler: {execution.profiler_stats}")
 
 
