@@ -76,8 +76,8 @@ def _validate_metadata(name, role, model_sha256, host_codegen, simulator):
         raise ValueError("model SHA-256 must be 64 lowercase hexadecimal characters")
     if host_codegen not in {"llvm", "c"}:
         raise ValueError("host codegen must be llvm or c")
-    if simulator not in {"fsim", "tsim"}:
-        raise ValueError("simulator must be fsim or tsim")
+    if simulator not in {"host", "fsim", "tsim"}:
+        raise ValueError("simulator must be host, fsim, or tsim")
 
 
 def _symbols(values, label):
