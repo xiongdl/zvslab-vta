@@ -26,6 +26,7 @@ import pytest
 
 VTA_ROOT = Path(__file__).resolve().parents[3]
 CONFIG_TOOL_PATH = VTA_ROOT / "config" / "vta_config.py"
+CANONICAL_CONFIG_PATH = VTA_ROOT / "config" / "vta_64mac.json"
 
 
 def _load_config_tool():
@@ -97,3 +98,34 @@ def test_backend_does_not_change_geometry_abi_fingerprint(geometry_config):
     assert config_tool.abi_fingerprint(fsim_definitions) == config_tool.abi_fingerprint(
         tsim_definitions
     )
+
+
+def test_vta_64mac_is_geometry_only_with_requested_values():
+    config = json.loads(CANONICAL_CONFIG_PATH.read_text(encoding="utf-8"))
+
+    assert "TARGET" not in config
+    assert {
+        key: config[key]
+        for key in (
+            "LOG_BLOCK",
+            "LOG_UOP_BUFF_SIZE",
+            "LOG_INP_BUFF_SIZE",
+            "LOG_WGT_BUFF_SIZE",
+            "LOG_ACC_BUFF_SIZE",
+        )
+    } == {
+        "LOG_BLOCK": 3,
+        "LOG_UOP_BUFF_SIZE": 12,
+        "LOG_INP_BUFF_SIZE": 13,
+        "LOG_WGT_BUFF_SIZE": 14,
+        "LOG_ACC_BUFF_SIZE": 15,
+    }
+
+
+@pytest.mark.parametrize("backend", ["fsim", "tsim"])
+def test_vta_64mac_loads_with_either_backend(backend):
+    config_tool = _load_config_tool()
+
+    config = config_tool.load_geometry_config(CANONICAL_CONFIG_PATH, backend=backend)
+
+    assert "TARGET" not in config
