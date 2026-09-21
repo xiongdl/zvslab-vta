@@ -63,6 +63,11 @@ class PkgConfig(object):
 
     def __init__(self, cfg):
 
+        # Geometry-only configs select FSIM/TSIM through VTA_BACKEND rather
+        # than embedding a simulator target.  Keep TARGET optional here so
+        # the geometry can still be consumed by the existing config tooling.
+        self.TARGET = cfg.get("TARGET")
+
         # Derived parameters
         cfg["LOG_BLOCK_IN"] = cfg["LOG_BLOCK"]
         cfg["LOG_BLOCK_OUT"] = cfg["LOG_BLOCK"]

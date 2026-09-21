@@ -39,6 +39,70 @@ ABI_DEFINITION_KEYS = (
     "LOG_OUT_BUFF_SIZE",
 )
 
+SUPPORTED_BACKENDS = ("fsim", "tsim")
+LEGACY_SIMULATOR_TARGETS = ("sim", "tsim")
+GEOMETRY_CONFIG_KEYS = (
+    "HW_VER",
+    "LOG_INP_WIDTH",
+    "LOG_WGT_WIDTH",
+    "LOG_ACC_WIDTH",
+    "LOG_BATCH",
+    "LOG_BLOCK",
+    "LOG_UOP_BUFF_SIZE",
+    "LOG_INP_BUFF_SIZE",
+    "LOG_WGT_BUFF_SIZE",
+    "LOG_ACC_BUFF_SIZE",
+)
+
+
+class VTAConfigError(ValueError):
+    """Raised when the canonical VTA config/backend contract is violated."""
+
+
+def normalize_backend(backend=None):
+    """Normalize the explicit VTA backend selector.
+
+    Parameters
+    ----------
+    backend : str or None
+        ``fsim`` or ``tsim``. If omitted, read ``VTA_BACKEND``.
+    """
+    selected = os.environ.get("VTA_BACKEND") if backend is None else backend
+    if selected in SUPPORTED_BACKENDS:
+        return selected
+    raise VTAConfigError(
+        "Unsupported VTA_BACKEND={!r}; supported values are fsim and tsim. "
+        "Set VTA_BACKEND explicitly; legacy simulator names are not accepted."
+        .format(selected)
+    )
+
+
+def validate_geometry_config(cfg):
+    """Validate a geometry-only config for the canonical backend boundary."""
+    target = cfg.get("TARGET")
+    if target in LEGACY_SIMULATOR_TARGETS:
+        suggested_backend = "fsim" if target == "sim" else "tsim"
+        raise VTAConfigError(
+            "Legacy TARGET={!r} is not supported for simulator configs; "
+            "select the backend explicitly with VTA_BACKEND={} instead."
+            .format(target, suggested_backend)
+        )
+
+    missing = [key for key in GEOMETRY_CONFIG_KEYS if key not in cfg]
+    if missing:
+        raise VTAConfigError(
+            "Missing VTA geometry config fields: {}".format(", ".join(missing))
+        )
+    return cfg
+
+
+def load_geometry_config(path, backend=None):
+    """Load and validate a geometry-only config with an explicit backend."""
+    normalize_backend(backend)
+    with open(path, encoding="utf-8") as config_file:
+        cfg = json.load(config_file)
+    return validate_geometry_config(cfg)
+
 
 def pkg_config(cfg):
     """Returns PkgConfig pkg config object."""
@@ -52,8 +116,10 @@ def pkg_config(cfg):
     return PkgConfig(cfg)
 
 
-def abi_definitions(cfg):
+def abi_definitions(cfg, backend=None):
     """Return the sorted compile definitions that form the VTA ABI."""
+    if backend is not None:
+        normalize_backend(backend)
     pkg = pkg_config(dict(cfg))
     return tuple(
         sorted("VTA_{}={}".format(key, getattr(pkg, key)) for key in ABI_DEFINITION_KEYS)
