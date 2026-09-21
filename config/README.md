@@ -15,11 +15,40 @@
 <!--- specific language governing permissions and limitations -->
 <!--- under the License. -->
 
-# VTA Configuration
+# VTA Geometry Configuration
 
-Each VTA runtime/hardware configuration is specified by vta_config.json file.
-You can copy the vta_config.json to tvm project root and modify the configuration
-before you type make.
+The canonical shared geometry file is `vta/config/vta_64mac.json`. It is used
+for both simulator backends and contains geometry/ABI fields only; it does not
+select a simulator. The requested geometry includes:
 
-The config is going to affect the behavior of python package as well as
-the hardware runtime build.
+```text
+LOG_BLOCK=3
+LOG_UOP_BUFF_SIZE=12
+LOG_INP_BUFF_SIZE=13
+LOG_WGT_BUFF_SIZE=14
+LOG_ACC_BUFF_SIZE=15
+```
+
+Select the backend separately with `VTA_BACKEND=fsim` or `VTA_BACKEND=tsim`,
+and pass the same absolute config path to the build interface:
+
+```bash
+bash scripts/build_vta_lib.sh \
+  --config "$PWD/vta/config/vta_64mac.json" \
+  --backend fsim
+
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+  PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python -c \
+  'import vta; print(vta.get_env().LOG_BLOCK)'
+```
+
+`VTA_BACKEND` is not part of the geometry ABI fingerprint, so FSIM and TSIM
+artifacts built from this file must agree on geometry. The old
+`TARGET=sim`/`TARGET=tsim` configuration selectors are rejected with a
+migration error; replace them with the explicit backend environment variable.
+The old `--target libvta_*` build option is rejected; use
+`--config ABS_PATH --backend fsim|tsim|all`.
+
+FPGA backend names such as `pynq` and `zcu104` remain deferred. This config
+contract does not claim those backends are implemented.

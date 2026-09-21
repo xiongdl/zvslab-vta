@@ -36,18 +36,26 @@ From the repository root, prepare the pinned Python environment and build the
 compiler extension and simulator libraries:
 
 ```bash
-./scripts/setup_tvm_vta_env.sh
-./scripts/build_vta_lib.sh --target libtvm-vta-ext
-./scripts/build_vta_lib.sh --target libvta_fsim
-./scripts/build_vta_lib.sh --target libvta_hw
+# Use the existing project environment at .envs/tvm-vta-env; do not recreate it
+# during verification.
+bash scripts/build_vta_lib.sh \
+  --config "$PWD/vta/config/vta_64mac.json" --backend all
 ```
+
+The active contract is the shared absolute `VTA_CONFIG_FILE` plus
+`VTA_BACKEND=fsim|tsim`. The build script uses `--backend fsim|tsim|all` and
+this runner uses `--simulator fsim|tsim`; the values must match. The CPU
+reference branch is part of the FSIM matrix and is not a separate VTA backend.
+`TARGET=sim`, `TARGET=tsim`, and `--target libvta_*` are retired; use the
+shared geometry file and explicit backend selectors. FPGA backends such as
+`pynq` and `zcu104` remain deferred.
 
 ## Run
 
 From the repository root:
 
 ```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_config.json" \
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
 PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   ./.envs/tvm-vta-env/bin/python \
   vta/apps/mlperf_tiny_benchmark/visual_wake_words_v1/run.py
@@ -57,8 +65,9 @@ The optional `--output-dir PATH` changes only the generated-artifact location.
 The default `build/` directory is ignored by the repository. The default CLI
 mode is LLVM FSIM; pass `--host-codegen c` for a single C-host run or
 `--host-codegen all` to build and execute the complete ordered LLVM/C matrix.
-Pass `--simulator tsim` with `VTA_CONFIG_FILE` set to
-`vta/config/tsim_sample.json` for the Verilated hardware model. Matrix bundles
+Pass `--simulator tsim` with `VTA_CONFIG_FILE` set to the shared
+`vta/config/vta_64mac.json` and `VTA_BACKEND=tsim` for the Verilated hardware
+model. Matrix bundles
 are published as `<host>-<simulator>/{reference,mixed}/`, with each directory
 containing its Graph JSON, parameters, DSO, manifest, and generated host
 source. A partial export is removed if the build fails.
@@ -66,7 +75,7 @@ source. A partial export is removed if the build fails.
 FSIM matrix:
 
 ```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_config.json" \
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
 PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   ./.envs/tvm-vta-env/bin/python \
   vta/apps/mlperf_tiny_benchmark/visual_wake_words_v1/run.py \
@@ -76,7 +85,7 @@ PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
 Complete TSIM matrix (fresh process):
 
 ```bash
-VTA_CONFIG_FILE="$PWD/vta/config/tsim_sample.json" \
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
 PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   ./.envs/tvm-vta-env/bin/python \
   vta/apps/mlperf_tiny_benchmark/visual_wake_words_v1/run.py \

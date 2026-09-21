@@ -28,25 +28,32 @@ The fixed numeric label order is:
 Run commands from the repository root with the pinned environment:
 
 ```bash
-./scripts/setup_tvm_vta_env.sh
+# Use the existing project environment at .envs/tvm-vta-env; do not recreate it
+# during verification.
 PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   ./.envs/tvm-vta-env/bin/python -m pytest \
   vta/apps/mlperf_tiny_benchmark/keyword_spotting_v1/tests
-bash scripts/build_vta_lib.sh --target libtvm-vta-ext
-bash scripts/build_vta_lib.sh --target libvta_fsim
-bash scripts/build_vta_lib.sh --target libvta_hw
+bash scripts/build_vta_lib.sh \
+  --config "$PWD/vta/config/vta_64mac.json" --backend all
 ```
 
 `libvta_fsim` is needed for FSIM. TSIM additionally requires the hardware
 library from `libvta_hw`, a valid `VTA_CONFIG_FILE`, and a fresh process. Build
 outputs are written below this application’s ignored `build/` directory.
 
+The active contract is the shared absolute `VTA_CONFIG_FILE` plus
+`VTA_BACKEND=fsim|tsim`. The build script uses `--backend fsim|tsim|all` and
+this runner uses `--simulator host|fsim|tsim`; HOST is CPU reference execution,
+while `fsim` and `tsim` must match `VTA_BACKEND`. `TARGET=sim`, `TARGET=tsim`,
+and `--target libvta_*` are retired. FPGA backends such as `pynq` and `zcu104`
+remain deferred.
+
 ## Run
 
 HOST uses the reference graph only and does not initialize a simulator:
 
 ```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_config.json" \
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
 PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   ./.envs/tvm-vta-env/bin/python \
   vta/apps/mlperf_tiny_benchmark/keyword_spotting_v1/run.py \
@@ -56,7 +63,7 @@ PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
 FSIM with the complete LLVM/C matrix:
 
 ```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_config.json" \
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
 PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   ./.envs/tvm-vta-env/bin/python \
   vta/apps/mlperf_tiny_benchmark/keyword_spotting_v1/run.py \
@@ -66,7 +73,7 @@ PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
 TSIM with the complete LLVM/C matrix, in a fresh process:
 
 ```bash
-VTA_CONFIG_FILE="$PWD/vta/config/tsim_sample.json" \
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
 PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   ./.envs/tvm-vta-env/bin/python \
   vta/apps/mlperf_tiny_benchmark/keyword_spotting_v1/run.py \

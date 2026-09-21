@@ -46,12 +46,19 @@ FSIM needs `libvta_fsim`, and TSIM needs the hardware/TSIM build
 
 ```bash
 bash scripts/build_tvm_lib_macos.sh
-bash scripts/build_vta_lib.sh --target libvta_fsim
-# For TSIM, use: bash scripts/build_vta_lib.sh --target libvta_hw
+bash scripts/build_vta_lib.sh \
+  --config "$PWD/vta/config/vta_64mac.json" --backend all
 ```
 
 Generated graph artifacts are written below the application `build/`
 directory by default, or below `--output-dir`, and are not source assets.
+
+The active contract is the shared absolute `VTA_CONFIG_FILE` plus
+`VTA_BACKEND=fsim|tsim`. The build script uses `--backend fsim|tsim|all` and
+this runner uses `--simulator host|fsim|tsim`; HOST is CPU reference execution,
+while `fsim` and `tsim` must match `VTA_BACKEND`. `TARGET=sim`, `TARGET=tsim`,
+and `--target libvta_*` are retired. FPGA backends such as `pynq` and `zcu104`
+remain deferred.
 
 ## HOST
 
@@ -59,6 +66,7 @@ HOST builds and reloads the reference and mixed bundles but executes only the
 CPU reference bundle; it does not initialize a simulator:
 
 ```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
 PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   "$PYTHON" \
   vta/apps/mlperf_tiny_benchmark/streaming_wakeword_v1/run.py \
@@ -75,7 +83,7 @@ then executes the reference and VTA-partitioned bundles for all three samples
 with strict elementwise int8 output comparison:
 
 ```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_config.json" \
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
 PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   "$PYTHON" \
   vta/apps/mlperf_tiny_benchmark/streaming_wakeword_v1/run.py \
@@ -97,7 +105,7 @@ TSIM must run in a fresh process with the TSIM configuration and requires the
 hardware/TSIM VTA library:
 
 ```bash
-VTA_CONFIG_FILE="$PWD/vta/config/tsim_sample.json" \
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
 PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   "$PYTHON" \
   vta/apps/mlperf_tiny_benchmark/streaming_wakeword_v1/run.py \

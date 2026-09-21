@@ -11,10 +11,19 @@ From the repository root, use the pinned environment and the checked-out TVM
 and VTA Python trees:
 
 ```bash
-export VTA_CONFIG_FILE="$PWD/vta/config/vta_config.json"
+export VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json"
+export VTA_BACKEND=fsim
 export PYTHONPATH="$PWD/tvm/python:$PWD/vta/python"
 PYTHON="$PWD/.envs/tvm-vta-env/bin/python"
 ```
+
+The active contract is the shared absolute `VTA_CONFIG_FILE` plus
+`VTA_BACKEND=fsim|tsim`. The build script uses `--backend fsim|tsim|all`;
+this runner uses `--mode host|fsim|tsim` (or its `--simulator` runner flag),
+with `VTA_BACKEND` matching the selected VTA backend. `TARGET=sim`,
+`TARGET=tsim`, and `--target libvta_*` are retired; migrate to the shared
+geometry file and explicit backend selectors. FPGA backends such as `pynq` and
+`zcu104` are deferred and are not implemented here.
 
 The model and ten WAV files are committed under this directory. No runtime
 step reads `.envs`, downloads data, or requires `librosa`; preprocessing uses
@@ -25,7 +34,8 @@ For FSIM, build the repository's VTA FSIM library first when it is not already
 available:
 
 ```bash
-bash scripts/build_vta_lib.sh --target libvta_fsim
+bash scripts/build_vta_lib.sh \
+  --config "$PWD/vta/config/vta_64mac.json" --backend fsim
 ```
 
 ## HOST
@@ -55,7 +65,7 @@ FSIM builds reference and mixed bundles, then lazily loads
 
 Use `--host-codegen c` for the C host variant. `--host-codegen all` runs the
 ordered LLVM/C FSIM matrix. `--output-dir` is accepted as an alias for
-`--build-dir`; `--simulator fsim` is accepted as a compatibility alias for
+`--build-dir`; `--simulator fsim` selects the same FSIM runner path as
 `--mode fsim`.
 
 Each build directory contains `<host-codegen>-<mode>/reference` and
@@ -84,17 +94,18 @@ sample records its total `feature_shape` and `total_window_count`, the actual
 ## TSIM
 
 TSIM uses the existing VTA software-simulation flow and must run in a fresh
-process with `VTA_CONFIG_FILE` set to `vta/config/tsim_sample.json`. Build the
-hardware/TSIM library before running it:
+process with the shared geometry file and `VTA_BACKEND=tsim`. Build the
+hardware/TSIM library from the same geometry file before running it:
 
 ```bash
-bash scripts/build_vta_lib.sh --target libvta_hw
+bash scripts/build_vta_lib.sh \
+  --config "$PWD/vta/config/vta_64mac.json" --backend tsim
 ```
 
 Then run the complete LLVM/C matrix from the repository root:
 
 ```bash
-VTA_CONFIG_FILE="$PWD/vta/config/tsim_sample.json" \
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
 PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   ./.envs/tvm-vta-env/bin/python \
   vta/apps/mlperf_tiny_benchmark/anomaly_detection_v1/run.py \
@@ -111,7 +122,7 @@ integer budget with either CLI or environment configuration:
 
 ```bash
 VTA_ANOMALY_TSIM_WINDOW_BUDGET=4 \
-  VTA_CONFIG_FILE="$PWD/vta/config/tsim_sample.json" \
+  VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
   PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   ./.envs/tvm-vta-env/bin/python \
   vta/apps/mlperf_tiny_benchmark/anomaly_detection_v1/run.py \
@@ -130,9 +141,7 @@ complete-window MSE semantics.
 The command builds and reloads both host variants before one lazy TSIM
 initialization. Successful output contains ten results per host, with
 `normal_count: 5`, `anomaly_count: 5`, the actual per-sample window counts, and
-a positive integer `cycle_count`. Missing TSIM registries, a non-TSIM VTA
-target, or absent `libvta_hw` causes a nonzero exit. The scores and labels are
-deployment contracts only; they do not claim classification accuracy.
-Missing TSIM registries, a non-TSIM VTA target, or absent `libvta_hw` causes a
-nonzero exit. The scores and labels are deployment contracts only; they do not
-claim classification accuracy.
+a positive integer `cycle_count`. Missing TSIM registries, a non-TSIM
+`VTA_BACKEND`, or absent `libvta_hw` causes a nonzero exit. The scores and
+labels are deployment contracts only; they do not claim classification
+accuracy.
