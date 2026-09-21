@@ -88,7 +88,7 @@ def test_tsim_mapping_is_explicit_and_never_uses_fsim_enabled(deployment_runtime
 
 
 def test_tsim_rejects_wrong_environment_before_model_preparation(deployment_runtime, monkeypatch, tmp_path):
-    monkeypatch.setattr(deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="sim"))
+    monkeypatch.setattr(deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="fsim"))
     monkeypatch.setattr(
         deployment_runtime,
         "prepare_model",
@@ -311,7 +311,7 @@ def test_tsim_matrix_result_records_simulator_and_is_frozen(deployment_runtime, 
 
 
 def test_end_to_end_tsim_matrix_with_reloaded_graph_bundles(deployment_runtime, tmp_path):
-    """Run the complete ten-sample TSIM matrix under tsim_sample.json."""
+    """Run the complete ten-sample TSIM matrix under vta_64mac.json geometry."""
     result = deployment_runtime.deploy_tsim_matrix(tmp_path)
     assert len(result.prepared.routing.symbols) == 4
     assert len(result.artifacts) == 2

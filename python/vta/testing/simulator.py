@@ -18,14 +18,17 @@
 
 import ctypes
 import json
-import os
 
 import tvm
 
+from ..backend import (
+    SUPPORTED_BACKENDS,
+    is_simulator_backend,
+    normalize_backend,
+)
 from ..libinfo import find_libvta
 
 
-SUPPORTED_BACKENDS = ("fsim", "tsim")
 BACKEND_LIBRARIES = {
     "fsim": ("libvta_fsim",),
     "tsim": ("libvta_tsim", "libvta_hw"),
@@ -43,28 +46,6 @@ BACKEND_REGISTRIES = {
     ),
 }
 _loaded_libraries = {}
-
-
-def normalize_backend(backend=None, simulator=None):
-    """Resolve the explicit backend argument or VTA_BACKEND environment value."""
-    if backend is not None and simulator is not None and backend != simulator:
-        raise ValueError(
-            f"backend mismatch: backend={backend!r}, simulator={simulator!r}"
-        )
-    selected = simulator if simulator is not None else backend
-    configured = os.environ.get("VTA_BACKEND")
-    if selected is not None and configured is not None and configured != selected:
-        raise ValueError(
-            f"backend mismatch: VTA_BACKEND={configured!r}, explicit backend={selected!r}"
-        )
-    if selected is None:
-        selected = configured
-    if selected in SUPPORTED_BACKENDS:
-        return selected
-    raise ValueError(
-        "unsupported VTA backend {!r}; set VTA_BACKEND to fsim or tsim, "
-        "or pass an explicit simulator/backend parameter".format(selected)
-    )
 
 
 def _missing_libraries(backend):

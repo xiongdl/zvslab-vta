@@ -65,14 +65,14 @@ def test_save_load_out():
         x_nd = tvm.nd.array(x_np, dev)
         y_nd = tvm.nd.empty(y_np.shape, device=dev, dtype=y_np.dtype)
 
-        if env.TARGET in ["sim", "tsim"]:
+        if simulator.is_simulator_backend(env.TARGET):
             simulator.clear_stats()
 
         f(x_nd, y_nd)
 
         np.testing.assert_equal(y_np, y_nd.numpy())
 
-        if env.TARGET in ["sim", "tsim"]:
+        if simulator.is_simulator_backend(env.TARGET):
             sim_stats = simulator.stats()
             print("Save load execution statistics:")
             for k, v in sim_stats.items():
@@ -145,14 +145,14 @@ def test_padded_load():
             x_nd = tvm.nd.array(x_np, dev)
             y_nd = tvm.nd.empty(y_np.shape, device=dev, dtype=y_np.dtype)
 
-            if env.TARGET in ["sim", "tsim"]:
+            if simulator.is_simulator_backend(env.TARGET):
                 simulator.clear_stats()
 
             f(x_nd, y_nd)
 
             np.testing.assert_equal(y_np, y_nd.numpy())
 
-            if env.TARGET in ["sim", "tsim"]:
+            if simulator.is_simulator_backend(env.TARGET):
                 sim_stats = simulator.stats()
                 print("Padded {} load execution statistics:".format(test_name))
                 for k, v in sim_stats.items():
@@ -238,14 +238,14 @@ def test_gemm():
             y_np = np.right_shift(y_np, 8)
             y_np = np.clip(y_np, 0, (1 << (env.INP_WIDTH - 1)) - 1).astype(y.dtype)
 
-            if env.TARGET in ["sim", "tsim"]:
+            if simulator.is_simulator_backend(env.TARGET):
                 simulator.clear_stats()
 
             f(x_nd, w_nd, y_nd)
 
             np.testing.assert_equal(y_np, y_nd.numpy())
 
-            if env.TARGET in ["sim", "tsim"]:
+            if simulator.is_simulator_backend(env.TARGET):
                 sim_stats = simulator.stats()
                 print("GEMM schedule:{} execution statistics:".format(name))
                 for k, v in sim_stats.items():
@@ -394,7 +394,7 @@ def test_alu():
             a_nd = tvm.nd.array(a_np, dev)
             res_nd = tvm.nd.array(np.zeros((m, n, env.BATCH, env.BLOCK_OUT)).astype(res.dtype), dev)
 
-            if env.TARGET in ["sim", "tsim"]:
+            if simulator.is_simulator_backend(env.TARGET):
                 simulator.clear_stats()
 
             if use_imm:
@@ -405,7 +405,7 @@ def test_alu():
 
             np.testing.assert_equal(res_np, res_nd.numpy())
 
-            if env.TARGET in ["sim", "tsim"]:
+            if simulator.is_simulator_backend(env.TARGET):
                 sim_stats = simulator.stats()
                 print("ALU {} execution statistics:".format(test_name))
                 for k, v in sim_stats.items():
@@ -470,14 +470,14 @@ def test_relu():
         a_nd = tvm.nd.array(a_np, dev)
         res_nd = tvm.nd.array(np.zeros((m, n, env.BATCH, env.BLOCK_OUT)).astype(res.dtype), dev)
 
-        if env.TARGET in ["sim", "tsim"]:
+        if simulator.is_simulator_backend(env.TARGET):
             simulator.clear_stats()
 
         f(a_nd, res_nd)
 
         np.testing.assert_equal(res_np, res_nd.numpy())
 
-        if env.TARGET in ["sim", "tsim"]:
+        if simulator.is_simulator_backend(env.TARGET):
             sim_stats = simulator.stats()
             print("Relu execution statistics:")
             for k, v in sim_stats.items():
@@ -533,14 +533,14 @@ def test_shift_and_scale():
         a_nd = tvm.nd.array(a_np, dev)
         res_nd = tvm.nd.array(np.zeros((m, n, env.BATCH, env.BLOCK_OUT)).astype(res.dtype), dev)
 
-        if env.TARGET in ["sim", "tsim"]:
+        if simulator.is_simulator_backend(env.TARGET):
             simulator.clear_stats()
 
         f(a_nd, res_nd)
 
         np.testing.assert_equal(res_np, res_nd.numpy())
 
-        if env.TARGET in ["sim", "tsim"]:
+        if simulator.is_simulator_backend(env.TARGET):
             sim_stats = simulator.stats()
             print("Shift and scale execution statistics:")
             for k, v in sim_stats.items():

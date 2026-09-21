@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from vta import environment
+from vta import backend
 from vta.testing import simulator
 
 
@@ -49,6 +50,16 @@ def test_unknown_backend_reports_canonical_values(monkeypatch):
 
     with pytest.raises(ValueError, match=r"fsim.*tsim"):
         simulator.normalize_backend()
+
+
+def test_environment_and_simulator_use_the_same_backend_helper(monkeypatch):
+    monkeypatch.setenv("VTA_BACKEND", "fsim")
+
+    assert environment.normalize_backend is backend.normalize_backend
+    assert simulator.normalize_backend is backend.normalize_backend
+    assert backend.is_simulator_backend("fsim")
+    assert backend.is_simulator_backend("tsim")
+    assert not backend.is_simulator_backend("sim")
 
 
 def test_fsim_missing_library_diagnostic_names_selected_library(monkeypatch):

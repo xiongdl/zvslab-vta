@@ -70,7 +70,7 @@ def test_tsim_rejects_wrong_target_before_model_preparation(
     deployment_runtime, monkeypatch, tmp_path
 ):
     monkeypatch.setattr(
-        deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="sim")
+        deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="fsim")
     )
     monkeypatch.setattr(
         deployment_runtime,

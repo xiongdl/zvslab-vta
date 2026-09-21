@@ -101,7 +101,7 @@ def test_cli_prints_deterministic_per_sample_top1_results(
 
 
 def test_tsim_rejects_wrong_target_before_model_preparation(deployment_runtime, monkeypatch, tmp_path):
-    monkeypatch.setattr(deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="sim"))
+    monkeypatch.setattr(deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="fsim"))
     monkeypatch.setattr(
         deployment_runtime,
         "prepare_model",

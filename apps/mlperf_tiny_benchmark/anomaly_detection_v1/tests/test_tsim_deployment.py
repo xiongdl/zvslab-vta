@@ -47,7 +47,7 @@ def test_tsim_mapping_is_explicit_and_uses_hardware_simulator(runtime_module):
 def test_tsim_rejects_wrong_environment_before_model_preparation(
     runtime_module, monkeypatch, tmp_path
 ):
-    monkeypatch.setattr(runtime_module.vta, "get_env", lambda: SimpleNamespace(TARGET="sim"))
+    monkeypatch.setattr(runtime_module.vta, "get_env", lambda: SimpleNamespace(TARGET="fsim"))
     monkeypatch.setattr(
         runtime_module,
         "prepare_model",

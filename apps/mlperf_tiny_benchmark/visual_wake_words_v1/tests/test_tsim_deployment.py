@@ -66,7 +66,7 @@ def test_tsim_mapping_is_explicit_and_never_uses_fsim_enabled(deployment_runtime
 
 
 def test_tsim_rejects_wrong_environment_before_model_preparation(deployment_runtime, monkeypatch, tmp_path):
-    monkeypatch.setattr(deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="sim"))
+    monkeypatch.setattr(deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="fsim"))
     monkeypatch.setattr(
         deployment_runtime,
         "prepare_model",
@@ -181,7 +181,7 @@ def test_tsim_matrix_result_records_simulator_and_is_frozen(deployment_runtime, 
 
 
 def test_tsim_matrix_contract_has_ten_comparisons_and_positive_cycles(deployment_runtime):
-    """Run the complete ten-sample TSIM matrix under tsim_sample.json."""
+    """Run the complete ten-sample TSIM matrix under vta_64mac.json geometry."""
     result = deployment_runtime.deploy_tsim_matrix(APP_ROOT / "build" / "test-tsim")
     assert len(result.prepared.routing.symbols) == 12
     assert len(result.artifacts) == 2

@@ -42,8 +42,8 @@ def _parser():
         choices=("fsim", "tsim"),
         default="fsim",
         help=(
-            "simulator to execute (default: fsim; tsim uses the configured "
-            "tsim_sample.json hardware model)"
+            "simulator to execute (default: fsim; tsim uses the shared "
+            "vta_64mac.json geometry with VTA_BACKEND=tsim)"
         ),
     )
     return parser

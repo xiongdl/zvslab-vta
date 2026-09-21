@@ -24,22 +24,7 @@ import copy
 import tvm
 from tvm import te
 from . import intrin
-
-
-SUPPORTED_BACKENDS = ("fsim", "tsim")
-LEGACY_SIMULATOR_TARGETS = ("sim", "tsim")
-
-
-def normalize_backend(backend=None):
-    """Resolve the explicit simulator backend for a geometry-only config."""
-    selected = os.environ.get("VTA_BACKEND") if backend is None else backend
-    if selected in SUPPORTED_BACKENDS:
-        return selected
-    raise ValueError(
-        "Unsupported VTA_BACKEND={!r}; supported values are fsim and tsim. "
-        "Set VTA_BACKEND explicitly; legacy simulator TARGET fields are not "
-        "accepted.".format(selected)
-    )
+from .backend import LEGACY_SIMULATOR_TARGETS, normalize_backend
 
 
 def get_vta_hw_path():

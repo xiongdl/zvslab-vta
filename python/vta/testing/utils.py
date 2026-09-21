@@ -32,7 +32,7 @@ def run(run_func):
     """
     env = get_env()
 
-    if env.TARGET in ["fsim", "tsim", "intelfocl"]:
+    if simulator.is_simulator_backend(env.TARGET) or env.TARGET == "intelfocl":
         # Talk to local RPC if necessary to debug RPC server.
         # Compile vta on your host with make at the root.
         # Select FSIM or TSIM through VTA_BACKEND and the geometry-only config.
@@ -48,8 +48,8 @@ def run(run_func):
             # Make sure simulation library exists
             # If this fails, build vta on host (make)
             # with VTA_BACKEND="fsim" in the environment.
-            if env.TARGET == "fsim":
-                assert simulator.enabled()
+            if simulator.is_simulator_backend(env.TARGET):
+                assert simulator.enabled(env.TARGET)
             run_func(env, rpc.LocalSession())
 
     elif env.TARGET in ["pynq", "ultra96", "de10nano"]:

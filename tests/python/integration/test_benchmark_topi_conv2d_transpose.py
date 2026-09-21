@@ -233,20 +233,21 @@ def run_conv2d_transpose(
     res_arr = tvm.nd.array(res_np, dev)
     time_f = f.time_evaluator("conv2d_transpose", dev, number=samples)
 
-    # In vta sim mode, collect simulator runtime statistics
+    # In a simulator backend, collect simulator runtime statistics.
     stats = {}
     cost = None
-    if env.TARGET in ["sim", "tsim"]:
+    if simulator.is_simulator_backend(env.TARGET):
+        backend = simulator.normalize_backend(backend=env.TARGET)
         # Check if we're in local RPC mode (allows us to rebuild the
         # runtime on the fly when varying the VTA designs)
         local_rpc = int(os.environ.get("VTA_LOCAL_SIM_RPC", "0"))
         if local_rpc:
-            if env.TARGET == "sim":
+            if backend == "fsim":
                 remote.get_function("vta.simulator.profiler_clear")()
             else:
                 remote.get_function("vta.tsim.profiler_clear")()
             cost = time_f(data_arr, kernel_arr, res_arr)
-            if env.TARGET == "sim":
+            if backend == "fsim":
                 stats = json.loads(remote.get_function("vta.simulator.profiler_status")())
             else:
                 stats = json.loads(remote.get_function("vta.tsim.profiler_status")())
@@ -286,7 +287,7 @@ def test_conv2d_transpose(device):
     def _run(env, remote):
         if device == "vta":
             target = env.target
-            if env.TARGET not in ["sim", "tsim"]:
+            if not simulator.is_simulator_backend(env.TARGET):
                 assert tvm.runtime.enabled("rpc")
                 program_fpga(remote, bitstream=None)
                 reconfig_runtime(remote)

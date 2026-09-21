@@ -507,7 +507,7 @@ def test_fsim_matrix_prepares_once_and_records_independent_host_windows(
     monkeypatch.setattr(deployment_runtime, "prepare_model", fake_prepare)
     monkeypatch.setattr(deployment_runtime, "committed_sample_paths", lambda: sample_paths)
     monkeypatch.setattr(
-        deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="sim")
+        deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="fsim")
     )
     monkeypatch.setattr(deployment_runtime, "build_host_artifacts", fake_build)
     monkeypatch.setattr(
@@ -576,7 +576,7 @@ def test_fsim_matrix_result_records_simulator_and_is_frozen(deployment_runtime, 
     )
     monkeypatch.setattr(deployment_runtime, "prepare_model", lambda *_: prepared)
     monkeypatch.setattr(deployment_runtime, "committed_sample_paths", lambda: ())
-    monkeypatch.setattr(deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="sim"))
+    monkeypatch.setattr(deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="fsim"))
     monkeypatch.setattr(deployment_runtime, "build_host_artifacts", lambda *args, **kwargs: ())
     monkeypatch.setattr(deployment_runtime, "_execute_matrix", lambda *args: ())
 

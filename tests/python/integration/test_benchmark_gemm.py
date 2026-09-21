@@ -96,10 +96,10 @@ def test_gemm():
             res_ref = np.right_shift(res_ref, 8)
             res_ref = np.clip(res_ref, 0, (1 << (env.INP_WIDTH - 1)) - 1).astype(res.dtype)
             time_f = f.time_evaluator("gemm", dev, number=20)
-            if env.TARGET in ["sim", "tsim"]:
+            if simulator.is_simulator_backend(env.TARGET):
                 simulator.clear_stats()
             cost = time_f(data_arr, weight_arr, res_arr)
-            if env.TARGET in ["sim", "tsim"]:
+            if simulator.is_simulator_backend(env.TARGET):
                 stats = simulator.stats()
                 print("Execution statistics:")
                 for k, v in stats.items():
