@@ -14,100 +14,182 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-# pylint: disable=superfluous-parens
-"""Utilities to start simulator."""
+"""Explicit FSIM/TSIM backend loading and registry diagnostics."""
+
 import ctypes
 import json
-import warnings
+import os
+
 import tvm
-from ..environment import get_env
+
 from ..libinfo import find_libvta
 
 
-def _load_sw():
-    """Load hardware library for simulator."""
+SUPPORTED_BACKENDS = ("fsim", "tsim")
+BACKEND_LIBRARIES = {
+    "fsim": ("libvta_fsim",),
+    "tsim": ("libvta_tsim", "libvta_hw"),
+}
+BACKEND_REGISTRIES = {
+    "fsim": (
+        "vta.simulator.profiler_clear",
+        "vta.simulator.profiler_status",
+    ),
+    "tsim": (
+        "vta.tsim.init",
+        "vta.tsim.profiler_clear",
+        "vta.tsim.profiler_status",
+        "runtime.module.loadfile_vta-tsim",
+    ),
+}
+_loaded_libraries = {}
 
-    env = get_env()
-    lib_driver_name = (
-        "libvta_tsim"
-        if env.TARGET == "tsim"
-        else "libvta"
-        if env.TARGET == "intelfocl"
-        else "libvta_fsim"
+
+def normalize_backend(backend=None, simulator=None):
+    """Resolve the explicit backend argument or VTA_BACKEND environment value."""
+    if backend is not None and simulator is not None and backend != simulator:
+        raise ValueError(
+            f"backend mismatch: backend={backend!r}, simulator={simulator!r}"
+        )
+    selected = simulator if simulator is not None else backend
+    configured = os.environ.get("VTA_BACKEND")
+    if selected is not None and configured is not None and configured != selected:
+        raise ValueError(
+            f"backend mismatch: VTA_BACKEND={configured!r}, explicit backend={selected!r}"
+        )
+    if selected is None:
+        selected = configured
+    if selected in SUPPORTED_BACKENDS:
+        return selected
+    raise ValueError(
+        "unsupported VTA backend {!r}; set VTA_BACKEND to fsim or tsim, "
+        "or pass an explicit simulator/backend parameter".format(selected)
     )
-    require_sim = env.TARGET in ("sim", "tsim")
-    libs = []
 
-    # Load driver library
-    lib_driver = find_libvta(lib_driver_name, optional=(not require_sim))
 
-    if not lib_driver:
-        return []
+def _missing_libraries(backend):
+    return [
+        library
+        for library in BACKEND_LIBRARIES[backend]
+        if not find_libvta(library, optional=True)
+    ]
 
+
+def validate_backend_registries(backend=None, simulator=None):
+    """Return missing registries for the selected explicit backend."""
+    selected = normalize_backend(backend, simulator)
+    return tuple(
+        name
+        for name in BACKEND_REGISTRIES[selected]
+        if tvm.get_global_func(name, allow_missing=True) is None
+    )
+
+
+def load_backend(backend=None, simulator=None):
+    """Load the selected backend libraries and initialize TSIM hardware."""
+    selected = normalize_backend(backend, simulator)
+    if selected in _loaded_libraries:
+        return _loaded_libraries[selected]
+
+    missing = _missing_libraries(selected)
+    if missing:
+        required = ", ".join(BACKEND_LIBRARIES[selected])
+        raise RuntimeError(
+            f"{selected.upper()} backend requires {required}; missing library "
+            f"{', '.join(missing)}. Build the selected backend with "
+            f"scripts/build_vta_lib.sh --config /absolute/path/to/vta_64mac.json "
+            f"--backend {selected}"
+        )
+
+    paths = []
+    handles = []
     try:
-        libs = [ctypes.CDLL(lib_driver[0], ctypes.RTLD_GLOBAL)]
-    except OSError as err:
-        if require_sim:
-            raise err
-        warnings.warn("Error when loading VTA driver {}: {}".format(lib_driver[0], err))
-        return []
+        for library in BACKEND_LIBRARIES[selected]:
+            path = find_libvta(library)[0]
+            handle = ctypes.CDLL(path, mode=getattr(ctypes, "RTLD_GLOBAL", 0))
+            paths.append(path)
+            handles.append(handle)
+        if selected == "tsim":
+            init = tvm.get_global_func("vta.tsim.init", allow_missing=True)
+            if init is None:
+                raise RuntimeError(
+                    "TSIM backend library loaded but registry vta.tsim.init is missing; "
+                    "libvta_tsim/libvta_hw are mismatched"
+                )
+            hardware = tvm.runtime.load_module(paths[1], "vta-tsim")
+            init(hardware)
+    except (OSError, RuntimeError) as error:
+        if isinstance(error, RuntimeError):
+            raise
+        raise RuntimeError(
+            f"{selected.upper()} backend library loading failed for {paths}: {error}"
+        ) from error
 
-    if env.TARGET == "tsim":
-        lib_hw = find_libvta("libvta_hw", optional=True)
-        assert lib_hw  # make sure to make in ${VTA_PATH}/hardware/chisel
-        f = tvm.get_global_func("vta.tsim.init")
-        m = tvm.runtime.load_module(lib_hw[0], "vta-tsim")
-        f(m)
-        return lib_hw
-
-    return libs
-
-
-def enabled():
-    """Check if simulator is enabled."""
-    f = tvm.get_global_func("vta.simulator.profiler_clear", True)
-    return f is not None
-
-
-def clear_stats():
-    """Clear profiler statistics."""
-    env = get_env()
-    if env.TARGET == "sim":
-        f = tvm.get_global_func("vta.simulator.profiler_clear", True)
-    else:
-        f = tvm.get_global_func("vta.tsim.profiler_clear", True)
-    if f:
-        f()
+    missing_registries = validate_backend_registries(selected)
+    if missing_registries:
+        raise RuntimeError(
+            f"{selected.upper()} backend libraries are loaded but required registries "
+            f"are missing: {', '.join(missing_registries)}; expected libraries: "
+            f"{', '.join(BACKEND_LIBRARIES[selected])}"
+        )
+    _loaded_libraries[selected] = tuple(handles)
+    return _loaded_libraries[selected]
 
 
-def stats():
-    """Get profiler statistics
-
-    Returns
-    -------
-    stats : dict
-        Current profiler statistics
-    """
-    env = get_env()
-    if env.TARGET == "sim":
-        x = tvm.get_global_func("vta.simulator.profiler_status")()
-    else:
-        x = tvm.get_global_func("vta.tsim.profiler_status")()
-    return json.loads(x)
+def _load_sw(backend=None):
+    """Compatibility-free internal loader used by explicit backend callers."""
+    return load_backend(backend)
 
 
-# debug flag to skip execution.
+def enabled(backend=None):
+    selected = normalize_backend(backend)
+    return bool(validate_backend_registries(selected) == ())
+
+
+def clear_stats(backend=None):
+    selected = normalize_backend(backend)
+    registry = (
+        "vta.simulator.profiler_clear"
+        if selected == "fsim"
+        else "vta.tsim.profiler_clear"
+    )
+    function = tvm.get_global_func(registry, allow_missing=True)
+    if function is None:
+        raise RuntimeError(
+            f"{selected.upper()} profiler registry is unavailable; required libraries: "
+            f"{', '.join(BACKEND_LIBRARIES[selected])}"
+        )
+    function()
+
+
+def stats(backend=None):
+    selected = normalize_backend(backend)
+    registry = (
+        "vta.simulator.profiler_status"
+        if selected == "fsim"
+        else "vta.tsim.profiler_status"
+    )
+    function = tvm.get_global_func(registry, allow_missing=True)
+    if function is None:
+        raise RuntimeError(
+            f"{selected.upper()} profiler registry is unavailable; required libraries: "
+            f"{', '.join(BACKEND_LIBRARIES[selected])}"
+        )
+    raw = function()
+    return json.loads(raw) if isinstance(raw, str) else raw
+
+
 DEBUG_SKIP_EXEC = 1
 
 
 def debug_mode(flag):
-    """Set debug mode
-    Paramaters
-    ----------
-    flag : int
-        The debug flag, 0 means clear all flags.
-    """
     tvm.get_global_func("vta.simulator.profiler_debug_mode")(flag)
 
 
-LIBS = _load_sw()
+# Importing this module is safe without a selector, but an explicit
+# VTA_BACKEND eagerly validates its libraries for callers that use this module
+# directly. Benchmark adapters still import it lazily after selecting a backend.
+try:
+    LIBS = load_backend()
+except (RuntimeError, ValueError):
+    LIBS = ()

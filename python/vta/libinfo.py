@@ -24,7 +24,7 @@ from .environment import get_vta_hw_path
 
 _COMPILER_EXTENSION = "libtvm-vta-ext"
 _COMPILER_EXTENSION_BUILD_COMMAND = (
-    "./scripts/build_vta_lib.sh --target libtvm-vta-ext"
+    "./scripts/build_vta_lib.sh --config /absolute/path/to/vta_64mac.json --backend fsim"
 )
 
 

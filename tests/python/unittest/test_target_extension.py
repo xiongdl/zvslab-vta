@@ -27,7 +27,9 @@ from byoc_utils import run_isolated_python
 
 
 VTA_ROOT = Path(__file__).resolve().parents[3]
-BUILD_COMMAND = "./scripts/build_vta_lib.sh --target libtvm-vta-ext"
+BUILD_COMMAND = (
+    "./scripts/build_vta_lib.sh --config /absolute/path/to/vta_64mac.json --backend fsim"
+)
 
 
 def _extension_name():
@@ -43,7 +45,8 @@ def _isolated_vta_environment(vta_root):
     config_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(VTA_ROOT / "config" / "pkg_config.py", config_dir / "pkg_config.py")
     return {
-        "VTA_CONFIG_FILE": str(VTA_ROOT / "config" / "vta_config.json"),
+        "VTA_CONFIG_FILE": str(VTA_ROOT / "config" / "vta_64mac.json"),
+        "VTA_BACKEND": "fsim",
         "VTA_PATH": str(vta_root),
     }
 

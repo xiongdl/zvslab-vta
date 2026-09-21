@@ -42,7 +42,7 @@ def test_tsim_mapping_requires_hardware_simulator_registries(deployment_runtime)
         "runtime.module.loadfile_vta-tsim",
     )
     assert session.activity_counter == "cycle_count"
-    assert "--target libvta_hw" in session.diagnostic
+    assert "--backend tsim" in session.diagnostic
 
 
 def test_cli_parser_exposes_the_approved_defaults_and_options(deployment_runtime):
@@ -78,7 +78,8 @@ def test_tsim_rejects_wrong_target_before_model_preparation(
         lambda *_: pytest.fail("model preparation must not start for a target mismatch"),
     )
 
-    with pytest.raises(RuntimeError, match="requires VTA target 'tsim'"):
+    monkeypatch.setenv("VTA_BACKEND", "fsim")
+    with pytest.raises(ValueError, match="backend mismatch"):
         deployment_runtime.deploy_tsim_matrix(tmp_path)
 
 
@@ -92,7 +93,7 @@ def test_tsim_missing_registry_reports_libvta_hw_requirement(deployment_runtime,
         lambda name, allow_missing=False: None if name == "vta.tsim.init" else object(),
     )
 
-    with pytest.raises(RuntimeError, match=r"vta\.tsim\.init.*libvta_hw"):
+    with pytest.raises(RuntimeError, match=r"vta\.tsim\.init.*backend tsim"):
         deployment_runtime._simulator_session("tsim").load()
 
 

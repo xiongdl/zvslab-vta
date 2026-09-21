@@ -32,7 +32,7 @@ import pytest
 
 VTA_ROOT = Path(__file__).resolve().parents[3]
 CONFIG_TOOL_PATH = VTA_ROOT / "config" / "vta_config.py"
-DEFAULT_CONFIG_PATH = VTA_ROOT / "config" / "vta_config.json"
+DEFAULT_CONFIG_PATH = VTA_ROOT / "config" / "vta_64mac.json"
 ABI_CONFIG_KEYS = (
     "LOG_INP_WIDTH",
     "LOG_WGT_WIDTH",
@@ -44,7 +44,9 @@ ABI_CONFIG_KEYS = (
     "LOG_WGT_BUFF_SIZE",
     "LOG_ACC_BUFF_SIZE",
 )
-BUILD_FSIM_COMMAND = "./scripts/build_vta_lib.sh --target libvta_fsim"
+BUILD_FSIM_COMMAND = (
+    "./scripts/build_vta_lib.sh --config /absolute/path/to/vta_64mac.json --backend fsim"
+)
 
 
 def _load_config_tool():

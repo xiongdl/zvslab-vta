@@ -41,24 +41,25 @@ def _run_graph(factory, device, input_data):
     return runtime.get_output(0).numpy()
 
 
-def _simulator_setup(env):
-    if env.TARGET == "sim":
+def _simulator_setup(env=None, backend=None):
+    from vta.testing import simulator
+
+    selected = simulator.normalize_backend(backend=backend)
+    if selected == "fsim":
         return (
             "libvta_fsim",
             "vta.simulator.profiler_clear",
             "vta.simulator.profiler_status",
-            "./scripts/build_vta_lib.sh --target libvta_fsim",
+            "./scripts/build_vta_lib.sh --config /absolute/path/to/vta_64mac.json --backend fsim",
         )
-    if env.TARGET == "tsim":
+    if selected == "tsim":
         return (
             "libvta_tsim + libvta_hw",
             "vta.tsim.profiler_clear",
             "vta.tsim.profiler_status",
-            "./scripts/build_vta_lib.sh --target libvta_hw",
+            "./scripts/build_vta_lib.sh --config /absolute/path/to/vta_64mac.json --backend tsim",
         )
-    raise RuntimeError(
-        "VTA BYOC runtime validation requires sim or tsim, got " f"{env.TARGET}"
-    )
+    raise RuntimeError("VTA BYOC runtime validation requires fsim or tsim")
 
 
 def _remote_simulator_stats(remote, status_name):
@@ -70,6 +71,10 @@ def _require_simulator(env):
     from vta.testing import simulator
 
     library, clear_name, status_name, build_command = _simulator_setup(env)
+    try:
+        simulator.load_backend()
+    except RuntimeError as error:
+        raise RuntimeError(f"VTA {library} is unavailable; run {build_command}") from error
     if (
         tvm.get_global_func(clear_name, allow_missing=True) is None
         or tvm.get_global_func(status_name, allow_missing=True) is None
@@ -81,19 +86,19 @@ def _require_simulator(env):
 
 
 def _assert_accelerator_activity(env, runtime_stats, expected_out_store_nbytes=None):
-    if env.TARGET == "sim":
+    from vta.testing import simulator
+
+    if simulator.normalize_backend() == "fsim":
         assert runtime_stats["gemm_counter"] > 0
         assert runtime_stats["wgt_load_nbytes"] > 0
         assert runtime_stats["out_store_nbytes"] > 0
         if expected_out_store_nbytes is not None:
             assert runtime_stats["out_store_nbytes"] == expected_out_store_nbytes
         return
-    if env.TARGET == "tsim":
+    if simulator.normalize_backend() == "tsim":
         assert runtime_stats["cycle_count"] > 0
         return
-    raise RuntimeError(
-        "VTA BYOC runtime validation requires sim or tsim, got " f"{env.TARGET}"
-    )
+    raise RuntimeError("VTA BYOC runtime validation requires fsim or tsim")
 
 
 def _require_runtime_symbol(module, symbol):
@@ -467,12 +472,11 @@ def test_missing_simulator_reports_setup_command(monkeypatch):
         _require_simulator(env)
 
 
-def test_unsupported_simulator_target_reports_target_name(monkeypatch):
-    class UnsupportedEnvironment:
-        TARGET = "pynq"
+def test_missing_backend_reports_canonical_values(monkeypatch):
+    monkeypatch.delenv("VTA_BACKEND", raising=False)
 
-    with pytest.raises(RuntimeError, match="requires sim or tsim, got pynq"):
-        _simulator_setup(UnsupportedEnvironment())
+    with pytest.raises(ValueError, match="fsim.*tsim"):
+        _simulator_setup()
 
 
 def test_loaded_artifact_must_implement_expected_symbol():

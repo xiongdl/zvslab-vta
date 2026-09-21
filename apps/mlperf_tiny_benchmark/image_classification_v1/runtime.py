@@ -121,10 +121,12 @@ class SimulatorSession:
     diagnostic: str
 
     def validate_environment(self):
-        active_target = getattr(vta.get_env(), "TARGET", None)
+        from vta.testing import simulator as backend_simulator
+
+        active_target = backend_simulator.normalize_backend(simulator=self.label)
         if active_target != self.environment_target:
             raise RuntimeError(
-                f"simulator {self.label!r} requires VTA target "
+                f"simulator {self.label!r} requires VTA backend "
                 f"{self.environment_target!r}, active target is {active_target!r}"
             )
         return self
@@ -135,6 +137,7 @@ class SimulatorSession:
         # global driver load, hardware-module load, and vta.tsim.init call.
         try:
             from vta.testing import simulator
+            simulator.load_backend(self.label)
         except Exception as error:
             missing = [
                 name
@@ -215,7 +218,7 @@ def _simulator_session(simulator):
     if simulator == "fsim":
         return SimulatorSession(
             label="fsim",
-            environment_target="sim",
+            environment_target="fsim",
             clear_registry="vta.simulator.profiler_clear",
             status_registry="vta.simulator.profiler_status",
             required_registries=(
@@ -223,7 +226,7 @@ def _simulator_session(simulator):
                 "vta.simulator.profiler_status",
             ),
             activity_counter="gemm_counter",
-            diagnostic="bash scripts/build_vta_lib.sh --target libvta_fsim",
+            diagnostic="bash scripts/build_vta_lib.sh --config /absolute/path/to/vta_64mac.json --backend fsim",
         )
     if simulator == "tsim":
         return SimulatorSession(
@@ -238,7 +241,7 @@ def _simulator_session(simulator):
                 "runtime.module.loadfile_vta-tsim",
             ),
             activity_counter="cycle_count",
-            diagnostic="bash scripts/build_vta_lib.sh --target libvta_hw",
+            diagnostic="bash scripts/build_vta_lib.sh --config /absolute/path/to/vta_64mac.json --backend tsim",
         )
     raise ValueError(f"unsupported simulator {simulator!r}; supported simulators are fsim and tsim")
 

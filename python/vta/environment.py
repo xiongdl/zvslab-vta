@@ -26,6 +26,22 @@ from tvm import te
 from . import intrin
 
 
+SUPPORTED_BACKENDS = ("fsim", "tsim")
+LEGACY_SIMULATOR_TARGETS = ("sim", "tsim")
+
+
+def normalize_backend(backend=None):
+    """Resolve the explicit simulator backend for a geometry-only config."""
+    selected = os.environ.get("VTA_BACKEND") if backend is None else backend
+    if selected in SUPPORTED_BACKENDS:
+        return selected
+    raise ValueError(
+        "Unsupported VTA_BACKEND={!r}; supported values are fsim and tsim. "
+        "Set VTA_BACKEND explicitly; legacy simulator TARGET fields are not "
+        "accepted.".format(selected)
+    )
+
+
 def get_vta_hw_path():
     """Get the VTA source path."""
     curr_path = os.path.dirname(os.path.abspath(os.path.expanduser(__file__)))
@@ -245,7 +261,7 @@ class Environment(object):
             return "llvm -mtriple=armv7-none-linux-gnueabihf"
         if self.TARGET == "ultra96":
             return "llvm -mtriple=aarch64-linux-gnu"
-        if self.TARGET in ["sim", "tsim", "intelfocl"]:
+        if self.TARGET in ["fsim", "tsim", "intelfocl"]:
             return "llvm"
         raise ValueError("Unknown target %s" % self.TARGET)
 
@@ -272,6 +288,15 @@ def _init_env():
         raise RuntimeError("Cannot find config in %s" % str(config_path))
     with open(config_path, encoding="utf-8") as config_file:
         cfg = json.load(config_file)
+    target = cfg.get("TARGET")
+    if target in LEGACY_SIMULATOR_TARGETS:
+        raise ValueError(
+            "Legacy TARGET={!r} is not supported for simulator configs; use a "
+            "geometry-only config and select VTA_BACKEND=fsim or VTA_BACKEND=tsim."
+            .format(target)
+        )
+    if target is None:
+        cfg["TARGET"] = normalize_backend()
     return Environment(cfg)
 
 

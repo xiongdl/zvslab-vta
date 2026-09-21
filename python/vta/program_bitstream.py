@@ -72,7 +72,7 @@ def bitstream_program(target, bitstream, *args):
         pynq_bitstream_program(bitstream)
     elif target in ["de10nano"]:
         de10nano_bitstream_program(bitstream)
-    elif target in ["sim", "tsim"]:
+    elif target in ["fsim", "tsim"]:
         # In simulation, bit stream programming is a no-op
         return
     elif target in ["intelfocl"]:

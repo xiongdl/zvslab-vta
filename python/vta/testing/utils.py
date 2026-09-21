@@ -32,10 +32,10 @@ def run(run_func):
     """
     env = get_env()
 
-    if env.TARGET in ["sim", "tsim", "intelfocl"]:
+    if env.TARGET in ["fsim", "tsim", "intelfocl"]:
         # Talk to local RPC if necessary to debug RPC server.
         # Compile vta on your host with make at the root.
-        # Make sure TARGET is set to "sim" in the config.json file.
+        # Select FSIM or TSIM through VTA_BACKEND and the geometry-only config.
         # Then launch the RPC server on the host machine
         # with ./apps/vta_rpc/start_rpc_server.sh
         # Set your VTA_LOCAL_SIM_RPC environment variable to
@@ -47,8 +47,8 @@ def run(run_func):
         else:
             # Make sure simulation library exists
             # If this fails, build vta on host (make)
-            # with TARGET="sim" in the json.config file.
-            if env.TARGET == "sim":
+            # with VTA_BACKEND="fsim" in the environment.
+            if env.TARGET == "fsim":
                 assert simulator.enabled()
             run_func(env, rpc.LocalSession())
 
