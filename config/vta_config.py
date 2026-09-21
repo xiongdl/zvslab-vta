@@ -260,6 +260,8 @@ def main():
                         help="print the configuration string")
     parser.add_argument("--abi-fingerprint", action="store_true",
                         help="print the canonical VTA ABI fingerprint")
+    parser.add_argument("--backend-contract", action="store_true",
+                        help="reject legacy simulator TARGET fields")
     parser.add_argument("--abi-header", type=str, default="",
                         help="write the canonical VTA ABI header")
     parser.add_argument("--get-inp-mem-banks", action="store_true",
@@ -338,6 +340,8 @@ def main():
         raise RuntimeError("Cannot find config in %s" % str(path_list))
 
     cfg = json.load(open(ok_path_list[0]))
+    if args.backend_contract:
+        validate_geometry_config(cfg)
     pkg = pkg_config(cfg)
 
     if args.target:

@@ -38,6 +38,7 @@ USE_TRACE_FST = 0
 USE_TRACE_DETAILED = 0
 USE_THREADS = 0
 VTA_LIBNAME = libvta_hw
+VTA_CONFIG_FILE ?=
 ifeq ($(origin CXX), default)
   CXX := c++
 endif
@@ -167,7 +168,12 @@ endif
 
 default: lint lib
 
-.PHONY: check_verilator deps
+.PHONY: check_vta_config check_verilator deps
+check_vta_config:
+	@test -n "$(VTA_CONFIG_FILE)" || { echo "Error: VTA_CONFIG_FILE is required for hardware generation." >&2; exit 1; }
+	@test -f "$(VTA_CONFIG_FILE)" || { echo "Error: VTA_CONFIG_FILE does not exist: $(VTA_CONFIG_FILE)" >&2; exit 1; }
+	@test -n "$(shell python $(VTA_PATH)/config/vta_config.py --use-cfg=$(VTA_CONFIG_FILE) --backend-contract --defs 2>/dev/null)" || { echo "Error: invalid geometry configuration: $(VTA_CONFIG_FILE)" >&2; exit 1; }
+
 check_verilator:
 	@command -v "$(VERILATOR)" >/dev/null 2>&1 || { \
 		echo "Error: Verilator was not found in PATH." >&2; \
@@ -185,7 +191,7 @@ lint:
 	$(SBT_ENV) $(SBT) scalastyle
 	$(SBT_ENV) $(SBT) test:scalastyle
 
-lib: $(lib_path)
+lib: check_vta_config $(lib_path)
 
 $(verilator_build_dir)/%.o: %.cpp
 	$(CXX) -fPIC $(cxx_flags) -c $^ -o $@
