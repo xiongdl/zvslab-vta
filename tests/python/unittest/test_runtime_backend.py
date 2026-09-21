@@ -63,6 +63,7 @@ def test_environment_and_simulator_use_the_same_backend_helper(monkeypatch):
 
 
 def test_fsim_missing_library_diagnostic_names_selected_library(monkeypatch):
+    monkeypatch.setenv("VTA_BACKEND", "fsim")
     monkeypatch.setattr(simulator, "_loaded_libraries", {})
     monkeypatch.setattr(simulator, "find_libvta", lambda name, optional=False: [])
 
@@ -80,6 +81,7 @@ def test_tsim_missing_library_diagnostic_names_both_required_libraries(monkeypat
 
 
 def test_registry_diagnostic_identifies_backend_and_missing_registry(monkeypatch):
+    monkeypatch.setenv("VTA_BACKEND", "fsim")
     monkeypatch.setattr(simulator, "_loaded_libraries", {})
     monkeypatch.setattr(
         simulator,
