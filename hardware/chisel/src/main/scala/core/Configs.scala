@@ -47,3 +47,51 @@ class CoreConfig extends Config((site, here, up) => {
       instQueueEntries = 512
     )
 })
+
+/** Core parameters normalized from the shared geometry-only VTA config. */
+object GeometryCoreParams {
+  private lazy val properties = {
+    val path = sys.props.getOrElse(
+      "vta.geometry.properties",
+      throw new IllegalArgumentException(
+        "vta.geometry.properties is required for TSIM Chisel generation"))
+    val file = new java.io.File(path)
+    require(file.isFile, "TSIM geometry properties do not exist: " + path)
+    val loaded = new java.util.Properties()
+    val input = new java.io.FileInputStream(file)
+    try loaded.load(input) finally input.close()
+    loaded
+  }
+
+  private def int(name: String): Int = {
+    val value = properties.getProperty(name)
+    require(value != null, "Missing TSIM geometry property: " + name)
+    try value.toInt
+    catch {
+      case _: NumberFormatException =>
+        throw new IllegalArgumentException(
+          "Invalid TSIM geometry property " + name + "=" + value)
+    }
+  }
+
+  def core: CoreParams = CoreParams(
+    batch = int("BATCH"),
+    blockOut = int("BLOCK_OUT"),
+    blockOutFactor = 1,
+    blockIn = int("BLOCK_IN"),
+    inpBits = int("INP_BITS"),
+    wgtBits = int("WGT_BITS"),
+    uopBits = 32,
+    accBits = int("ACC_BITS"),
+    outBits = int("OUT_BITS"),
+    uopMemDepth = int("UOP_MEM_DEPTH"),
+    inpMemDepth = int("INP_MEM_DEPTH"),
+    wgtMemDepth = int("WGT_MEM_DEPTH"),
+    accMemDepth = int("ACC_MEM_DEPTH"),
+    outMemDepth = int("OUT_MEM_DEPTH"),
+    instQueueEntries = int("INST_QUEUE_ENTRIES"))
+}
+
+class GeometryCoreConfig extends Config((site, here, up) => {
+  case CoreKey => GeometryCoreParams.core
+})

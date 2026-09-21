@@ -19,7 +19,7 @@ VERILATOR ?= verilator
 VERILATOR_ROOT ?= $(shell $(VERILATOR) --getenv VERILATOR_ROOT 2>/dev/null)
 VERILATOR_INC_DIR ?= $(VERILATOR_ROOT)/include
 
-CONFIG = DefaultDe10Config
+CONFIG = DefaultTsimConfig
 TOP = VTA
 TOP_TEST = Test
 BUILD_NAME = build
@@ -65,13 +65,14 @@ ifndef VTA_PATH
 endif
 
 SBT ?= sbt
+verilator_build_dir = $(VTA_PATH)/$(BUILD_NAME)/verilator
+chisel_build_dir = $(VTA_PATH)/$(BUILD_NAME)/chisel
+CHISEL_CONFIG_FILE ?= $(chisel_build_dir)/vta_geometry.properties
+PYTHON ?= $(VTA_PATH)/../.envs/tvm-vta-env/bin/python
 SBT_ENV = HOME=$(VTA_PATH)/hardware/chisel/dep/home \
 	XDG_CACHE_HOME=$(VTA_PATH)/hardware/chisel/dep/xdg-cache \
 	COURSIER_CACHE=$(VTA_PATH)/hardware/chisel/dep/coursier \
-	SBT_OPTS=-Duser.home=$(VTA_PATH)/hardware/chisel/dep/home
-
-verilator_build_dir = $(VTA_PATH)/$(BUILD_NAME)/verilator
-chisel_build_dir = $(VTA_PATH)/$(BUILD_NAME)/chisel
+	SBT_OPTS='-Duser.home=$(VTA_PATH)/hardware/chisel/dep/home -Dvta.geometry.properties=$(abspath $(CHISEL_CONFIG_FILE))'
 
 verilator_opt = --cc
 verilator_opt += +define+RANDOMIZE_GARBAGE_ASSIGN
@@ -169,10 +170,15 @@ endif
 default: lint lib
 
 .PHONY: check_vta_config check_verilator deps
-check_vta_config:
+check_vta_config: $(CHISEL_CONFIG_FILE)
 	@test -n "$(VTA_CONFIG_FILE)" || { echo "Error: VTA_CONFIG_FILE is required for hardware generation." >&2; exit 1; }
 	@test -f "$(VTA_CONFIG_FILE)" || { echo "Error: VTA_CONFIG_FILE does not exist: $(VTA_CONFIG_FILE)" >&2; exit 1; }
-	@test -n "$(shell python $(VTA_PATH)/config/vta_config.py --use-cfg=$(VTA_CONFIG_FILE) --backend-contract --defs 2>/dev/null)" || { echo "Error: invalid geometry configuration: $(VTA_CONFIG_FILE)" >&2; exit 1; }
+	@test -s "$(CHISEL_CONFIG_FILE)" || { echo "Error: normalized Chisel geometry was not generated: $(CHISEL_CONFIG_FILE)" >&2; exit 1; }
+	@$(PYTHON) $(VTA_PATH)/config/vta_config.py --use-cfg=$(VTA_CONFIG_FILE) --backend-contract --defs >/dev/null || { echo "Error: invalid geometry configuration: $(VTA_CONFIG_FILE)" >&2; exit 1; }
+
+$(CHISEL_CONFIG_FILE): $(VTA_CONFIG_FILE) $(VTA_PATH)/config/vta_config.py
+	@mkdir -p $(@D)
+	$(PYTHON) $(VTA_PATH)/config/vta_config.py --use-cfg=$(VTA_CONFIG_FILE) --chisel-properties=$@
 
 check_verilator:
 	@command -v "$(VERILATOR)" >/dev/null 2>&1 || { \
@@ -216,11 +222,11 @@ $(verilator_build_dir)/V$(TOP_TEST).cpp: $(chisel_build_dir)/$(TOP_TEST).$(CONFI
 	$(VERILATOR) $(verilator_opt) $<
 
 verilog: $(chisel_build_dir)/$(TOP).$(CONFIG).sv
-$(chisel_build_dir)/$(TOP).$(CONFIG).sv:
+$(chisel_build_dir)/$(TOP).$(CONFIG).sv: $(CHISEL_CONFIG_FILE)
 	$(SBT_ENV) $(SBT) 'runMain vta.$(CONFIG) --target-dir $(chisel_build_dir) -o $(TOP).$(CONFIG)'
 
 verilog_test: $(chisel_build_dir)/$(TOP_TEST).$(CONFIG).sv
-$(chisel_build_dir)/$(TOP_TEST).$(CONFIG).sv:
+$(chisel_build_dir)/$(TOP_TEST).$(CONFIG).sv: $(CHISEL_CONFIG_FILE)
 	$(SBT_ENV) $(SBT) 'runMain vta.$(CONFIG_TEST) --target-dir $(chisel_build_dir) -o $(TOP_TEST).$(CONFIG)'
 
 unittest: check_verilator

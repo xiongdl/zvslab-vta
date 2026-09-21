@@ -19,6 +19,7 @@
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -129,3 +130,46 @@ def test_vta_64mac_loads_with_either_backend(backend):
     config = config_tool.load_geometry_config(CANONICAL_CONFIG_PATH, backend=backend)
 
     assert "TARGET" not in config
+
+
+def test_cli_rejects_legacy_target_without_backend_contract(tmp_path, geometry_config, monkeypatch):
+    config_tool = _load_config_tool()
+    config_path = tmp_path / "legacy.json"
+    geometry_config["TARGET"] = "sim"
+    config_path.write_text(json.dumps(geometry_config), encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["vta_config.py", "--use-cfg", str(config_path), "--target"],
+    )
+
+    with pytest.raises(ValueError, match=r"Legacy TARGET=.*VTA_BACKEND"):
+        config_tool.main()
+
+
+def test_chisel_properties_normalize_shared_geometry(tmp_path, geometry_config):
+    config_tool = _load_config_tool()
+    properties_path = tmp_path / "vta_geometry.properties"
+
+    config_tool.write_chisel_properties(properties_path, geometry_config)
+
+    properties = dict(
+        line.split("=", 1)
+        for line in properties_path.read_text(encoding="ascii").splitlines()
+        if line and not line.startswith("#")
+    )
+    assert properties == {
+        "BATCH": "1",
+        "BLOCK_IN": "8",
+        "BLOCK_OUT": "8",
+        "INP_BITS": "8",
+        "WGT_BITS": "8",
+        "ACC_BITS": "32",
+        "OUT_BITS": "8",
+        "UOP_MEM_DEPTH": "4096",
+        "INP_MEM_DEPTH": "1024",
+        "WGT_MEM_DEPTH": "256",
+        "ACC_MEM_DEPTH": "1024",
+        "OUT_MEM_DEPTH": "1024",
+        "INST_QUEUE_ENTRIES": "512",
+    }

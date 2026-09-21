@@ -53,6 +53,21 @@ GEOMETRY_CONFIG_KEYS = (
     "LOG_WGT_BUFF_SIZE",
     "LOG_ACC_BUFF_SIZE",
 )
+CHISEL_PROPERTY_KEYS = (
+    "BATCH",
+    "BLOCK_IN",
+    "BLOCK_OUT",
+    "INP_BITS",
+    "WGT_BITS",
+    "ACC_BITS",
+    "OUT_BITS",
+    "UOP_MEM_DEPTH",
+    "INP_MEM_DEPTH",
+    "WGT_MEM_DEPTH",
+    "ACC_MEM_DEPTH",
+    "OUT_MEM_DEPTH",
+    "INST_QUEUE_ENTRIES",
+)
 
 
 class VTAConfigError(ValueError):
@@ -94,6 +109,58 @@ def validate_geometry_config(cfg):
             "Missing VTA geometry config fields: {}".format(", ".join(missing))
         )
     return cfg
+
+
+def normalized_chisel_properties(cfg):
+    """Return the normalized CoreParams consumed by TSIM Chisel generation."""
+    validate_geometry_config(cfg)
+    batch = 1 << cfg["LOG_BATCH"]
+    block = 1 << cfg["LOG_BLOCK"]
+    inp_bits = 1 << cfg["LOG_INP_WIDTH"]
+    wgt_bits = 1 << cfg["LOG_WGT_WIDTH"]
+    acc_bits = 1 << cfg["LOG_ACC_WIDTH"]
+    out_bits = inp_bits
+    inp_mem_bits = batch * block * inp_bits
+    wgt_mem_bits = block * block * wgt_bits
+    acc_mem_bits = block * acc_bits
+    out_mem_bits = batch * block * out_bits
+    out_log_size = (
+        cfg["LOG_ACC_BUFF_SIZE"]
+        + cfg["LOG_INP_WIDTH"]
+        - cfg["LOG_ACC_WIDTH"]
+    )
+
+    def depth(log_size, element_bits):
+        return (1 << log_size) * 8 // element_bits
+
+    return {
+        "BATCH": batch,
+        "BLOCK_IN": block,
+        "BLOCK_OUT": block,
+        "INP_BITS": inp_bits,
+        "WGT_BITS": wgt_bits,
+        "ACC_BITS": acc_bits,
+        "OUT_BITS": out_bits,
+        "UOP_MEM_DEPTH": 1 << cfg["LOG_UOP_BUFF_SIZE"],
+        "INP_MEM_DEPTH": depth(cfg["LOG_INP_BUFF_SIZE"], inp_mem_bits),
+        "WGT_MEM_DEPTH": depth(cfg["LOG_WGT_BUFF_SIZE"], wgt_mem_bits),
+        "ACC_MEM_DEPTH": depth(cfg["LOG_ACC_BUFF_SIZE"], acc_mem_bits),
+        "OUT_MEM_DEPTH": depth(out_log_size, out_mem_bits),
+        "INST_QUEUE_ENTRIES": 512,
+    }
+
+
+def write_chisel_properties(path, cfg):
+    """Write normalized CoreParams for the TSIM Chisel generator."""
+    properties = normalized_chisel_properties(cfg)
+    output_path = os.path.abspath(os.path.expanduser(str(path)))
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    with open(output_path, "w", encoding="ascii", newline="\n") as output_file:
+        output_file.write("# Generated from the shared VTA geometry config.\n")
+        for key in CHISEL_PROPERTY_KEYS:
+            output_file.write("{}={}\n".format(key, properties[key]))
 
 
 def load_geometry_config(path, backend=None):
@@ -262,6 +329,8 @@ def main():
                         help="print the canonical VTA ABI fingerprint")
     parser.add_argument("--backend-contract", action="store_true",
                         help="reject legacy simulator TARGET fields")
+    parser.add_argument("--chisel-properties", type=str, default="",
+                        help="write normalized CoreParams for Chisel TSIM generation")
     parser.add_argument("--abi-header", type=str, default="",
                         help="write the canonical VTA ABI header")
     parser.add_argument("--get-inp-mem-banks", action="store_true",
@@ -339,8 +408,14 @@ def main():
     if not ok_path_list:
         raise RuntimeError("Cannot find config in %s" % str(path_list))
 
-    cfg = json.load(open(ok_path_list[0]))
-    if args.backend_contract:
+    with open(ok_path_list[0], encoding="utf-8") as config_file:
+        cfg = json.load(config_file)
+    # Legacy simulator targets are never accepted by the canonical CLI path.
+    # --backend-contract remains as an explicit request for full geometry
+    # validation by existing callers, but is no longer required for migration.
+    if cfg.get("TARGET") in LEGACY_SIMULATOR_TARGETS:
+        validate_geometry_config(cfg)
+    if args.backend_contract or args.chisel_properties:
         validate_geometry_config(cfg)
     pkg = pkg_config(cfg)
 
@@ -377,6 +452,9 @@ def main():
 
         if args.abi_header:
             write_abi_header(args.abi_header, definitions)
+
+    if args.chisel_properties:
+        write_chisel_properties(args.chisel_properties, cfg)
 
     if args.get_inp_mem_banks:
         print(pkg.inp_mem_banks)
