@@ -22,7 +22,9 @@ package unittest
 import chisel3._
 import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
+import vta.DefaultTsimConfig
 import vta.core._
+import vta.shell._
 import vta.util.config._
 
 class AluDecodeProbe(implicit p: Parameters) extends Module {
@@ -49,6 +51,42 @@ class UopDecodeProbe(implicit p: Parameters) extends Module {
   io.u2 := dec.u2
 }
 
+class MemDecodeProbe extends Module {
+  val io = IO(new Bundle {
+    val inst = Input(UInt(128.W))
+    val id = Output(UInt(3.W))
+    val sramOffset = Output(UInt(16.W))
+    val dramOffset = Output(UInt(32.W))
+    val xsize = Output(UInt(16.W))
+    val xstride = Output(UInt(16.W))
+  })
+  val dec = io.inst.asTypeOf(new MemDecode)
+  io.id := dec.id
+  io.sramOffset := dec.sram_offset
+  io.dramOffset := dec.dram_offset
+  io.xsize := dec.xsize
+  io.xstride := dec.xstride
+}
+
+class GemmDecodeProbe(implicit p: Parameters) extends Module {
+  val io = IO(new Bundle {
+    val inst = Input(UInt(128.W))
+    val uopBegin = Output(UInt(InstructionLayout.uopIndexBits(p).W))
+    val uopEnd = Output(UInt(InstructionLayout.uopEndBits(p).W))
+    val lp0 = Output(UInt(14.W))
+    val acc0 = Output(UInt(InstructionLayout.accIndexBits(p).W))
+    val inp0 = Output(UInt(InstructionLayout.inpIndexBits(p).W))
+    val wgt0 = Output(UInt(InstructionLayout.wgtIndexBits(p).W))
+  })
+  val dec = io.inst.asTypeOf(new GemmDecode)
+  io.uopBegin := dec.uop_begin
+  io.uopEnd := dec.uop_end
+  io.lp0 := dec.lp_0
+  io.acc0 := dec.acc_0
+  io.inp0 := dec.inp_0
+  io.wgt0 := dec.wgt_0
+}
+
 class FetchDecodeTest extends AnyFlatSpec with ChiselScalatestTester {
   private implicit val p: Parameters = new GeometryCoreConfig
   private val instBits = 128
@@ -72,6 +110,8 @@ class FetchDecodeTest extends AnyFlatSpec with ChiselScalatestTester {
   private val aluMul = 4
   // VTAAluInsn.alu_opcode follows the C ABI layout for vta_64mac.json.
   private val aluOpcodeLsb = 104
+  private val expectedUopIndexBits = log2Ceil(p(CoreKey).uopMemDepth)
+  private val expectedUopEndBits = expectedUopIndexBits + 1
 
   private def withField(inst: BigInt, value: Int, lsb: Int, width: Int): BigInt = {
     val mask = (BigInt(1) << width) - 1
@@ -114,6 +154,50 @@ class FetchDecodeTest extends AnyFlatSpec with ChiselScalatestTester {
       c.io.u0.expect(0x155.U)
       c.io.u1.expect(0x2aa.U)
       c.io.u2.expect(0x5a.U)
+    }
+  }
+
+  it should "treat uop memory depth as an element count for instruction fields" in {
+    assert(InstructionLayout.uopIndexBits(p) == expectedUopIndexBits)
+
+    val defaultCore = new CoreConfig
+    assert(InstructionLayout.uopIndexBits(defaultCore) ==
+      log2Ceil(defaultCore(CoreKey).uopMemDepth))
+  }
+
+  it should "preserve MemDecode field positions for downstream consumers" in {
+    test(new MemDecodeProbe) { c =>
+      val inst = instruction(taskLoad,
+        (memIdInput, 7, 3),
+        (0x1357, 10, 16),
+        (0x2468ace0, 26, 32),
+        (0xabcd, 80, 16),
+        (0x1234, 96, 16))
+      c.io.inst.poke(inst.U(instBits.W))
+      c.io.id.expect(memIdInput.U)
+      c.io.sramOffset.expect(0x1357.U)
+      c.io.dramOffset.expect(0x2468ace0L.U)
+      c.io.xsize.expect(0xabcd.U)
+      c.io.xstride.expect(0x1234.U)
+    }
+  }
+
+  it should "preserve GemmDecode low and payload field positions" in {
+    test(new GemmDecodeProbe) { c =>
+      val inst = instruction(taskGemm,
+        (0xabc, 8, expectedUopIndexBits),
+        (0x1555, 20, expectedUopEndBits),
+        (0x1234, 33, 14),
+        (0x15, 64, InstructionLayout.accIndexBits(p)),
+        (0x2a, 84, InstructionLayout.inpIndexBits(p)),
+        (0x35, 104, InstructionLayout.wgtIndexBits(p)))
+      c.io.inst.poke(inst.U(instBits.W))
+      c.io.uopBegin.expect(0xabc.U)
+      c.io.uopEnd.expect(0x1555.U)
+      c.io.lp0.expect(0x1234.U)
+      c.io.acc0.expect(0x15.U)
+      c.io.inp0.expect(0x2a.U)
+      c.io.wgt0.expect(0x35.U)
     }
   }
 
@@ -160,6 +244,40 @@ class FetchDecodeTest extends AnyFlatSpec with ChiselScalatestTester {
       expectRoute(c,
         instruction(taskAlu, (5, aluOpcodeLsb, 3), (0x4567, 108, 16)),
         load = false, compute = false, store = false)
+    }
+  }
+
+  it should "elaborate the 64-bit fetch path with the shared decoder" in {
+    test(new Fetch64Bit()(new DefaultTsimConfig)) { c =>
+      c.io.launch.poke(false.B)
+      c.io.ins_baddr.poke(0.U)
+      c.io.ins_count.poke(0.U)
+      c.io.vme_rd.cmd.ready.poke(false.B)
+      c.io.vme_rd.data.valid.poke(false.B)
+      c.io.inst.ld.ready.poke(false.B)
+      c.io.inst.co.ready.poke(false.B)
+      c.io.inst.st.ready.poke(false.B)
+      c.clock.step()
+    }
+  }
+
+  it should "elaborate the wide-VME fetch path with the shared decoder" in {
+    val baseParams = new DefaultTsimConfig
+    val wideParams = baseParams.alterPartial {
+      case ShellKey =>
+        val shell = baseParams(ShellKey)
+        shell.copy(memParams = shell.memParams.copy(dataBits = 128))
+    }
+    test(new FetchWideVME()(wideParams)) { c =>
+      c.io.launch.poke(false.B)
+      c.io.ins_baddr.poke(0.U)
+      c.io.ins_count.poke(0.U)
+      c.io.vme_rd.cmd.ready.poke(false.B)
+      c.io.vme_rd.data.valid.poke(false.B)
+      c.io.inst.ld.ready.poke(false.B)
+      c.io.inst.co.ready.poke(false.B)
+      c.io.inst.st.ready.poke(false.B)
+      c.clock.step()
     }
   }
 }
