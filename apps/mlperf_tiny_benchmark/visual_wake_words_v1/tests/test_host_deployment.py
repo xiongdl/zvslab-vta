@@ -36,7 +36,7 @@ RUNTIME_PATH = APP_ROOT / "runtime.py"
 RUN_PATH = APP_ROOT / "run.py"
 MODEL_PATH = APP_ROOT / "model" / "vww_96_float.tflite"
 MANIFEST_PATH = APP_ROOT / "samples" / "manifest.json"
-EXPECTED_VTA_SYMBOLS = tuple(f"tvmgen_mlperf_vww_vta_main_{index}" for index in range(12))
+EXPECTED_VTA_SYMBOLS = tuple(f"tvmgen_mlperf_vww_vta_main_{index}" for index in range(13))
 EXPECTED_ARTIFACT_DIRS = ("reference", "mixed")
 REQUIRED_PROFILER_COUNTERS = ("gemm_counter", "wgt_load_nbytes", "out_store_nbytes")
 

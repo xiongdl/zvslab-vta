@@ -43,7 +43,7 @@ EXPECTED_TFLITE_OPERATORS = tuple(
     for name in ("CONV_2D", "DEPTHWISE_CONV_2D")
 ) + ("CONV_2D", "AVERAGE_POOL_2D", "RESHAPE", "FULLY_CONNECTED", "SOFTMAX")
 EXPECTED_CONV_CHANNELS = (8, 16, 32, 32, 64, 64, 128, 128, 128, 128, 128, 128, 256, 256)
-EXPECTED_VTA_SYMBOLS = tuple(f"tvmgen_mlperf_vww_vta_main_{index}" for index in range(12))
+EXPECTED_VTA_SYMBOLS = tuple(f"tvmgen_mlperf_vww_vta_main_{index}" for index in range(13))
 REQUIRED_HOST_OPERATORS = frozenset(
     {"nn.avg_pool2d", "nn.conv2d", "nn.dense", "nn.softmax", "reshape"}
 )
@@ -255,7 +255,7 @@ def _composite_names(function):
 
 
 def inspect_partitioning(reference_module, mixed_module):
-    """Validate and summarize the exact twelve-region VTA routing contract."""
+    """Validate and summarize the exact thirteen-region VTA routing contract."""
     if _count_operator(reference_module["main"], "nn.conv2d") != 27:
         raise ValueError("quantized reference must contain exactly twenty-seven convolutions")
 
@@ -283,18 +283,18 @@ def inspect_partitioning(reference_module, mixed_module):
     )
     if summary.symbols != EXPECTED_VTA_SYMBOLS:
         raise ValueError(f"unexpected VTA symbols: {summary.symbols}")
-    if summary.convolutions_per_partition != (1,) * 12:
+    if summary.convolutions_per_partition != (1,) * 13:
         raise ValueError(
             f"each VTA partition must contain one convolution: {summary.convolutions_per_partition}"
         )
-    if summary.host_convolution_count != 15 or summary.host_depthwise_count != 13:
+    if summary.host_convolution_count != 14 or summary.host_depthwise_count != 13:
         raise ValueError(
             "the first pointwise convolution and all thirteen depthwise convolutions must remain on host"
         )
     if not REQUIRED_HOST_OPERATORS <= set(summary.host_operator_names):
         missing = sorted(REQUIRED_HOST_OPERATORS - set(summary.host_operator_names))
         raise ValueError(f"mixed main is missing required host operators: {missing}")
-    if len(summary.composite_names) != 12 or not all(
+    if len(summary.composite_names) != 13 or not all(
         name.startswith("vta.") for name in summary.composite_names
     ):
         raise ValueError(f"unexpected VTA composites: {summary.composite_names}")

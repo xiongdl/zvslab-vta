@@ -29,7 +29,7 @@ import pytest
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_PATH = APP_ROOT / "runtime.py"
-EXPECTED_VTA_SYMBOLS = tuple(f"tvmgen_mlperf_vww_vta_main_{index}" for index in range(12))
+EXPECTED_VTA_SYMBOLS = tuple(f"tvmgen_mlperf_vww_vta_main_{index}" for index in range(13))
 
 
 def _load_runtime():
@@ -183,7 +183,7 @@ def test_tsim_matrix_result_records_simulator_and_is_frozen(deployment_runtime, 
 def test_tsim_matrix_contract_has_ten_comparisons_and_positive_cycles(deployment_runtime):
     """Run the complete ten-sample TSIM matrix under vta_64mac.json geometry."""
     result = deployment_runtime.deploy_tsim_matrix(APP_ROOT / "build" / "test-tsim")
-    assert len(result.prepared.routing.symbols) == 12
+    assert len(result.prepared.routing.symbols) == 13
     assert len(result.artifacts) == 2
     assert all(len(execution.comparisons) == 10 for execution in result.executions)
     assert all(

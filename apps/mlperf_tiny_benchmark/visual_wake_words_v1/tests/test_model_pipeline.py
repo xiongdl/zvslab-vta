@@ -39,7 +39,7 @@ EXPECTED_TFLITE_OPERATORS = tuple(
     for name in ("CONV_2D", "DEPTHWISE_CONV_2D")
 ) + ("CONV_2D", "AVERAGE_POOL_2D", "RESHAPE", "FULLY_CONNECTED", "SOFTMAX")
 EXPECTED_CONV_CHANNELS = (8, 16, 32, 32, 64, 64, 128, 128, 128, 128, 128, 128, 256, 256)
-EXPECTED_VTA_SYMBOLS = tuple(f"tvmgen_mlperf_vww_vta_main_{index}" for index in range(12))
+EXPECTED_VTA_SYMBOLS = tuple(f"tvmgen_mlperf_vww_vta_main_{index}" for index in range(13))
 REQUIRED_HOST_OPERATORS = {
     "nn.avg_pool2d",
     "nn.conv2d",
@@ -172,7 +172,7 @@ def test_prepare_forks_reference_and_mixed_from_one_quantized_module(model_pipel
     ]
 
 
-def test_real_quantized_partition_has_exact_deterministic_twelve_region_routing(model_pipeline):
+def test_real_quantized_partition_has_exact_deterministic_thirteen_region_routing(model_pipeline):
     import tvm
 
     first = model_pipeline.prepare_model(MODEL_PATH)
@@ -182,12 +182,12 @@ def test_real_quantized_partition_has_exact_deterministic_twelve_region_routing(
     assert tvm.ir.structural_equal(first.mixed_module, second.mixed_module)
     assert first.routing == second.routing
     assert first.routing.symbols == EXPECTED_VTA_SYMBOLS
-    assert first.routing.convolutions_per_partition == (1,) * 12
-    assert first.routing.host_convolution_count == 15
+    assert first.routing.convolutions_per_partition == (1,) * 13
+    assert first.routing.host_convolution_count == 14
     assert first.routing.host_depthwise_count == 13
     assert REQUIRED_HOST_OPERATORS <= set(first.routing.host_operator_names)
     assert all(name.startswith("vta.") for name in first.routing.composite_names)
-    assert len(first.routing.composite_names) == 12
+    assert len(first.routing.composite_names) == 13
 
 
 def test_sample_preprocessing_is_exact_rgb_float32_divided_by_255(model_pipeline):
