@@ -32,11 +32,11 @@ CENTRAL_MEL_END = 250
 VTA_BLOCK_IN = int(vta.get_env().BLOCK_IN)
 VTA_BLOCK_OUT = int(vta.get_env().BLOCK_OUT)
 EXPECTED_VTA_SYMBOLS = tuple(
-    f"tvmgen_mlperf_anomaly_vta_main_{index}" for index in range(7)
+    f"tvmgen_mlperf_anomaly_vta_main_{index}" for index in range(9)
 )
 EXPECTED_TFLITE_OPERATORS = ("FULLY_CONNECTED",) * 10
 REQUIRED_HOST_OPERATORS = frozenset(
-    {"nn.bias_add", "nn.dense", "nn.relu", "nn.conv2d", "reshape"}
+    {"nn.bias_add", "nn.relu", "nn.conv2d", "reshape"}
 )
 
 
@@ -316,9 +316,9 @@ def _dense_output_shapes(function):
 
 
 def inspect_partitioning(reference_module, mixed_module):
-    """Validate and summarize the exact seven-region VTA routing contract."""
-    if _count_operator(reference_module["main"], "nn.conv2d") != 8:
-        raise ValueError("quantized reference must contain exactly eight convolutions")
+    """Validate and summarize the exact nine-region VTA routing contract."""
+    if _count_operator(reference_module["main"], "nn.conv2d") != 10:
+        raise ValueError("quantized reference must contain exactly ten convolutions")
 
     external = []
     for global_var, function in mixed_module.functions.items():
@@ -346,18 +346,18 @@ def inspect_partitioning(reference_module, mixed_module):
     )
     if summary.symbols != EXPECTED_VTA_SYMBOLS:
         raise ValueError(f"unexpected VTA symbols: {summary.symbols}")
-    if summary.convolutions_per_partition != (1,) * 7:
+    if summary.convolutions_per_partition != (1,) * 9:
         raise ValueError(
             f"each VTA partition must contain one convolution: {summary.convolutions_per_partition}"
         )
-    if summary.host_convolution_count != 1 or summary.host_dense_count != 2:
+    if summary.host_convolution_count != 1 or summary.host_dense_count != 0:
         raise ValueError(
-            "the skipped first convolution and the two bottleneck dense layers must remain on host"
+            "the skipped first convolution must remain on host and no dense layers may remain"
         )
     if not REQUIRED_HOST_OPERATORS <= set(summary.host_operator_names):
         missing = sorted(REQUIRED_HOST_OPERATORS - set(summary.host_operator_names))
         raise ValueError(f"mixed main is missing required host operators: {missing}")
-    if len(summary.composite_names) != 7 or not all(
+    if len(summary.composite_names) != 9 or not all(
         name.startswith("vta.") for name in summary.composite_names
     ):
         raise ValueError(f"unexpected VTA composites: {summary.composite_names}")

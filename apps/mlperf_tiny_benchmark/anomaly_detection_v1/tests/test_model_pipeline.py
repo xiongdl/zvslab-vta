@@ -18,7 +18,7 @@ SAMPLE_PATH = APP_ROOT / "samples" / "normal_id_01_00000000.wav"
 MODEL_SHA256 = "c66636f4d7f8af8b10518e7be750a22c9d8d46ec97326b40b0d94c097e0aad9b"
 EXPECTED_TFLITE_OPERATORS = ("FULLY_CONNECTED",) * 10
 EXPECTED_VTA_SYMBOLS = tuple(
-    f"tvmgen_mlperf_anomaly_vta_main_{index}" for index in range(7)
+    f"tvmgen_mlperf_anomaly_vta_main_{index}" for index in range(9)
 )
 
 
@@ -83,8 +83,8 @@ def test_rewrite_converts_only_block_compatible_dense_layers(model_pipeline):
     imported = model_pipeline.import_float_model(MODEL_PATH)
     rewritten = model_pipeline.rewrite_dense_layers(imported.module)
     main = rewritten["main"]
-    assert model_pipeline._count_operator(main, "nn.dense") == 2
-    assert model_pipeline._count_operator(main, "nn.conv2d") == 8
+    assert model_pipeline._count_operator(main, "nn.dense") == 0
+    assert model_pipeline._count_operator(main, "nn.conv2d") == 10
     assert model_pipeline._count_operator(main, "nn.bias_add") == 10
     assert model_pipeline._count_operator(main, "nn.relu") == 9
 
@@ -171,17 +171,18 @@ def test_prepare_forks_reference_and_mixed_from_one_quantized_module(model_pipel
     ]
 
 
-def test_real_quantized_partition_has_exact_seven_region_routing(model_pipeline):
+def test_real_quantized_partition_has_exact_nine_region_routing(model_pipeline):
     first = model_pipeline.prepare_model(MODEL_PATH)
     second = model_pipeline.prepare_model(MODEL_PATH)
     assert first.routing == second.routing
+    assert model_pipeline._count_operator(first.quantized_module["main"], "nn.conv2d") == 10
     assert first.routing.symbols == EXPECTED_VTA_SYMBOLS
-    assert first.routing.convolutions_per_partition == (1,) * 7
+    assert first.routing.convolutions_per_partition == (1,) * 9
     assert first.routing.host_convolution_count == 1
-    assert first.routing.host_dense_count == 2
-    assert first.routing.host_bottleneck_shapes == ((1, 8), (1, 128))
+    assert first.routing.host_dense_count == 0
+    assert first.routing.host_bottleneck_shapes == ()
     assert all(name.startswith("vta.") for name in first.routing.composite_names)
-    assert len(first.routing.composite_names) == 7
+    assert len(first.routing.composite_names) == 9
 
 
 def test_model_pipeline_has_no_librosa_or_local_environment_dependency():
