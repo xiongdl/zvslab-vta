@@ -22,6 +22,11 @@ DMLC_CORE=${TVM_PATH}/3rdparty/dmlc-core
 PYTHON ?= $(abspath ../../../.envs/tvm-vta-env/bin/python)
 VTA_CONFIG_FILE ?= $(VTA_PATH)/config/vta_64mac.json
 VTA_BACKEND ?= fsim
+ifeq ($(shell uname -s),Darwin)
+LIB_SUFFIX=dylib
+else
+LIB_SUFFIX=so
+endif
 
 ifeq ($(VTA_BACKEND),fsim)
 	VTA_LIB=vta_fsim
@@ -54,9 +59,9 @@ all:./build/deploy copylib
 ./build/model/lib.so: ./build/model/lib.o
 	$(CXX) $(PKG_CFLAGS) -o $@  $^ $(PKG_LDFLAGS) -shared
 
-copylib: ${TVM_PATH}/build/libtvm_runtime.so ${VTA_PATH}/build/lib${VTA_LIB}.so
-	@cp ${TVM_PATH}/build/libtvm_runtime.so ./build
-	@cp ${VTA_PATH}/build/lib${VTA_LIB}.so ./build
+copylib: ${TVM_PATH}/build/libtvm_runtime.${LIB_SUFFIX} ${VTA_PATH}/build/lib${VTA_LIB}.${LIB_SUFFIX}
+	@cp ${TVM_PATH}/build/libtvm_runtime.${LIB_SUFFIX} ./build
+	@cp ${VTA_PATH}/build/lib${VTA_LIB}.${LIB_SUFFIX} ./build
 
 clean:
 	rm -rf  ./build/*.o ./build/deploy

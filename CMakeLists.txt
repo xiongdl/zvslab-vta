@@ -4,7 +4,7 @@ project(vta LANGUAGES CXX)
 
 set(TVM_PATH "" CACHE PATH "Path to the TVM source tree")
 set(VTA_PATH "${CMAKE_CURRENT_SOURCE_DIR}" CACHE PATH "Path to the VTA source tree")
-set(VTA_CONFIG_FILE "${VTA_PATH}/config/vta_config.json" CACHE STRING
+set(VTA_CONFIG_FILE "${VTA_PATH}/config/vta_64mac.json" CACHE STRING
     "Path to the VTA configuration JSON file")
 set(VTA_BACKEND "all" CACHE STRING "VTA backend to build: fsim, tsim, or all")
 

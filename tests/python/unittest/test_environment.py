@@ -40,7 +40,7 @@ def test_default_config_path(monkeypatch):
     monkeypatch.delenv("VTA_CONFIG_FILE", raising=False)
 
     assert get_vta_config_path() == os.path.join(
-        get_vta_hw_path(), "config", "vta_config.json"
+        get_vta_hw_path(), "config", "vta_64mac.json"
     )
 
 
