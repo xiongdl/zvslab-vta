@@ -186,15 +186,15 @@ class FetchDecodeTest extends AnyFlatSpec with ChiselScalatestTester {
   it should "preserve GemmDecode low and payload field positions" in {
     test(new GemmDecodeProbe) { c =>
       val inst = instruction(taskGemm,
-        (0xabc, 8, expectedUopIndexBits),
-        (0x1555, 20, expectedUopEndBits),
-        (0x1234, 33, 14),
+        (0x2bc, 8, expectedUopIndexBits),
+        (0x555, 8 + expectedUopIndexBits, expectedUopEndBits),
+        (0x1234, 8 + expectedUopIndexBits + expectedUopEndBits, 14),
         (0x15, 64, InstructionLayout.accIndexBits(p)),
         (0x2a, 84, InstructionLayout.inpIndexBits(p)),
         (0x35, 104, InstructionLayout.wgtIndexBits(p)))
       c.io.inst.poke(inst.U(instBits.W))
-      c.io.uopBegin.expect(0xabc.U)
-      c.io.uopEnd.expect(0x1555.U)
+      c.io.uopBegin.expect(0x2bc.U)
+      c.io.uopEnd.expect(0x555.U)
       c.io.lp0.expect(0x1234.U)
       c.io.acc0.expect(0x15.U)
       c.io.inp0.expect(0x2a.U)

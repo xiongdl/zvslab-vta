@@ -50,6 +50,8 @@ class CoreConfig extends Config((site, here, up) => {
 
 /** Core parameters normalized from the shared geometry-only VTA config. */
 object GeometryCoreParams {
+  private val uopBitsValue = 32
+
   private lazy val properties = {
     val path = sys.props.getOrElse(
       "vta.geometry.properties",
@@ -74,6 +76,15 @@ object GeometryCoreParams {
     }
   }
 
+  // The shared geometry property is the VTA uop buffer capacity in bytes;
+  // CoreParams stores every memory depth as a count of elements.
+  private def uopMemDepthElements: Int = {
+    val capacityBytes = int("UOP_MEM_DEPTH")
+    require(capacityBytes % (uopBitsValue / 8) == 0,
+      "TSIM uop memory capacity must be divisible by the uop size")
+    capacityBytes / (uopBitsValue / 8)
+  }
+
   def core: CoreParams = CoreParams(
     batch = int("BATCH"),
     blockOut = int("BLOCK_OUT"),
@@ -81,10 +92,10 @@ object GeometryCoreParams {
     blockIn = int("BLOCK_IN"),
     inpBits = int("INP_BITS"),
     wgtBits = int("WGT_BITS"),
-    uopBits = 32,
+    uopBits = uopBitsValue,
     accBits = int("ACC_BITS"),
     outBits = int("OUT_BITS"),
-    uopMemDepth = int("UOP_MEM_DEPTH"),
+    uopMemDepth = uopMemDepthElements,
     inpMemDepth = int("INP_MEM_DEPTH"),
     wgtMemDepth = int("WGT_MEM_DEPTH"),
     accMemDepth = int("ACC_MEM_DEPTH"),
