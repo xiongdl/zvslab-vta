@@ -22,6 +22,7 @@ package vta.core
 import chisel3._
 import chisel3.util._
 import scala.collection.mutable.HashMap
+import vta.util.config._
 
 /** ISAConstants.
  *
@@ -40,13 +41,7 @@ trait ISAConstants {
   val M_STRIDE_BITS = 16
   val M_PAD_BITS = 4
 
-  val C_UOP_BGN_BITS = 13
-  val C_UOP_END_BITS = 14
   val C_ITER_BITS = 14
-  val C_AIDX_BITS = 11
-  val C_IIDX_BITS = 11
-  val C_WIDX_BITS = 10
-  val C_ALU_DEC_BITS = 2
   val C_ALU_OP_BITS = 3
   val C_ALU_IMM_BITS = 16
 
@@ -68,6 +63,56 @@ trait ISAConstants {
   val M_ID_I = 2.asUInt(M_ID_BITS.W)
   val M_ID_A = 3.asUInt(M_ID_BITS.W)
   val M_ID_O = 4.asUInt(M_ID_BITS.W)
+  val M_ID_A_8BIT = 5.asUInt(M_ID_BITS.W)
+}
+
+/** Geometry-dependent instruction field widths and offsets from hw_spec.h. */
+object InstructionLayout {
+  private val depBits = 4
+  private val resetBits = 1
+
+  def uopIndexBits(p: Parameters): Int = {
+    val core = p(CoreKey)
+    log2Ceil(core.uopMemDepth / (core.uopBits / 8))
+  }
+
+  def uopDstBits(p: Parameters): Int = log2Ceil(p(CoreKey).accMemDepth)
+  def uopSrcBits(p: Parameters): Int =
+    log2Ceil(math.max(p(CoreKey).accMemDepth, p(CoreKey).inpMemDepth))
+  def uopWgtBits(p: Parameters): Int = log2Ceil(p(CoreKey).wgtMemDepth)
+  def uopHighPaddingBits(p: Parameters): Int =
+    p(CoreKey).uopBits - uopDstBits(p) - uopSrcBits(p) - uopWgtBits(p)
+
+  def uopEndBits(p: Parameters): Int = uopIndexBits(p) + 1
+  def accIndexBits(p: Parameters): Int = log2Ceil(p(CoreKey).accMemDepth)
+  def inpIndexBits(p: Parameters): Int = log2Ceil(p(CoreKey).inpMemDepth)
+  def wgtIndexBits(p: Parameters): Int = log2Ceil(p(CoreKey).wgtMemDepth)
+  // VTAMemInsn starts y_size at the next uint64_t bitfield storage unit.
+  def memMidPaddingBits: Int = 64 - (OP_BITS + M_DEP_BITS + M_ID_BITS +
+    M_SRAM_OFFSET_BITS + M_DRAM_OFFSET_BITS)
+
+  /** C uint64_t bitfields resume at the next storage unit after iter_in. */
+  def midPaddingBits(p: Parameters): Int = {
+    val prefix = OP_BITS + depBits + resetBits + uopIndexBits(p) +
+      uopEndBits(p) + 2 * C_ITER_BITS
+    (64 - (prefix % 64)) % 64
+  }
+
+  def gemmHighPaddingBits(p: Parameters): Int = {
+    val payload = 2 * wgtIndexBits(p) + 2 * inpIndexBits(p) + 2 * accIndexBits(p)
+    INST_BITS - (lowPrefixBits(p) + midPaddingBits(p) + payload)
+  }
+
+  def aluHighPaddingBits(p: Parameters): Int = {
+    val payload = 4 * accIndexBits(p) + C_ALU_OP_BITS + 1 + C_ALU_IMM_BITS
+    INST_BITS - (lowPrefixBits(p) + midPaddingBits(p) + payload)
+  }
+
+  def aluOpcodeLsb(p: Parameters): Int =
+    lowPrefixBits(p) + midPaddingBits(p) + 4 * accIndexBits(p)
+
+  private def lowPrefixBits(p: Parameters): Int =
+    OP_BITS + depBits + resetBits + uopIndexBits(p) + uopEndBits(p) + 2 * C_ITER_BITS
 }
 
 /** ISA.

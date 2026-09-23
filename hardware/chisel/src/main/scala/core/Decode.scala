@@ -21,6 +21,7 @@ package vta.core
 
 import chisel3._
 import chisel3.util._
+import vta.util.config._
 
 import ISA._
 
@@ -43,7 +44,7 @@ class MemDecode extends Bundle {
   val xstride = UInt(M_STRIDE_BITS.W)
   val xsize = UInt(M_SIZE_BITS.W)
   val ysize = UInt(M_SIZE_BITS.W)
-  val empty_0 = UInt(6.W) // derive this
+  val empty_0 = UInt(InstructionLayout.memMidPaddingBits.W)
   val dram_offset = UInt(M_DRAM_OFFSET_BITS.W)
   val sram_offset = UInt(M_SRAM_OFFSET_BITS.W)
   val id = UInt(M_ID_BITS.W)
@@ -59,18 +60,19 @@ class MemDecode extends Bundle {
  * Decode GEMM instruction with a Bundle. This is similar to an union,
  * therefore order matters when declaring fields.
  */
-class GemmDecode extends Bundle {
-  val wgt_1 = UInt(C_WIDX_BITS.W)
-  val wgt_0 = UInt(C_WIDX_BITS.W)
-  val inp_1 = UInt(C_IIDX_BITS.W)
-  val inp_0 = UInt(C_IIDX_BITS.W)
-  val acc_1 = UInt(C_AIDX_BITS.W)
-  val acc_0 = UInt(C_AIDX_BITS.W)
-  val empty_0 = Bool()
+class GemmDecode(implicit p: Parameters) extends Bundle {
+  val empty_1 = UInt(InstructionLayout.gemmHighPaddingBits(p).W)
+  val wgt_1 = UInt(InstructionLayout.wgtIndexBits(p).W)
+  val wgt_0 = UInt(InstructionLayout.wgtIndexBits(p).W)
+  val inp_1 = UInt(InstructionLayout.inpIndexBits(p).W)
+  val inp_0 = UInt(InstructionLayout.inpIndexBits(p).W)
+  val acc_1 = UInt(InstructionLayout.accIndexBits(p).W)
+  val acc_0 = UInt(InstructionLayout.accIndexBits(p).W)
+  val empty_0 = UInt(InstructionLayout.midPaddingBits(p).W)
   val lp_1 = UInt(C_ITER_BITS.W)
   val lp_0 = UInt(C_ITER_BITS.W)
-  val uop_end = UInt(C_UOP_END_BITS.W)
-  val uop_begin = UInt(C_UOP_BGN_BITS.W)
+  val uop_end = UInt(InstructionLayout.uopEndBits(p).W)
+  val uop_begin = UInt(InstructionLayout.uopIndexBits(p).W)
   val reset = Bool()
   val push_next = Bool()
   val push_prev = Bool()
@@ -89,19 +91,20 @@ class GemmDecode extends Bundle {
  *   - VADD
  *   - VSHX
  */
-class AluDecode extends Bundle {
+class AluDecode(implicit p: Parameters) extends Bundle {
+  val empty_1 = UInt(InstructionLayout.aluHighPaddingBits(p).W)
   val alu_imm = UInt(C_ALU_IMM_BITS.W)
   val alu_use_imm = Bool()
   val alu_op = UInt(C_ALU_OP_BITS.W)
-  val src_1 = UInt(C_AIDX_BITS.W)
-  val src_0 = UInt(C_AIDX_BITS.W)
-  val dst_1 = UInt(C_AIDX_BITS.W)
-  val dst_0 = UInt(C_AIDX_BITS.W)
-  val empty_0 = Bool()
+  val src_1 = UInt(InstructionLayout.accIndexBits(p).W)
+  val src_0 = UInt(InstructionLayout.accIndexBits(p).W)
+  val dst_1 = UInt(InstructionLayout.accIndexBits(p).W)
+  val dst_0 = UInt(InstructionLayout.accIndexBits(p).W)
+  val empty_0 = UInt(InstructionLayout.midPaddingBits(p).W)
   val lp_1 = UInt(C_ITER_BITS.W)
   val lp_0 = UInt(C_ITER_BITS.W)
-  val uop_end = UInt(C_UOP_END_BITS.W)
-  val uop_begin = UInt(C_UOP_BGN_BITS.W)
+  val uop_end = UInt(InstructionLayout.uopEndBits(p).W)
+  val uop_begin = UInt(InstructionLayout.uopIndexBits(p).W)
   val reset = Bool()
   val push_next = Bool()
   val push_prev = Bool()
@@ -114,17 +117,18 @@ class AluDecode extends Bundle {
  *
  * Decode micro-ops (uops).
  */
-class UopDecode extends Bundle {
-  val u2 = UInt(10.W)
-  val u1 = UInt(11.W)
-  val u0 = UInt(11.W)
+class UopDecode(implicit p: Parameters) extends Bundle {
+  val empty = UInt(InstructionLayout.uopHighPaddingBits(p).W)
+  val u2 = UInt(InstructionLayout.uopWgtBits(p).W)
+  val u1 = UInt(InstructionLayout.uopSrcBits(p).W)
+  val u0 = UInt(InstructionLayout.uopDstBits(p).W)
 }
 
 /** FetchDecode.
  *
  * Partial decoding for dispatching instructions to Load, Compute, and Store.
  */
-class FetchDecode extends Module {
+class FetchDecode(implicit p: Parameters) extends Module {
   val io = IO(new Bundle {
     val inst = Input(UInt(INST_BITS.W))
     val isLoad = Output(Bool())
@@ -133,9 +137,11 @@ class FetchDecode extends Module {
   })
   // Dispatch is based only on the ISA opcode and subtype fields. The rest of
   // the instruction contains payloads consumed by the downstream decoders.
-  val taskOpcode = io.inst(OP_BITS - 1, 0)
-  val memId = io.inst(OP_BITS + M_DEP_BITS + M_ID_BITS - 1, OP_BITS + M_DEP_BITS)
-  val aluId = io.inst(110, 108)
+  val mem = io.inst.asTypeOf(new MemDecode)
+  val alu = io.inst.asTypeOf(new AluDecode)
+  val taskOpcode = mem.op
+  val memId = mem.id
+  val aluId = alu.alu_op
 
   val isLoadOp = taskOpcode === OP_L
   val isStoreOp = taskOpcode === OP_S
@@ -144,21 +150,22 @@ class FetchDecode extends Module {
   val isAluOp = taskOpcode === OP_A
 
   val isInputOrWeight = memId === M_ID_I || memId === M_ID_W
-  val isUopOrAccumulator = memId === M_ID_U || memId === M_ID_A
+  val isUopOrAccumulator = memId === M_ID_U || memId === M_ID_A || memId === M_ID_A_8BIT
   val isOutput = memId === M_ID_O
-  val isSupportedAlu = aluId === 0.U || aluId === 1.U || aluId === 2.U || aluId === 3.U
+  val isStoreSync = memId === M_ID_U && mem.xsize === 0.U
+  val isSupportedAlu = aluId < ALU_OP_NUM.U
 
   io.isLoad := isLoadOp && isInputOrWeight
   io.isCompute := (isLoadOp && isUopOrAccumulator) || isGemmOp || isFinishOp ||
     (isAluOp && isSupportedAlu)
-  io.isStore := isStoreOp && isOutput
+  io.isStore := isStoreOp && (isOutput || isStoreSync)
 }
 
 /** LoadDecode.
  *
  * Decode dependencies, type and sync for Load module.
  */
-class LoadDecode extends Module {
+class LoadDecode(implicit p: Parameters) extends Module {
   val io = IO(new Bundle {
     val inst = Input(UInt(INST_BITS.W))
     val push_next = Output(Bool())
@@ -170,16 +177,16 @@ class LoadDecode extends Module {
   val dec = io.inst.asTypeOf(new MemDecode)
   io.push_next := dec.push_next
   io.pop_next := dec.pop_next
-  io.isInput := io.inst === LINP & dec.xsize =/= 0.U
-  io.isWeight := io.inst === LWGT & dec.xsize =/= 0.U
-  io.isSync := (io.inst === LINP | io.inst === LWGT) & dec.xsize === 0.U
+  io.isInput := dec.op === OP_L && dec.id === M_ID_I && dec.xsize =/= 0.U
+  io.isWeight := dec.op === OP_L && dec.id === M_ID_W && dec.xsize =/= 0.U
+  io.isSync := dec.op === OP_L && (dec.id === M_ID_I || dec.id === M_ID_W) && dec.xsize === 0.U
 }
 
 /** ComputeDecode.
  *
  * Decode dependencies, type and sync for Compute module.
  */
-class ComputeDecode extends Module {
+class ComputeDecode(implicit p: Parameters) extends Module {
   val io = IO(new Bundle {
     val inst = Input(UInt(INST_BITS.W))
     val push_next = Output(Bool())
@@ -194,23 +201,26 @@ class ComputeDecode extends Module {
     val isFinish = Output(Bool())
   })
   val dec = io.inst.asTypeOf(new MemDecode)
+  val alu = io.inst.asTypeOf(new AluDecode)
   io.push_next := dec.push_next
   io.push_prev := dec.push_prev
   io.pop_next := dec.pop_next
   io.pop_prev := dec.pop_prev
-  io.isLoadAcc := io.inst === LACC & dec.xsize =/= 0.U
-  io.isLoadUop := io.inst === LUOP & dec.xsize =/= 0.U
-  io.isSync := (io.inst === LACC | io.inst === LUOP) & dec.xsize === 0.U
-  io.isAlu := io.inst === VMIN | io.inst === VMAX | io.inst === VADD | io.inst === VSHX
-  io.isGemm := io.inst === GEMM
-  io.isFinish := io.inst === FNSH
+  io.isLoadAcc := dec.op === OP_L &&
+    (dec.id === M_ID_A || dec.id === M_ID_A_8BIT) && dec.xsize =/= 0.U
+  io.isLoadUop := dec.op === OP_L && dec.id === M_ID_U && dec.xsize =/= 0.U
+  io.isSync := dec.op === OP_L &&
+    (dec.id === M_ID_A || dec.id === M_ID_A_8BIT || dec.id === M_ID_U) && dec.xsize === 0.U
+  io.isAlu := dec.op === OP_A && alu.alu_op < ALU_OP_NUM.U
+  io.isGemm := dec.op === OP_G
+  io.isFinish := dec.op === OP_F
 }
 
 /** StoreDecode.
  *
  * Decode dependencies, type and sync for Store module.
  */
-class StoreDecode extends Module {
+class StoreDecode(implicit p: Parameters) extends Module {
   val io = IO(new Bundle {
     val inst = Input(UInt(INST_BITS.W))
     val push_prev = Output(Bool())
@@ -221,6 +231,7 @@ class StoreDecode extends Module {
   val dec = io.inst.asTypeOf(new MemDecode)
   io.push_prev := dec.push_prev
   io.pop_prev := dec.pop_prev
-  io.isStore := io.inst === SOUT & dec.xsize =/= 0.U
-  io.isSync := io.inst === SOUT & dec.xsize === 0.U
+  io.isStore := dec.op === OP_S && dec.id === M_ID_O && dec.xsize =/= 0.U
+  io.isSync := dec.op === OP_S && dec.xsize === 0.U &&
+    (dec.id === M_ID_O || dec.id === M_ID_U)
 }
