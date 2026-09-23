@@ -131,30 +131,27 @@ class FetchDecode extends Module {
     val isCompute = Output(Bool())
     val isStore = Output(Bool())
   })
-  val csignals =
-    ListLookup(
-      io.inst,
-      List(N, OP_X),
-      Array(
-        LUOP -> List(Y, OP_G),
-        LWGT -> List(Y, OP_L),
-        LINP -> List(Y, OP_L),
-        LACC -> List(Y, OP_G),
-        SOUT -> List(Y, OP_S),
-        GEMM -> List(Y, OP_G),
-        FNSH -> List(Y, OP_G),
-        VMIN -> List(Y, OP_G),
-        VMAX -> List(Y, OP_G),
-        VADD -> List(Y, OP_G),
-        VSHX -> List(Y, OP_G)
-      )
-    )
+  // Dispatch is based only on the ISA opcode and subtype fields. The rest of
+  // the instruction contains payloads consumed by the downstream decoders.
+  val taskOpcode = io.inst(OP_BITS - 1, 0)
+  val memId = io.inst(OP_BITS + M_DEP_BITS + M_ID_BITS - 1, OP_BITS + M_DEP_BITS)
+  val aluId = io.inst(110, 108)
 
-  val (cs_val_inst: Bool) :: cs_op_type :: Nil = csignals
+  val isLoadOp = taskOpcode === OP_L
+  val isStoreOp = taskOpcode === OP_S
+  val isGemmOp = taskOpcode === OP_G
+  val isFinishOp = taskOpcode === OP_F
+  val isAluOp = taskOpcode === OP_A
 
-  io.isLoad := cs_val_inst & cs_op_type === OP_L
-  io.isCompute := cs_val_inst & cs_op_type === OP_G
-  io.isStore := cs_val_inst & cs_op_type === OP_S
+  val isInputOrWeight = memId === M_ID_I || memId === M_ID_W
+  val isUopOrAccumulator = memId === M_ID_U || memId === M_ID_A
+  val isOutput = memId === M_ID_O
+  val isSupportedAlu = aluId === 0.U || aluId === 1.U || aluId === 2.U || aluId === 3.U
+
+  io.isLoad := isLoadOp && isInputOrWeight
+  io.isCompute := (isLoadOp && isUopOrAccumulator) || isGemmOp || isFinishOp ||
+    (isAluOp && isSupportedAlu)
+  io.isStore := isStoreOp && isOutput
 }
 
 /** LoadDecode.
