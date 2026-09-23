@@ -23,7 +23,11 @@ import chisel3._
 import vta.util.config._
 import vta.shell._
 
-/** Core parameters */
+/** Core parameters.
+ *
+ * Memory depths are expressed in elements, not bytes. In particular,
+ * uopMemDepth counts uops even though each uop occupies uopBits bits.
+ */
 case class CoreParams(
     batch: Int,
     blockOut: Int,

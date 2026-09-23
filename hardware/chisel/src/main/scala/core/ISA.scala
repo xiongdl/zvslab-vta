@@ -71,9 +71,16 @@ object InstructionLayout {
   private val depBits = 4
   private val resetBits = 1
 
+  /** Number of bits needed to index the configured uop elements.
+   *
+   * CoreParams.uopMemDepth is an element count for both the default and
+   * geometry-derived configurations; it is not a byte depth. The uop width
+   * is used by memory-transfer logic, but does not change the instruction's
+   * element-index field width.
+   */
   def uopIndexBits(p: Parameters): Int = {
     val core = p(CoreKey)
-    log2Ceil(core.uopMemDepth / (core.uopBits / 8))
+    log2Ceil(core.uopMemDepth)
   }
 
   def uopDstBits(p: Parameters): Int = log2Ceil(p(CoreKey).accMemDepth)
