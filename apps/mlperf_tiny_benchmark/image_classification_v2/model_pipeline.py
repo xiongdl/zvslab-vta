@@ -57,7 +57,7 @@ EXPECTED_TFLITE_OPERATORS = (
 )
 EXPECTED_CONV_CHANNELS = (40, 40, 40, 80, 80, 80, 160, 160, 160)
 EXPECTED_VTA_SYMBOLS = tuple(
-    f"tvmgen_mlperf_resnet_large_vta_main_{index}" for index in range(4)
+    f"tvmgen_mlperf_resnet_large_vta_main_{index}" for index in range(8)
 )
 REQUIRED_HOST_OPERATORS = frozenset(
     {"add", "nn.avg_pool2d", "nn.conv2d", "nn.dense", "nn.softmax", "reshape"}
@@ -260,7 +260,7 @@ def _composite_names(function):
 
 
 def inspect_partitioning(reference_module, mixed_module):
-    """Validate and summarize the exact four-region VTA routing contract."""
+    """Validate and summarize the exact eight-partition VTA routing contract."""
     if _count_operator(reference_module["main"], "nn.conv2d") != 9:
         raise ValueError("quantized reference must contain exactly nine convolutions")
 
@@ -288,16 +288,16 @@ def inspect_partitioning(reference_module, mixed_module):
     )
     if summary.symbols != EXPECTED_VTA_SYMBOLS:
         raise ValueError(f"unexpected VTA symbols: {summary.symbols}")
-    if summary.convolutions_per_partition != (1,) * 4:
+    if summary.convolutions_per_partition != (1,) * 8:
         raise ValueError(
             f"each VTA partition must contain one convolution: {summary.convolutions_per_partition}"
         )
-    if summary.host_convolution_count != 5:
-        raise ValueError("the five non-partitioned convolutions must remain on the host")
+    if summary.host_convolution_count != 1:
+        raise ValueError("the one non-partitioned convolution must remain on the host")
     if not REQUIRED_HOST_OPERATORS <= set(summary.host_operator_names):
         missing = sorted(REQUIRED_HOST_OPERATORS - set(summary.host_operator_names))
         raise ValueError(f"mixed main is missing required host operators: {missing}")
-    if len(summary.composite_names) != 4 or not all(
+    if len(summary.composite_names) != 8 or not all(
         name.startswith("vta.") for name in summary.composite_names
     ):
         raise ValueError(f"unexpected VTA composites: {summary.composite_names}")
