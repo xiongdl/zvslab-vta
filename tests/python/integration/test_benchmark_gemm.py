@@ -59,7 +59,7 @@ def test_gemm():
         )  # relu
         res = te.compute(res_shape, lambda *i: res_min(*i).astype(env.inp_dtype), name="res")
 
-        def verify(s):
+        def verify(s, check_result):
             mod = vta.build(
                 s,
                 [data, weight, res],
@@ -107,6 +107,8 @@ def test_gemm():
             res_unpack = res_arr.numpy().reshape(
                 batch_size // env.BATCH, channel // env.BLOCK_OUT, env.BATCH, env.BLOCK_OUT
             )
+            if check_result:
+                tvm.testing.assert_allclose(res_unpack, res_ref)
             return cost
 
         def run_schedule(load_inp, load_wgt, gemm, alu, store_out, print_ir):
@@ -159,7 +161,7 @@ def test_gemm():
 
             if print_ir:
                 print(tvm.lower(s, [data, weight, res], simple_mode=True))
-            return verify(s)
+            return verify(s, check_result=gemm is env.gemm and alu is env.alu)
 
         def gemm_normal(print_ir):
             mock = env.mock
@@ -278,7 +280,8 @@ def test_gemm():
 
     def _run(env, remote):
         print("========GEMM 128=========")
-        run_gemm_packed(env, remote, 128, 128, 128)
+        output_tile = 64
+        run_gemm_packed(env, remote, 128, 128, output_tile)
 
     vta.testing.run(_run)
 
