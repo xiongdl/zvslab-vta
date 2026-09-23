@@ -398,7 +398,7 @@ def main():
         os.path.abspath(os.path.expanduser(__file__)))
 
     path_list = [
-        "vta_config.json", os.path.join(curr_path, "vta_config.json")
+        "vta_64mac.json", os.path.join(curr_path, "vta_64mac.json")
     ]
 
     if args.use_cfg:

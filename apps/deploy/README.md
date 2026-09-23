@@ -87,7 +87,11 @@ be used when the exported module executes on VTA hardware or a simulator.
 
    3.2 Deploy with vta simulator(all steps happen in host machine)
 
-       3.2.1 change ./vta-hw/config/vta_config.json TARGET into "sim"
+       3.2.1 use the shared geometry config and select FSIM explicitly:
+
+             `VTA_CONFIG_FILE=./vta-hw/config/vta_64mac.json VTA_BACKEND=fsim`
+
+             Legacy `TARGET=sim` configuration is no longer supported.
 
        3.2.2 run resnet_export.py, this script would compile mxnet resnet18 into vta library, 
             and compute graph, parameter and save into ./build/model folder.

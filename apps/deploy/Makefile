@@ -19,13 +19,16 @@
 VTA_PATH ?= $(abspath ../..)
 CUR_DIR=$(shell pwd)
 DMLC_CORE=${TVM_PATH}/3rdparty/dmlc-core
+PYTHON ?= $(abspath ../../../.envs/tvm-vta-env/bin/python)
+VTA_CONFIG_FILE ?= $(VTA_PATH)/config/vta_64mac.json
+VTA_BACKEND ?= fsim
 
-TARGET := ${shell python3 ../../config/vta_config.py --target}
-
-
-VTA_LIB=vta
-ifeq (${TARGET}, sim)
+ifeq ($(VTA_BACKEND),fsim)
 	VTA_LIB=vta_fsim
+else ifeq ($(VTA_BACKEND),tsim)
+	VTA_LIB=vta_tsim
+else
+$(error Unsupported VTA_BACKEND=$(VTA_BACKEND) for this simulator deploy example; use fsim or tsim)
 endif
 
 PKG_CFLAGS = -std=c++14 -O0 -g -fPIC\

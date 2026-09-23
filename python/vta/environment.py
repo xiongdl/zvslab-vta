@@ -37,7 +37,7 @@ def get_vta_hw_path():
 
 def get_vta_config_path():
     """Get the active VTA configuration file path."""
-    config_path_default = os.path.join(get_vta_hw_path(), "config", "vta_config.json")
+    config_path_default = os.path.join(get_vta_hw_path(), "config", "vta_64mac.json")
     config_path = os.getenv("VTA_CONFIG_FILE")
     if config_path is None:
         return config_path_default
