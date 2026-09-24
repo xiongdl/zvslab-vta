@@ -19,6 +19,9 @@
 
 import importlib.util
 import json
+import os
+import re
+import subprocess
 import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -312,27 +315,53 @@ def test_tsim_matrix_result_records_simulator_and_is_frozen(deployment_runtime, 
 
 def test_end_to_end_tsim_matrix_with_reloaded_graph_bundles(deployment_runtime, tmp_path):
     """Run the complete ten-sample TSIM matrix under vta_64mac.json geometry."""
-    result = deployment_runtime.deploy_tsim_matrix(tmp_path)
-    assert len(result.prepared.routing.symbols) == 8
-    assert len(result.artifacts) == 2
-    assert all(len(execution.comparisons) == 10 for execution in result.executions)
-    assert all(
-        isinstance(execution.profiler_stats["cycle_count"], int)
-        and execution.profiler_stats["cycle_count"] > 0
-        for execution in result.executions
-    )
+    environment = os.environ.copy()
+    repo_root = Path.cwd()
+    environment["VTA_CONFIG_FILE"] = str(repo_root / "vta/config/vta_64mac.json")
+    environment["VTA_BACKEND"] = "tsim"
+    pythonpath = [str(repo_root / "tvm/python"), str(repo_root / "vta/python")]
+    if environment.get("PYTHONPATH"):
+        pythonpath.append(environment["PYTHONPATH"])
+    environment["PYTHONPATH"] = os.pathsep.join(pythonpath)
 
-    for host_artifacts in result.artifacts:
-        assert host_artifacts.reference.artifact_dir.parent.name == f"{host_artifacts.host_codegen}-tsim"
-        assert host_artifacts.mixed.artifact_dir.parent.name == f"{host_artifacts.host_codegen}-tsim"
-        for artifact in (host_artifacts.reference, host_artifacts.mixed):
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(RUN_PATH),
+            "--output-dir",
+            str(tmp_path),
+            "--simulator",
+            "tsim",
+            "--host-codegen",
+            "all",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    output = completed.stdout
+    for host in ("llvm", "c"):
+        assert f"{host}-tsim partitions: 8" in output
+        assert f"{host}-tsim compared samples: 10" in output
+        cycle_count = re.search(
+            rf"{host}-tsim profiler: \{{'cycle_count': (\d+)\}}", output
+        )
+        assert cycle_count is not None, output
+        assert int(cycle_count.group(1)) > 0
+    assert "MLPerf ResNet8 Large LLVM/C TSIM matrix passed" in output
+
+    for host in ("llvm", "c"):
+        host_dir = tmp_path / f"{host}-tsim"
+        for role in ("reference", "mixed"):
+            artifact_dir = host_dir / role
             manifest = json.loads(
-                (artifact.artifact_dir / "manifest.json").read_text(encoding="utf-8")
+                (artifact_dir / "manifest.json").read_text(encoding="utf-8")
             )
             assert manifest["artifact"]["name"] == EXPECTED_ARTIFACT_NAME
             assert manifest["simulator"] == "tsim"
-            assert manifest["host_codegen"] == host_artifacts.host_codegen
-            assert artifact.path.is_file()
-            assert (artifact.artifact_dir / "graph.json").is_file()
-            assert (artifact.artifact_dir / "params.bin").is_file()
+            assert manifest["host_codegen"] == host
+            assert (artifact_dir / f"model{deployment_runtime.shared_library_suffix()}").is_file()
+            assert (artifact_dir / "graph.json").is_file()
+            assert (artifact_dir / "params.bin").is_file()
             assert any(entry["path"] for entry in manifest["sources"])
