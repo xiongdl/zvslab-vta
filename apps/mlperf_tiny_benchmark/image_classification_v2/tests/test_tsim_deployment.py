@@ -20,8 +20,6 @@
 import importlib.util
 import json
 import os
-import re
-import subprocess
 import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -315,41 +313,17 @@ def test_tsim_matrix_result_records_simulator_and_is_frozen(deployment_runtime, 
 
 def test_end_to_end_tsim_matrix_with_reloaded_graph_bundles(deployment_runtime, tmp_path):
     """Run the complete ten-sample TSIM matrix under vta_64mac.json geometry."""
-    environment = os.environ.copy()
     repo_root = Path.cwd()
-    environment["VTA_CONFIG_FILE"] = str(repo_root / "vta/config/vta_64mac.json")
-    environment["VTA_BACKEND"] = "tsim"
-    pythonpath = [str(repo_root / "tvm/python"), str(repo_root / "vta/python")]
-    if environment.get("PYTHONPATH"):
-        pythonpath.append(environment["PYTHONPATH"])
-    environment["PYTHONPATH"] = os.pathsep.join(pythonpath)
+    os.environ["VTA_CONFIG_FILE"] = str(repo_root / "vta/config/vta_64mac.json")
+    os.environ["VTA_BACKEND"] = "tsim"
+    result = deployment_runtime.deploy_tsim_matrix(tmp_path)
 
-    completed = subprocess.run(
-        [
-            sys.executable,
-            str(RUN_PATH),
-            "--output-dir",
-            str(tmp_path),
-            "--simulator",
-            "tsim",
-            "--host-codegen",
-            "all",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=environment,
-    )
-    output = completed.stdout
-    for host in ("llvm", "c"):
-        assert f"{host}-tsim partitions: 8" in output
-        assert f"{host}-tsim compared samples: 10" in output
-        cycle_count = re.search(
-            rf"{host}-tsim profiler: \{{'cycle_count': (\d+)\}}", output
-        )
-        assert cycle_count is not None, output
-        assert int(cycle_count.group(1)) > 0
-    assert "MLPerf ResNet8 Large LLVM/C TSIM matrix passed" in output
+    assert result.simulator == "tsim"
+    assert len(result.prepared.routing.symbols) == 8
+    assert tuple(artifact.host_codegen for artifact in result.artifacts) == ("llvm", "c")
+    for execution in result.executions:
+        assert len(execution.comparisons) == 10
+        assert execution.profiler_stats["cycle_count"] > 0
 
     for host in ("llvm", "c"):
         host_dir = tmp_path / f"{host}-tsim"
