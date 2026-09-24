@@ -317,6 +317,7 @@ def test_end_to_end_tsim_matrix_with_reloaded_graph_bundles(deployment_runtime, 
     assert result.simulator == "tsim"
     assert len(result.prepared.routing.symbols) == 8
     assert tuple(artifact.host_codegen for artifact in result.artifacts) == ("llvm", "c")
+    assert len(result.executions) == len(result.artifacts)
     for execution in result.executions:
         assert len(execution.comparisons) == 10
         assert execution.profiler_stats["cycle_count"] > 0
