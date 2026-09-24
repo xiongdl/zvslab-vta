@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 import tvm
 import vta
+from vta.backend import normalize_backend
 from tvm import relay
 from tvm.contrib import graph_executor
 
@@ -120,9 +121,10 @@ class SimulatorSession:
     diagnostic: str
 
     def validate_environment(self):
-        from vta.testing import simulator as backend_simulator
-
-        active_target = backend_simulator.normalize_backend(simulator=self.label)
+        # Importing vta.testing.simulator eagerly loads the selected native
+        # backend. FSIM and TSIM export overlapping RTLD_GLOBAL symbols, so a
+        # rejected backend must not be loaded before this pure validation.
+        active_target = normalize_backend(simulator=self.label)
         if active_target != self.environment_target:
             raise RuntimeError(
                 f"simulator {self.label!r} requires VTA backend "

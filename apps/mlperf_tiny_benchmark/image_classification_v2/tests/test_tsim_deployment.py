@@ -89,7 +89,6 @@ def test_tsim_mapping_is_explicit_and_never_uses_fsim_enabled(deployment_runtime
 
 
 def test_tsim_rejects_wrong_environment_before_model_preparation(deployment_runtime, monkeypatch, tmp_path):
-    monkeypatch.setattr(deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="fsim"))
     monkeypatch.setattr(
         deployment_runtime,
         "prepare_model",
@@ -98,6 +97,7 @@ def test_tsim_rejects_wrong_environment_before_model_preparation(deployment_runt
     monkeypatch.setenv("VTA_BACKEND", "fsim")
     with pytest.raises(ValueError, match="backend mismatch"):
         deployment_runtime.deploy_tsim_matrix(tmp_path)
+    assert "vta.testing.simulator" not in sys.modules
 
 
 def test_tsim_missing_registry_reports_build_command(deployment_runtime, monkeypatch):
