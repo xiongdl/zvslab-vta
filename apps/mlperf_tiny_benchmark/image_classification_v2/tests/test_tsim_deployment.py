@@ -19,7 +19,6 @@
 
 import importlib.util
 import json
-import os
 import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -313,9 +312,6 @@ def test_tsim_matrix_result_records_simulator_and_is_frozen(deployment_runtime, 
 
 def test_end_to_end_tsim_matrix_with_reloaded_graph_bundles(deployment_runtime, tmp_path):
     """Run the complete ten-sample TSIM matrix under vta_64mac.json geometry."""
-    repo_root = Path.cwd()
-    os.environ["VTA_CONFIG_FILE"] = str(repo_root / "vta/config/vta_64mac.json")
-    os.environ["VTA_BACKEND"] = "tsim"
     result = deployment_runtime.deploy_tsim_matrix(tmp_path)
 
     assert result.simulator == "tsim"
