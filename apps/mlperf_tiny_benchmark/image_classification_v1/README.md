@@ -58,6 +58,36 @@ are published as `<host>-<simulator>/{reference,mixed}/`, with each directory
 containing its Graph JSON, parameters, DSO, manifest, and generated host
 source. A partial export is removed if the build fails.
 
+## AutoTVM replay and comparison
+
+The existing commands above build the untuned schedule. To compare that
+baseline with history-best schedules, pass both a backend-matched native log
+and its JSON sidecar. Replay validates the model hash, backend, config hash,
+log hash, and task coverage before compiling the tuned VTA graph. Both builds
+run in a fresh process on the same ten committed samples; each output is
+compared exactly with the pure LLVM reference and the baseline/tuned tensors
+must agree. TSIM also requires the tuned `cycle_count` to be lower.
+
+Example TSIM replay (use the matching FSIM log and `VTA_BACKEND=fsim` for
+FSIM):
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/image_classification_v1/run.py \
+  --simulator tsim \
+  --autotvm-log vta/apps/mlperf_tiny_benchmark/build/autotvm/image_classification_v1-tsim-<run>.log \
+  --autotvm-sidecar vta/apps/mlperf_tiny_benchmark/build/autotvm/image_classification_v1-tsim-<run>.json
+```
+
+The result prints model, backend, config, log, and sidecar identities, the
+number of compared samples, and baseline/tuned TSIM cycles. These are
+simulator cycle counts; they are not FPGA latency or an MLPerf score. Replay
+artifacts are written under `build/autotvm-comparison/` by default. Pass
+`--output-dir PATH` to choose another artifact location. The untuned default
+commands retain their existing behavior.
+
 FSIM matrix:
 
 ```bash

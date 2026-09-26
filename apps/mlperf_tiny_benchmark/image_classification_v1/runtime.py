@@ -18,7 +18,9 @@
 """Build, reload, and execute the fixed MLPerf Tiny HOST deployment."""
 
 import json
+import importlib.util
 import sys
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -102,6 +104,18 @@ class SimulationMatrixResult:
     prepared: object
     artifacts: tuple
     executions: tuple
+
+
+@dataclass(frozen=True)
+class AutotvmComparisonResult:
+    """Baseline and history-best V1 builds executed on the same ten samples."""
+
+    simulator: str
+    prepared: object
+    baseline_artifacts: HostArtifacts
+    tuned_artifacts: HostArtifacts
+    baseline_execution: ExecutionSummary
+    tuned_execution: ExecutionSummary
 
 
 # Kept as an import-compatible alias for callers of the original FSIM API.
@@ -320,10 +334,41 @@ def _mixed_target(host_codegen=DEFAULT_HOST_CODEGEN):
     return tvm.target.Target("vta", host=host)
 
 
-def build_host_artifacts(prepared, output_dir, host_codegen=DEFAULT_HOST_CODEGEN, simulator="fsim"):
+def _history_best(log_path, sidecar_path, prepared, simulator):
+    tuner_path = APP_ROOT.parent / "autotvm_tuner.py"
+    spec = importlib.util.spec_from_file_location("mlperf_tiny_autotvm_tuner", tuner_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load shared MLPerf Tiny AutoTVM helper: {tuner_path}")
+    tuner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = tuner
+    spec.loader.exec_module(tuner)
+
+    return tuner.history_best(
+        log_path,
+        sidecar_path,
+        model_id="image_classification_v1",
+        model_sha256=getattr(
+            getattr(prepared, "imported", None), "model_sha256", MODEL_SHA256
+        ),
+        backend=simulator,
+        config_path=tuner.DEFAULT_CONFIG_PATH,
+    )
+
+
+def build_host_artifacts(
+    prepared,
+    output_dir,
+    host_codegen=DEFAULT_HOST_CODEGEN,
+    simulator="fsim",
+    *,
+    autotvm_log=None,
+    autotvm_sidecar=None,
+):
     """Build, export, and reload both standard host libraries without simulator loading."""
     _validate_host_codegen(host_codegen)
     _simulator_session(simulator).validate_environment()
+    if (autotvm_log is None) != (autotvm_sidecar is None):
+        raise ValueError("AutoTVM replay requires both --autotvm-log and --autotvm-sidecar")
     if prepared.reference_module is not prepared.quantized_module:
         raise RuntimeError("pure LLVM build must use the exact shared quantized module object")
 
@@ -335,22 +380,28 @@ def build_host_artifacts(prepared, output_dir, host_codegen=DEFAULT_HOST_CODEGEN
             reference_factory = relay.build(
                 prepared.reference_module, target=tvm.target.Target("c")
             )
-    if host_codegen == "c":
-        with vta.build_config(config={"tir.disable_vectorize": True}):
-            mixed_factory = relay.build(
-                prepared.mixed_module,
-                target=_mixed_target(
-                    *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
-                ),
-            )
-    else:
-        with vta.build_config():
-            mixed_factory = relay.build(
-                prepared.mixed_module,
-                target=_mixed_target(
-                    *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
-                ),
-            )
+    history_context = (
+        _history_best(autotvm_log, autotvm_sidecar, prepared, simulator)
+        if autotvm_log is not None
+        else nullcontext()
+    )
+    with history_context:
+        if host_codegen == "c":
+            with vta.build_config(config={"tir.disable_vectorize": True}):
+                mixed_factory = relay.build(
+                    prepared.mixed_module,
+                    target=_mixed_target(
+                        *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
+                    ),
+                )
+        else:
+            with vta.build_config():
+                mixed_factory = relay.build(
+                    prepared.mixed_module,
+                    target=_mixed_target(
+                        *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
+                    ),
+                )
 
     reference_identity = _artifact_identity(host_codegen, "reference")
     mixed_identity = _artifact_identity(host_codegen, "mixed")
@@ -604,3 +655,51 @@ def deploy(output_dir=DEFAULT_OUTPUT_DIR, host_codegen=DEFAULT_HOST_CODEGEN, sim
     else:
         execution = _execute_matrix((artifacts,), committed_sample_paths(), simulator)[0]
     return DeploymentResult(prepared=prepared, artifacts=artifacts, execution=execution)
+
+
+def deploy_autotvm_comparison(
+    log_path,
+    sidecar_path,
+    output_dir=DEFAULT_OUTPUT_DIR / "autotvm-comparison",
+    host_codegen=DEFAULT_HOST_CODEGEN,
+    simulator="fsim",
+):
+    """Build baseline and history-best artifacts, then compare all committed samples."""
+    _validate_host_codegen(host_codegen)
+    session = _simulator_session(simulator)
+    session.validate_environment()
+    prepared = prepare_model(MODEL_PATH)
+    print(f"VTA partitions: {len(prepared.routing.symbols)}")
+    baseline_artifacts = build_host_artifacts(
+        prepared,
+        Path(output_dir) / "baseline",
+        host_codegen=host_codegen,
+        simulator=simulator,
+    )
+    tuned_artifacts = build_host_artifacts(
+        prepared,
+        Path(output_dir) / "tuned",
+        host_codegen=host_codegen,
+        simulator=simulator,
+        autotvm_log=log_path,
+        autotvm_sidecar=sidecar_path,
+    )
+    baseline_execution, tuned_execution = _execute_matrix(
+        (baseline_artifacts, tuned_artifacts), committed_sample_paths(), simulator
+    )
+    if simulator == "tsim":
+        baseline_cycles = baseline_execution.profiler_stats["cycle_count"]
+        tuned_cycles = tuned_execution.profiler_stats["cycle_count"]
+        if tuned_cycles >= baseline_cycles:
+            raise RuntimeError(
+                "AutoTVM history-best did not lower TSIM cycle_count: "
+                f"baseline={baseline_cycles}, tuned={tuned_cycles}"
+            )
+    return AutotvmComparisonResult(
+        simulator=simulator,
+        prepared=prepared,
+        baseline_artifacts=baseline_artifacts,
+        tuned_artifacts=tuned_artifacts,
+        baseline_execution=baseline_execution,
+        tuned_execution=tuned_execution,
+    )

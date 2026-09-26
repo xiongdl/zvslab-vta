@@ -19,8 +19,16 @@
 """Run the fixed MLPerf Tiny ResNet-8 HOST deployment."""
 
 import argparse
+import json
+from pathlib import Path
 
-from runtime import DEFAULT_OUTPUT_DIR, deploy, deploy_fsim_matrix, deploy_tsim_matrix
+from runtime import (
+    DEFAULT_OUTPUT_DIR,
+    deploy,
+    deploy_autotvm_comparison,
+    deploy_fsim_matrix,
+    deploy_tsim_matrix,
+)
 
 
 def _parser():
@@ -43,11 +51,51 @@ def _parser():
         default="fsim",
         help="simulator to execute (default: fsim)",
     )
+    parser.add_argument(
+        "--autotvm-log", type=Path, help="native AutoTVM log for a tuned comparison"
+    )
+    parser.add_argument(
+        "--autotvm-sidecar", type=Path, help="matching JSON sidecar for --autotvm-log"
+    )
     return parser
 
 
 def main(argv=None):
     args = _parser().parse_args(argv)
+    if (args.autotvm_log is None) != (args.autotvm_sidecar is None):
+        raise SystemExit("--autotvm-log and --autotvm-sidecar must be provided together")
+    if args.autotvm_log is not None:
+        if args.host_codegen == "all":
+            raise SystemExit("AutoTVM comparison accepts one --host-codegen: llvm or c")
+        output_dir = args.output_dir
+        if output_dir == str(DEFAULT_OUTPUT_DIR):
+            output_dir = str(DEFAULT_OUTPUT_DIR / "autotvm-comparison")
+        result = deploy_autotvm_comparison(
+            args.autotvm_log,
+            args.autotvm_sidecar,
+            output_dir=output_dir,
+            host_codegen=args.host_codegen,
+            simulator=args.simulator,
+        )
+        metadata = json.loads(args.autotvm_sidecar.read_text(encoding="utf-8"))
+        print(f"Model: image_classification_v1 ({metadata['model_sha256']})")
+        print(f"Backend: {args.simulator}")
+        print(f"Config: {metadata['config_path']} (sha256 {metadata['config_sha256']})")
+        print(f"AutoTVM log: {metadata['log_path']} (sha256 {metadata['log_sha256']})")
+        print(f"AutoTVM sidecar: {args.autotvm_sidecar.resolve()}")
+        print(f"Baseline compared samples: {len(result.baseline_execution.comparisons)}")
+        print(f"Tuned compared samples: {len(result.tuned_execution.comparisons)}")
+        if args.simulator == "tsim":
+            print(
+                "TSIM cycle_count: "
+                f"baseline={result.baseline_execution.profiler_stats['cycle_count']}, "
+                f"tuned={result.tuned_execution.profiler_stats['cycle_count']}"
+            )
+        else:
+            print(f"FSIM baseline profiler: {result.baseline_execution.profiler_stats}")
+            print(f"FSIM tuned profiler: {result.tuned_execution.profiler_stats}")
+        print("MLPerf ResNet AutoTVM comparison passed")
+        return 0
     if args.host_codegen == "all":
         result = (
             deploy_fsim_matrix(args.output_dir)

@@ -184,6 +184,84 @@ def test_build_exports_and_reloads_two_standard_dsos_without_loading_fsim(
     }
 
 
+def test_tuned_build_applies_matching_history_best_only_during_mixed_compile(
+    deployment_runtime, monkeypatch, tmp_path
+):
+    quantized = object()
+    mixed = object()
+    prepared = SimpleNamespace(
+        quantized_module=quantized,
+        reference_module=quantized,
+        mixed_module=mixed,
+        imported=SimpleNamespace(model_sha256="a" * 64),
+        routing=SimpleNamespace(symbols=EXPECTED_VTA_SYMBOLS),
+    )
+    context_state = {"active": False}
+    built = []
+    exported = []
+
+    class Factory:
+        def get_graph_json(self):
+            return "{}"
+
+        def get_params(self):
+            return {}
+
+        def get_lib(self):
+            return SimpleNamespace(type_key="c", imported_modules=(), get_source=lambda fmt="": "")
+
+        def export_library(self, path):
+            Path(path).write_bytes(b"library")
+
+    def relay_build(module, target):
+        built.append((module, context_state["active"]))
+        return Factory()
+
+    @contextmanager
+    def fake_history_best(log_path, sidecar_path, actual_prepared, simulator):
+        assert Path(log_path) == Path("matching.log")
+        assert Path(sidecar_path) == Path("matching.json")
+        assert actual_prepared is prepared
+        assert simulator == "fsim"
+        context_state["active"] = True
+        try:
+            yield object()
+        finally:
+            context_state["active"] = False
+
+    def export_bundle(factory, output_dir, role, **kwargs):
+        exported.append((role, context_state["active"]))
+        path = Path(output_dir) / role
+        path.mkdir(parents=True, exist_ok=True)
+        library = path / ("model" + deployment_runtime.shared_library_suffix())
+        library.write_bytes(b"library")
+        return SimpleNamespace(
+            library_path=library,
+            artifact_dir=path,
+            graph_json="{}",
+            params=b"params",
+            module=SimpleNamespace(implements_function=lambda *_: True),
+        )
+
+    monkeypatch.setattr(deployment_runtime.relay, "build", relay_build)
+    monkeypatch.setattr(deployment_runtime.vta, "build_config", lambda: __import__("contextlib").nullcontext())
+    monkeypatch.setattr(deployment_runtime, "_mixed_target", lambda: object())
+    monkeypatch.setattr(deployment_runtime, "export_graph_bundle", export_bundle)
+    monkeypatch.setattr(deployment_runtime, "_load_fsim", lambda: pytest.fail("build must not load FSIM"))
+    monkeypatch.setattr(deployment_runtime, "_history_best", fake_history_best)
+    monkeypatch.setattr(deployment_runtime.vta, "get_env", lambda: SimpleNamespace(target_host="llvm"))
+
+    deployment_runtime.build_host_artifacts(
+        prepared,
+        tmp_path,
+        simulator="fsim",
+        autotvm_log="matching.log",
+        autotvm_sidecar="matching.json",
+    )
+
+    assert built == [(quantized, False), (mixed, True)]
+    assert exported == [("reference", False), ("mixed", False)]
+
 def test_each_reloaded_graph_loads_only_its_own_params_before_execution(
     deployment_runtime, monkeypatch
 ):
@@ -505,7 +583,6 @@ def test_application_sources_use_only_the_approved_host_flow():
     for forbidden in [
         "tensorflow",
         "tflite_runtime",
-        "autotvm",
         "graphpack",
         "relay.ext." + "vta",
         "tiny-v1.4",
@@ -515,6 +592,8 @@ def test_application_sources_use_only_the_approved_host_flow():
         "fvp",
     ]:
         assert forbidden not in lowered
+    assert "from tvm import autotvm" not in lowered
+    assert "import tvm.autotvm" not in lowered
 
     runtime_tree = ast.parse(sources["runtime.py"])
     top_level_imports = [
