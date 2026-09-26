@@ -18,9 +18,14 @@
 """AutoTVM support for simulator-backed MLPerf Tiny schedules."""
 
 import contextlib
+import argparse
+import hashlib
+import importlib.util
 import json
 import os
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 
 import tvm
 from tvm import autotvm
@@ -37,6 +42,10 @@ PROFILER_REGISTRIES = {
     "fsim": ("vta.simulator.profiler_clear", "vta.simulator.profiler_status"),
     "tsim": ("vta.tsim.profiler_clear", "vta.tsim.profiler_status"),
 }
+ARTIFACT_SCHEMA_VERSION = 1
+TUNER_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CONFIG_PATH = TUNER_ROOT / "config" / "vta_64mac.json"
+DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "build" / "autotvm"
 
 
 def validate_backend(backend):
@@ -291,3 +300,394 @@ def extract_v1_tasks(prepared):
         # the canonical ext_dev target keeps the measurement device usable.
         task.target = env.target
     return tasks
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _config_identity(config_path):
+    path = Path(config_path).expanduser().resolve(strict=True)
+    active_path = os.environ.get("VTA_CONFIG_FILE")
+    if active_path is None:
+        raise ValueError("VTA_CONFIG_FILE must explicitly select the geometry config")
+    if Path(active_path).expanduser().resolve() != path:
+        raise ValueError(
+            f"VTA_CONFIG_FILE mismatch: artifact uses {path}, active environment uses "
+            f"{Path(active_path).expanduser().resolve()}"
+        )
+    try:
+        with path.open(encoding="utf-8") as source:
+            config = json.load(source)
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"VTA geometry config is not valid JSON: {path}") from error
+    if not isinstance(config, dict):
+        raise ValueError(f"VTA geometry config must be a JSON object: {path}")
+    return path, _sha256_file(path)
+
+
+def _workload_id(workload):
+    payload = json.dumps(workload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _task_workload_id(task):
+    return _workload_id(task.workload)
+
+
+def _load_log_summary(log_path):
+    path = Path(log_path).expanduser().resolve(strict=True)
+    if path.stat().st_size == 0:
+        raise ValueError(f"AutoTVM log is empty: {path}")
+    try:
+        records = list(autotvm.record.load_from_file(str(path)))
+    except Exception as error:
+        raise ValueError(f"AutoTVM log cannot be decoded: {path}") from error
+    if not records:
+        raise ValueError(f"AutoTVM log has no records: {path}")
+
+    trial_counts = {}
+    successful = set()
+    for measure_input, result in records:
+        workload_id = _workload_id(measure_input.task.workload)
+        trial_counts[workload_id] = trial_counts.get(workload_id, 0) + 1
+        if result.error_no == MeasureErrorNo.NO_ERROR:
+            successful.add(workload_id)
+    return path, trial_counts, successful, len(records)
+
+
+def _validate_tuning_options(options):
+    if not isinstance(options, dict) or not isinstance(options.get("tuner"), str):
+        raise ValueError("tuning options must include a tuner name")
+    trials = options.get("trials_per_task")
+    if trials is not None and (
+        not isinstance(trials, int) or isinstance(trials, bool) or trials <= 0
+    ):
+        raise ValueError("tuning options trials_per_task must be a positive integer or null")
+    for name in ("timeout", "number", "repeat"):
+        value = options.get(name)
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool) or value <= 0
+        ):
+            raise ValueError(f"tuning options {name} must be a positive integer")
+    cooldown = options.get("cooldown_interval")
+    if cooldown is not None and (
+        not isinstance(cooldown, (int, float)) or isinstance(cooldown, bool) or cooldown < 0
+    ):
+        raise ValueError("tuning options cooldown_interval must be non-negative")
+    try:
+        json.dumps(options, sort_keys=True)
+    except (TypeError, ValueError) as error:
+        raise ValueError("tuning options must be JSON serializable") from error
+
+
+def write_tuning_sidecar(
+    log_path,
+    sidecar_path,
+    *,
+    model_id,
+    model_sha256,
+    backend,
+    config_path,
+    tasks,
+    tuning_options,
+):
+    """Write a deterministic JSON sidecar for a complete native AutoTVM log."""
+    validate_backend(backend)
+    if not isinstance(model_id, str) or not model_id:
+        raise ValueError("model_id must be a non-empty string")
+    if not isinstance(model_sha256, str) or len(model_sha256) != 64:
+        raise ValueError("model_sha256 must be a 64-character SHA-256 hex digest")
+    try:
+        int(model_sha256, 16)
+    except ValueError as error:
+        raise ValueError("model_sha256 must be a 64-character SHA-256 hex digest") from error
+    _validate_tuning_options(tuning_options)
+    config_path, config_sha256 = _config_identity(config_path)
+    log_path, trial_counts, successful, trial_count = _load_log_summary(log_path)
+    task_workloads = sorted({_task_workload_id(task) for task in tasks})
+    if not task_workloads:
+        raise ValueError("cannot write tuning metadata without extracted VTA tasks")
+    if set(trial_counts) != set(task_workloads):
+        raise ValueError("AutoTVM log task coverage does not match the extracted VTA tasks")
+    if not set(task_workloads) <= successful:
+        missing = sorted(set(task_workloads) - successful)
+        raise ValueError(f"AutoTVM log has no successful measurement for tasks: {missing}")
+
+    metadata = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "model_id": model_id,
+        "model_sha256": model_sha256,
+        "backend": backend,
+        "config_path": str(config_path),
+        "config_sha256": config_sha256,
+        "log_path": str(log_path),
+        "log_sha256": _sha256_file(log_path),
+        "task_count": len(task_workloads),
+        "trial_count": trial_count,
+        "task_workloads": task_workloads,
+        "task_trials": dict(sorted(trial_counts.items())),
+        "tuning_options": tuning_options,
+    }
+    sidecar_path = Path(sidecar_path).expanduser().resolve()
+    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = sidecar_path.with_name(sidecar_path.name + ".tmp")
+    temporary_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    temporary_path.replace(sidecar_path)
+    return metadata
+
+
+def validate_tuning_artifacts(
+    log_path,
+    sidecar_path,
+    *,
+    model_id,
+    model_sha256,
+    backend,
+    config_path,
+    expected_tuning_options=None,
+):
+    """Reject incomplete or mismatched logs before applying history-best."""
+    validate_backend(backend)
+    config_path, config_sha256 = _config_identity(config_path)
+    sidecar_path = Path(sidecar_path).expanduser().resolve(strict=True)
+    try:
+        metadata = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"tuning sidecar is not valid JSON: {sidecar_path}") from error
+    if not isinstance(metadata, dict) or metadata.get("schema_version") != ARTIFACT_SCHEMA_VERSION:
+        raise ValueError("unsupported tuning sidecar schema")
+    for name, expected in (
+        ("model_id", model_id),
+        ("model_sha256", model_sha256),
+        ("backend", backend),
+        ("config_path", str(config_path)),
+        ("config_sha256", config_sha256),
+    ):
+        if metadata.get(name) != expected:
+            raise ValueError(f"tuning sidecar {name} mismatch")
+
+    log_path = Path(log_path).expanduser().resolve(strict=True)
+    if metadata.get("log_path") != str(log_path):
+        raise ValueError("tuning sidecar log_path mismatch")
+    if metadata.get("log_sha256") != _sha256_file(log_path):
+        raise ValueError("AutoTVM log SHA-256 does not match its sidecar")
+    options = metadata.get("tuning_options")
+    _validate_tuning_options(options)
+    if expected_tuning_options is not None and options != expected_tuning_options:
+        raise ValueError("tuning options do not match the expected replay parameters")
+
+    workloads = metadata.get("task_workloads")
+    trials = metadata.get("task_trials")
+    task_count = metadata.get("task_count")
+    trial_count = metadata.get("trial_count")
+    if not isinstance(workloads, list) or not workloads:
+        raise ValueError("tuning sidecar task_workloads is incomplete")
+    if not all(isinstance(item, str) and len(item) == 64 for item in workloads):
+        raise ValueError("tuning sidecar task_workloads contains an invalid identity")
+    if (
+        len(set(workloads)) != len(workloads)
+        or not isinstance(task_count, int)
+        or isinstance(task_count, bool)
+        or task_count != len(workloads)
+        or not isinstance(trials, dict)
+        or set(trials) != set(workloads)
+        or not isinstance(trial_count, int)
+        or isinstance(trial_count, bool)
+        or trial_count <= 0
+    ):
+        raise ValueError("tuning sidecar task/trial counts are incomplete")
+    log_path, actual_trials, successful, actual_trial_count = _load_log_summary(log_path)
+    if actual_trial_count != trial_count:
+        raise ValueError("tuning sidecar trial_count does not match the native AutoTVM log")
+    if actual_trials != trials or set(actual_trials) != set(workloads):
+        raise ValueError("tuning sidecar task coverage does not match the native AutoTVM log")
+    if not set(workloads) <= successful:
+        raise ValueError("native AutoTVM log has no successful record for every task")
+    return metadata
+
+
+@contextlib.contextmanager
+def history_best(
+    log_path,
+    sidecar_path,
+    *,
+    model_id,
+    model_sha256,
+    backend,
+    config_path,
+    expected_tuning_options=None,
+):
+    """Validate a paired artifact before entering AutoTVM history-best."""
+    validate_tuning_artifacts(
+        log_path,
+        sidecar_path,
+        model_id=model_id,
+        model_sha256=model_sha256,
+        backend=backend,
+        config_path=config_path,
+        expected_tuning_options=expected_tuning_options,
+    )
+    with autotvm.apply_history_best(str(log_path)) as dispatch_context:
+        yield dispatch_context
+
+
+def build_tuning_options(backend, trials_per_task=None, timeout=None):
+    """Resolve the reproducible per-backend options written to each sidecar."""
+    validate_backend(backend)
+    if trials_per_task is not None and (
+        not isinstance(trials_per_task, int)
+        or isinstance(trials_per_task, bool)
+        or trials_per_task <= 0
+    ):
+        raise ValueError("trials_per_task must be a positive integer or null")
+    default_timeout = 120 if backend == "fsim" else 180
+    selected_timeout = default_timeout if timeout is None else timeout
+    if (
+        not isinstance(selected_timeout, int)
+        or isinstance(selected_timeout, bool)
+        or selected_timeout <= 0
+    ):
+        raise ValueError("timeout must be a positive integer number of seconds")
+    return {
+        "tuner": "grid_search",
+        "trials_per_task": trials_per_task,
+        "timeout": selected_timeout,
+        "number": 1,
+        "repeat": 1,
+        "cooldown_interval": 0.0,
+    }
+
+
+def _load_v1_pipeline():
+    pipeline_path = Path(__file__).resolve().parent / "image_classification_v1" / "model_pipeline.py"
+    spec = importlib.util.spec_from_file_location(
+        "mlperf_resnet_autotvm_model_pipeline", pipeline_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load image_classification_v1 model pipeline: {pipeline_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def tune_v1(
+    backend,
+    *,
+    trials_per_task=None,
+    timeout=None,
+    output_dir=DEFAULT_OUTPUT_DIR,
+):
+    """Tune all supported V1 VTA tasks and write a native log/JSON pair."""
+    validate_backend(backend)
+    config_path, _ = _config_identity(DEFAULT_CONFIG_PATH)
+    model_id = "image_classification_v1"
+    pipeline = _load_v1_pipeline()
+    model_path = Path(__file__).resolve().parent / model_id / "model" / "pretrainedResnet.tflite"
+    prepared = pipeline.prepare_model(model_path)
+    tasks = extract_v1_tasks(prepared)
+    if not tasks:
+        raise RuntimeError(f"{model_id} contains no supported VTA AutoTVM tasks")
+
+    options = build_tuning_options(backend, trials_per_task, timeout)
+    output_dir = Path(output_dir).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    stem = f"{model_id}-{backend}-{run_id}"
+    log_path = output_dir / f"{stem}.log"
+    sidecar_path = output_dir / f"{stem}.json"
+    callbacks = [autotvm.callback.log_to_file(str(log_path))]
+
+    for task in tasks:
+        total_configs = len(task.config_space)
+        trial_budget = total_configs if options["trials_per_task"] is None else min(
+            options["trials_per_task"], total_configs
+        )
+        if trial_budget <= 0:
+            raise RuntimeError(f"AutoTVM task {task.name} has an empty configuration space")
+        measure = measure_option(
+            backend,
+            timeout=options["timeout"],
+            number=options["number"],
+            repeat=options["repeat"],
+            cooldown_interval=options["cooldown_interval"],
+        )
+        runner = measure["runner"]
+        tuner = autotvm.tuner.GridSearchTuner(task)
+        try:
+            tuner.tune(
+                n_trial=trial_budget,
+                measure_option=measure,
+                callbacks=callbacks,
+            )
+        finally:
+            if getattr(runner, "server", None) is not None:
+                runner.server.terminate()
+                runner.server = None
+            if getattr(runner, "tracker", None) is not None:
+                runner.tracker.terminate()
+                runner.tracker = None
+
+    metadata = write_tuning_sidecar(
+        log_path,
+        sidecar_path,
+        model_id=model_id,
+        model_sha256=prepared.imported.model_sha256,
+        backend=backend,
+        config_path=config_path,
+        tasks=tasks,
+        tuning_options=options,
+    )
+    return log_path, sidecar_path, metadata
+
+
+def _positive_integer(value):
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be an integer") from error
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be positive")
+    return parsed
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Tune MLPerf Tiny VTA schedules with AutoTVM"
+    )
+    parser.add_argument("--model", choices=("image_classification_v1",), required=True)
+    parser.add_argument("--backend", choices=("fsim", "tsim"), required=True)
+    parser.add_argument(
+        "--trials-per-task",
+        type=_positive_integer,
+        help="bound grid search per task; default searches each complete task space",
+    )
+    parser.add_argument(
+        "--timeout", type=_positive_integer, help="override backend default timeout in seconds"
+    )
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    args = parser.parse_args(argv)
+    log_path, sidecar_path, metadata = tune_v1(
+        args.backend,
+        trials_per_task=args.trials_per_task,
+        timeout=args.timeout,
+        output_dir=args.output_dir,
+    )
+    print(f"AutoTVM log: {log_path}")
+    print(f"JSON sidecar: {sidecar_path}")
+    print(
+        f"model={metadata['model_id']} backend={metadata['backend']} "
+        f"tasks={metadata['task_count']} trials={metadata['trial_count']} "
+        f"config_sha256={metadata['config_sha256']}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

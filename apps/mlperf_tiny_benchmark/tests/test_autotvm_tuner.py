@@ -212,3 +212,169 @@ def test_dense_autotvm_template_builds_with_vta_target():
 
     assert schedule
     vta.build(schedule, args, target=task.target, target_host=task.target_host)
+
+
+def _dense_autotvm_task():
+    import tvm
+    import vta
+
+    env = vta.get_env()
+    target = tvm.target.Target("vta", host=env.target_host)
+    data = tvm.te.placeholder((1, 2, 1, 8), dtype=env.inp_dtype)
+    weight = tvm.te.placeholder((2, 2, 8, 8), dtype=env.wgt_dtype)
+    return tvm.autotvm.task.create(
+        "dense_packed.vta",
+        args=(data, weight, None, env.acc_dtype),
+        target=target,
+        target_host=env.target_host,
+    )
+
+
+def _write_native_record(tuner, path, task):
+    measure_input = tuner.MeasureInput(task.target, task, task.config_space.get(0))
+    result = tuner.MeasureResult((123,), tuner.MeasureErrorNo.NO_ERROR, 0.01, 1.0)
+    path.write_text(tuner.autotvm.record.encode(measure_input, result) + "\n", encoding="utf-8")
+
+
+def test_tuning_sidecar_validates_pair_and_history_best(tuner, monkeypatch, tmp_path):
+    import vta  # noqa: F401 - register VTA AutoTVM templates for log replay
+
+    monkeypatch.setenv("VTA_BACKEND", "fsim")
+    config_path = (Path(__file__).resolve().parents[3] / "config" / "vta_64mac.json").resolve()
+    monkeypatch.setenv("VTA_CONFIG_FILE", str(config_path))
+    task = _dense_autotvm_task()
+    log_path = tmp_path / "v1-fsim.log"
+    sidecar_path = tmp_path / "v1-fsim.json"
+    _write_native_record(tuner, log_path, task)
+    options = {"tuner": "grid_search", "trials_per_task": 1, "timeout": 60}
+
+    metadata = tuner.write_tuning_sidecar(
+        log_path,
+        sidecar_path,
+        model_id="image_classification_v1",
+        model_sha256="a" * 64,
+        backend="fsim",
+        config_path=config_path,
+        tasks=[task],
+        tuning_options=options,
+    )
+
+    assert metadata["task_count"] == 1
+    assert metadata["trial_count"] == 1
+    assert metadata["log_sha256"]
+    sidecar_bytes = sidecar_path.read_bytes()
+    tuner.write_tuning_sidecar(
+        log_path,
+        sidecar_path,
+        model_id="image_classification_v1",
+        model_sha256="a" * 64,
+        backend="fsim",
+        config_path=config_path,
+        tasks=[task],
+        tuning_options=options,
+    )
+    assert sidecar_path.read_bytes() == sidecar_bytes
+    validated = tuner.validate_tuning_artifacts(
+        log_path,
+        sidecar_path,
+        model_id="image_classification_v1",
+        model_sha256="a" * 64,
+        backend="fsim",
+        config_path=Path(metadata["config_path"]),
+        expected_tuning_options=options,
+    )
+    assert validated == metadata
+
+    with tuner.history_best(
+        log_path,
+        sidecar_path,
+        model_id="image_classification_v1",
+        model_sha256="a" * 64,
+        backend="fsim",
+        config_path=Path(metadata["config_path"]),
+        expected_tuning_options=options,
+    ):
+        assert tuner.autotvm.task.DispatchContext.current is not None
+
+
+def test_tuning_sidecar_rejects_incomplete_or_mismatched_replay(tuner, monkeypatch, tmp_path):
+    import vta  # noqa: F401 - register VTA AutoTVM templates for log replay
+
+    monkeypatch.setenv("VTA_BACKEND", "fsim")
+    config_path = (Path(__file__).resolve().parents[3] / "config" / "vta_64mac.json").resolve()
+    monkeypatch.setenv("VTA_CONFIG_FILE", str(config_path))
+    task = _dense_autotvm_task()
+    log_path = tmp_path / "v1-fsim.log"
+    sidecar_path = tmp_path / "v1-fsim.json"
+    _write_native_record(tuner, log_path, task)
+    options = {"tuner": "grid_search", "trials_per_task": 1, "timeout": 60}
+    tuner.write_tuning_sidecar(
+        log_path,
+        sidecar_path,
+        model_id="image_classification_v1",
+        model_sha256="a" * 64,
+        backend="fsim",
+        config_path=config_path,
+        tasks=[task],
+        tuning_options=options,
+    )
+
+    with pytest.raises(ValueError, match="tuning options"):
+        tuner.validate_tuning_artifacts(
+            log_path,
+            sidecar_path,
+            model_id="image_classification_v1",
+            model_sha256="a" * 64,
+            backend="fsim",
+            config_path=config_path,
+            expected_tuning_options={**options, "timeout": 30},
+        )
+
+    metadata = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    metadata["trial_count"] += 1
+    sidecar_path.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(ValueError, match="trial_count"):
+        tuner.validate_tuning_artifacts(
+            log_path,
+            sidecar_path,
+            model_id="image_classification_v1",
+            model_sha256="a" * 64,
+            backend="fsim",
+            config_path=config_path,
+        )
+
+
+def test_tuning_sidecar_rejects_geometry_config_mismatch(tuner, monkeypatch, tmp_path):
+    import vta  # noqa: F401 - register VTA AutoTVM templates for log replay
+
+    monkeypatch.setenv("VTA_BACKEND", "fsim")
+    config_path = (Path(__file__).resolve().parents[3] / "config" / "vta_64mac.json").resolve()
+    monkeypatch.setenv("VTA_CONFIG_FILE", str(config_path))
+    task = _dense_autotvm_task()
+    log_path = tmp_path / "v1-fsim.log"
+    sidecar_path = tmp_path / "v1-fsim.json"
+    _write_native_record(tuner, log_path, task)
+    options = {"tuner": "grid_search", "trials_per_task": 1, "timeout": 60}
+    tuner.write_tuning_sidecar(
+        log_path,
+        sidecar_path,
+        model_id="image_classification_v1",
+        model_sha256="a" * 64,
+        backend="fsim",
+        config_path=config_path,
+        tasks=[task],
+        tuning_options=options,
+    )
+
+    alternate_config = tmp_path / "vta_64mac.json"
+    alternate_config.write_bytes(config_path.read_bytes() + b"\n")
+    monkeypatch.setenv("VTA_CONFIG_FILE", str(alternate_config))
+    with pytest.raises(ValueError, match="config_path mismatch"):
+        tuner.validate_tuning_artifacts(
+            log_path,
+            sidecar_path,
+            model_id="image_classification_v1",
+            model_sha256="a" * 64,
+            backend="fsim",
+            config_path=alternate_config,
+        )
