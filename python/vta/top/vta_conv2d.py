@@ -90,7 +90,12 @@ def conv2d_packed(cfg, data, kernel, strides, padding, dilation, layout, out_dty
         * ishape[-1]
     )
 
-    return res
+    return te.compute(
+        oshape,
+        lambda *indices: res[indices],
+        name="output",
+        tag=topi.tag.ELEMWISE,
+    )
 
 
 @autotvm.register_topi_schedule("conv2d_packed.vta")
@@ -169,6 +174,10 @@ def schedule_conv2d_packed(cfg, outs):
     for op in const_ops:
         s[op].compute_inline()
 
+    x_bo, x_co, x_i, x_j, x_bi, x_ci = s[conv2d_stage].op.axis
+    k_o, d_i, d_j, k_i = s[conv2d_stage].op.reduce_axis
+    s[conv2d_stage].reorder(x_bo, k_o, x_j, d_j, d_i, x_co, x_i, x_bi, x_ci, k_i)
+
     # tile
     x_bo, x_co, x_i, x_j, x_bi, x_ci = s[output].op.axis
     x_co0, x_co1 = cfg["tile_co"].apply(s, output, x_co)
@@ -179,6 +188,7 @@ def schedule_conv2d_packed(cfg, outs):
 
     # set all compute scopes
     s[conv2d_stage].compute_at(s[output], store_pt)
+    k_o, _ = cfg["tile_ci"].apply(s, conv2d_stage, k_o)
     for op in ewise_ops:
         s[op].compute_at(s[output], store_pt)
 
@@ -198,18 +208,16 @@ def schedule_conv2d_packed(cfg, outs):
         s[output].reorder(v_t, x_bo)
         s[output].bind(v_t, te.thread_axis("cthread"))
 
-    x_bo, x_co, x_i, x_j, x_bi, x_ci = s[conv2d_stage].op.axis
-    k_o, d_i, d_j, k_i = s[conv2d_stage].op.reduce_axis
-    s[conv2d_stage].reorder(x_bo, k_o, x_j, d_j, d_i, x_co, x_i, x_bi, x_ci, k_i)
-
-    k_o, _ = cfg["tile_ci"].apply(s, conv2d_stage, k_o)
     s[cdata].compute_at(s[conv2d_stage], k_o)
     s[ckernel].compute_at(s[conv2d_stage], k_o)
 
     # Use VTA instructions
     s[cdata].pragma(s[cdata].op.axis[0], env.dma_copy)
     s[ckernel].pragma(s[ckernel].op.axis[0], env.dma_copy)
-    s[conv2d_stage].tensorize(x_bi, env.gemm)
+    gemm_axis = next(
+        axis for axis in s[conv2d_stage].leaf_iter_vars if axis.var.name == "b_i"
+    )
+    s[conv2d_stage].tensorize(gemm_axis, env.gemm)
     s[output].pragma(x_co1, env.dma_copy)
 
     return s

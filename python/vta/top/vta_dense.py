@@ -66,7 +66,12 @@ def dense_packed(cfg, data, weight, bias=None, out_dtype=None):
 
     cfg.add_flop(2 * np.prod(topi.utils.get_const_tuple(oshape)) * ishape[1] * ishape[3])
 
-    return res
+    return te.compute(
+        oshape,
+        lambda *indices: res[indices],
+        name="output",
+        tag=topi.tag.ELEMWISE,
+    )
 
 
 @autotvm.register_topi_schedule("dense_packed.vta")
@@ -132,6 +137,10 @@ def schedule_dense_packed(cfg, outs):
     for op in const_ops:
         s[op].compute_inline()
 
+    x_bo, x_co, x_bi, _ = s[dense_stage].op.axis
+    k_o, _ = s[dense_stage].op.reduce_axis
+    s[dense_stage].reorder(x_bo, k_o, x_co)
+
     # apply tiling for SRAM reuse
     x_b, x_c, _, _ = s[output].op.axis
     x_bo, x_bi = cfg["tile_b"].apply(s, output, x_b)
@@ -141,6 +150,7 @@ def schedule_dense_packed(cfg, outs):
 
     # set all compute scopes
     s[dense_stage].compute_at(s[output], store_pt)
+    k_o, _ = cfg["tile_ci"].apply(s, dense_stage, k_o)
     for op in ewise_ops:
         s[op].compute_at(s[output], store_pt)
 
@@ -154,18 +164,14 @@ def schedule_dense_packed(cfg, outs):
         s[output].reorder(v_t, x_bo)
         s[output].bind(v_t, te.thread_axis("cthread"))
 
-    x_bo, x_co, x_bi, _ = s[dense_stage].op.axis
-    k_o, _ = s[dense_stage].op.reduce_axis
-    s[dense_stage].reorder(x_bo, k_o, x_co)
-
-    k_o, _ = cfg["tile_ci"].apply(s, dense_stage, k_o)
     s[cdata].compute_at(s[dense_stage], k_o)
     s[cweight].compute_at(s[dense_stage], k_o)
 
     # Use VTA instructions
     s[cdata].pragma(s[cdata].op.axis[0], env.dma_copy)
     s[cweight].pragma(s[cweight].op.axis[0], env.dma_copy)
-    s[dense_stage].tensorize(x_bi, env.gemm)
+    gemm_axis = next(axis for axis in s[dense_stage].leaf_iter_vars if axis.var.name == "b_i")
+    s[dense_stage].tensorize(gemm_axis, env.gemm)
     s[output].pragma(x_ci, env.dma_copy)
 
     return s

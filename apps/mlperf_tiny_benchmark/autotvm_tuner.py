@@ -116,16 +116,24 @@ class SimulatorLocalRunner(LocalRunner):
         self.key = device_key
         self.host = "127.0.0.1"
         self.port = tracker.port
-        if check_remote(tvm.target.Target("ext_dev"), self.key, self.host, self.port):
+        if check_remote(vta_target(), self.key, self.host, self.port):
             return server, tracker
         raise RuntimeError("VTA ext_dev device is unavailable in the local simulator RPC server")
 
     def run(self, measure_inputs, build_results):
+        device_target = vta_target()
         runtime_inputs = [
-            MeasureInput(tvm.target.Target("ext_dev"), measure_input.task, measure_input.config)
+            MeasureInput(device_target, measure_input.task, measure_input.config)
             for measure_input in measure_inputs
         ]
         return super().run(runtime_inputs, build_results)
+
+
+def vta_target():
+    """Return the configured ext_dev target used to access the VTA runtime."""
+    import vta
+
+    return vta.get_env().target
 
 
 class ProfilerModuleLoader:
@@ -180,6 +188,8 @@ class ProfilerModuleLoader:
                     except Exception as error:
                         raise RuntimeError("TSIM AutoTVM profiler status could not be read") from error
                     self.collected[filename] = stats
+                    with open(filename + ".tsim.json", "w", encoding="utf-8") as stats_file:
+                        json.dump(stats, stats_file, sort_keys=True)
 
 
 def tsim_cycle_cost(stats):
@@ -207,15 +217,28 @@ class TSIMLocalRunner(SimulatorLocalRunner):
             if result.error_no != MeasureErrorNo.NO_ERROR:
                 converted.append(result)
                 continue
+            stats_path = build_result.filename + ".tsim.json"
             try:
-                cost = tsim_cycle_cost(self.cycle_stats[build_result.filename])
-            except (KeyError, RuntimeError) as error:
+                stats = self.cycle_stats.pop(build_result.filename, None)
+                if stats is None:
+                    with open(stats_path, encoding="utf-8") as stats_file:
+                        stats = json.load(stats_file)
+                cost = tsim_cycle_cost(stats)
+            except (KeyError, OSError, RuntimeError, ValueError) as error:
                 converted.append(
                     MeasureResult(
-                        (str(error),), MeasureErrorNo.RUNTIME_DEVICE, result.all_cost, time.time()
+                        (str(error), error),
+                        MeasureErrorNo.RUNTIME_DEVICE,
+                        result.all_cost,
+                        time.time(),
                     )
                 )
                 continue
+            finally:
+                try:
+                    os.remove(stats_path)
+                except OSError:
+                    pass
             converted.append(
                 MeasureResult((cost,), MeasureErrorNo.NO_ERROR, result.all_cost, result.timestamp)
             )
@@ -243,3 +266,28 @@ def measure_option(backend, **runner_options):
         builder=autotvm.LocalBuilder(n_parallel=1),
         runner=create_runner(backend, **runner_options),
     )
+
+
+def extract_v1_tasks(prepared):
+    """Extract supported VTA AutoTVM tasks from the prepared V1 graph."""
+    import vta
+
+    env = vta.get_env()
+    task_target = tvm.target.Target("vta", host=env.target_host)
+    extracted = autotvm.task.extract_from_program(
+        prepared.mixed_module,
+        target=task_target,
+        target_host=env.target_host,
+        params={},
+    )
+    supported_templates = {"conv2d_packed.vta", "dense_packed.vta"}
+    tasks = [
+        task
+        for task in extracted
+        if task.target.kind.name == "vta" and task.name in supported_templates
+    ]
+    for task in tasks:
+        # AutoTVM's LocalBuilder selects VTA's build_config by device_name;
+        # the canonical ext_dev target keeps the measurement device usable.
+        task.target = env.target
+    return tasks
