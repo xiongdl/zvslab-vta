@@ -28,6 +28,7 @@ import numpy as np
 import tvm
 import vta
 from tvm import relay
+from tvm.relay.backend import te_compiler
 from tvm.contrib import graph_executor
 
 from graph_artifacts import export_graph_bundle
@@ -386,6 +387,10 @@ def build_host_artifacts(
         else nullcontext()
     )
     with history_context:
+        if autotvm_log is not None:
+            # Relay's TECompiler cache does not include AutoTVM history-best in
+            # its key. Clear a previous untuned lowering before replaying a log.
+            te_compiler.get().clear()
         if host_codegen == "c":
             with vta.build_config(config={"tir.disable_vectorize": True}):
                 mixed_factory = relay.build(

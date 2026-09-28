@@ -199,6 +199,18 @@ def test_tuned_build_applies_matching_history_best_only_during_mixed_compile(
     context_state = {"active": False}
     built = []
     exported = []
+    compile_events = []
+
+    class FakeTECompiler:
+        def clear(self):
+            compile_events.append(("clear", context_state["active"]))
+
+    monkeypatch.setattr(
+        deployment_runtime,
+        "te_compiler",
+        SimpleNamespace(get=lambda: FakeTECompiler()),
+        raising=False,
+    )
 
     class Factory:
         def get_graph_json(self):
@@ -215,6 +227,7 @@ def test_tuned_build_applies_matching_history_best_only_during_mixed_compile(
 
     def relay_build(module, target):
         built.append((module, context_state["active"]))
+        compile_events.append(("build", module, context_state["active"]))
         return Factory()
 
     @contextmanager
@@ -260,6 +273,11 @@ def test_tuned_build_applies_matching_history_best_only_during_mixed_compile(
     )
 
     assert built == [(quantized, False), (mixed, True)]
+    assert compile_events == [
+        ("build", quantized, False),
+        ("clear", True),
+        ("build", mixed, True),
+    ]
     assert exported == [("reference", False), ("mixed", False)]
 
 def test_each_reloaded_graph_loads_only_its_own_params_before_execution(
