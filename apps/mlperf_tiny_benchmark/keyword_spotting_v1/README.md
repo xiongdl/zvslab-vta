@@ -85,3 +85,31 @@ The default is LLVM FSIM. Use `--host-codegen c` for one C-host deployment and
 successful single run reports twelve comparisons; each FSIM matrix entry must
 have positive GEMM, weight-load, and output-store counters, while each TSIM
 entry must have a positive integer `cycle_count`.
+
+## AutoTVM schedule tuning
+
+The shared tuner extracts supported VTA convolution/dense task families from
+the prepared KWS graph and records unsupported VTA task families in the JSON
+sidecar. FSIM and TSIM produce separate logs and sidecars under
+`vta/apps/mlperf_tiny_benchmark/build/autotvm/`. Add `--trials-per-task 1` for
+a bounded workflow check:
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
+  --model keyword_spotting_v1 --backend fsim --trials-per-task 1
+
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
+  --model keyword_spotting_v1 --backend tsim --trials-per-task 1
+```
+
+Pass the matching `--autotvm-log` and `--autotvm-sidecar` to `run.py` with the
+same backend to replay history-best during mixed-graph compilation. Run each
+backend in a fresh process. Replay validates model, backend, config, log hash,
+and task coverage. MFCC preprocessing and the 12-sample, 12-label output
+contract remain in place; TSIM reports simulator `cycle_count`.

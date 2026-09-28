@@ -2,6 +2,8 @@
 """Run the fixed MLPerf Tiny Keyword Spotting v1 deployment."""
 
 import argparse
+import json
+from pathlib import Path
 
 from runtime import DEFAULT_OUTPUT_DIR, deploy, deploy_fsim_matrix, deploy_tsim_matrix
 
@@ -26,6 +28,8 @@ def _parser():
         default="fsim",
         help="execution mode (default: fsim)",
     )
+    parser.add_argument("--autotvm-log", type=Path, help="native AutoTVM log for tuned replay")
+    parser.add_argument("--autotvm-sidecar", type=Path, help="matching JSON sidecar")
     return parser
 
 
@@ -46,6 +50,10 @@ def _print_execution(prefix, execution):
 
 def main(argv=None):
     args = _parser().parse_args(argv)
+    if (args.autotvm_log is None) != (args.autotvm_sidecar is None):
+        raise SystemExit("--autotvm-log and --autotvm-sidecar must be provided together")
+    if args.autotvm_log is not None and (args.simulator == "host" or args.host_codegen == "all"):
+        raise SystemExit("AutoTVM replay requires one FSIM/TSIM backend and one host codegen")
     if args.host_codegen == "all":
         if args.simulator == "host":
             _parser().error("--host-codegen all requires --simulator fsim or tsim")
@@ -64,9 +72,16 @@ def main(argv=None):
         args.output_dir,
         host_codegen=args.host_codegen,
         simulator=args.simulator,
+        autotvm_log=args.autotvm_log,
+        autotvm_sidecar=args.autotvm_sidecar,
     )
     prefix = f"{args.host_codegen}-{args.simulator}"
     _print_execution(prefix, result.execution)
+    if args.autotvm_sidecar is not None:
+        metadata = json.loads(args.autotvm_sidecar.read_text(encoding="utf-8"))
+        print(f"AutoTVM model: {metadata['model_id']} ({metadata['model_sha256']})")
+        print(f"AutoTVM log: {args.autotvm_log.resolve()}")
+        print(f"AutoTVM sidecar: {args.autotvm_sidecar.resolve()}")
     print(f"{prefix} reference bundle: {result.artifacts.reference.artifact_dir}")
     print(f"{prefix} mixed bundle: {result.artifacts.mixed.artifact_dir}")
     print("MLPerf KWS v1 deployment passed")

@@ -43,6 +43,25 @@ def test_backend_validation_requires_explicit_matching_selector(tuner, monkeypat
         tuner.validate_backend("tsim")
 
 
+@pytest.mark.parametrize(
+    "model_id,model_filename",
+    [
+        ("keyword_spotting_v1", "kws_ref_model.tflite"),
+    ],
+)
+def test_audio_model_pipelines_are_registered(tuner, model_id, model_filename):
+    assert tuner.MODEL_PIPELINES[model_id] == (model_id, "model", model_filename)
+    pipeline = tuner._load_model_pipeline(model_id)
+    model_path = Path(tuner.__file__).resolve().parent / model_id / "model" / model_filename
+    prepared = pipeline.prepare_model(model_path)
+    assert prepared.imported.model_sha256 == pipeline.MODEL_SHA256
+    tasks, report = tuner.extract_model_tasks(prepared)
+    assert tasks
+    assert report["supported"]
+    assert all(item["template"] in tuner.SUPPORTED_TEMPLATES for item in report["supported"])
+    assert all(item["template"] not in tuner.SUPPORTED_TEMPLATES for item in report["unsupported"])
+
+
 def test_backend_loading_preserves_missing_library_diagnostic(tuner, monkeypatch):
     from vta.testing import simulator
 
