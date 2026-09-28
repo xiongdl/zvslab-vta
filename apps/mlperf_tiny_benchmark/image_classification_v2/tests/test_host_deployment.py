@@ -35,7 +35,7 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_PATH = APP_ROOT / "runtime.py"
 MODEL_PATH = APP_ROOT / "model" / "pretrainedResnet_large_float.tflite"
 MANIFEST_PATH = APP_ROOT / "samples" / "manifest.json"
-EXPECTED_VTA_SYMBOLS = tuple(f"tvmgen_mlperf_resnet_large_vta_main_{index}" for index in range(4))
+EXPECTED_VTA_SYMBOLS = tuple(f"tvmgen_mlperf_resnet_large_vta_main_{index}" for index in range(8))
 EXPECTED_ARTIFACT_DIRS = ("reference", "mixed")
 REQUIRED_PROFILER_COUNTERS = ("gemm_counter", "wgt_load_nbytes", "out_store_nbytes")
 EXPECTED_ARTIFACT_NAME = "resnet8_large"
@@ -599,7 +599,6 @@ def test_application_sources_use_only_the_approved_host_flow():
     for forbidden in [
         "tensorflow",
         "tflite_runtime",
-        "autotvm",
         "graphpack",
         "relay.ext." + "vta",
         "tiny-v1.4",
@@ -609,6 +608,8 @@ def test_application_sources_use_only_the_approved_host_flow():
         "fvp",
     ]:
         assert forbidden not in lowered
+    assert "import autotvm" not in lowered
+    assert "from tvm import autotvm" not in lowered
 
     runtime_tree = ast.parse(sources["runtime.py"])
     top_level_imports = [

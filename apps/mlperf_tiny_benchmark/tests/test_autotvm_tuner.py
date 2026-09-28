@@ -193,6 +193,66 @@ def test_v1_task_extraction_builds_supported_vta_templates(tuner):
         vta.build(schedule, args, target=task.target, target_host=task.target_host)
 
 
+def test_v2_task_extraction_reports_supported_and_unsupported_vta_tasks(tuner):
+    model_id = "image_classification_v2"
+    pipeline = tuner._load_model_pipeline(model_id)
+    model_path = Path(__file__).resolve().parents[1] / model_id / "model" / "pretrainedResnet_large_float.tflite"
+    prepared = pipeline.prepare_model(model_path)
+
+    tasks, report = tuner.extract_model_tasks(prepared)
+
+    assert tasks
+    assert {entry["template"] for entry in report["supported"]} == {
+        task.name for task in tasks
+    }
+    assert report["unsupported"]
+    assert all(
+        entry["template"] not in tuner.SUPPORTED_TEMPLATES
+        and len(entry["workload_sha256"]) == 64
+        for entry in report["unsupported"]
+    )
+    assert {entry["workload_sha256"] for entry in report["supported"]} == {
+        tuner._task_workload_id(task) for task in tasks
+    }
+    for task in tasks:
+        with task.target:
+            schedule, args = task.instantiate(task.config_space.get(0))
+        assert schedule
+        import vta
+        vta.build(schedule, args, target=task.target, target_host=task.target_host)
+
+
+def test_task_extraction_names_unsupported_vta_template(tuner, monkeypatch):
+    from types import SimpleNamespace
+
+    supported = SimpleNamespace(
+        name="conv2d_packed.vta",
+        target=SimpleNamespace(kind=SimpleNamespace(name="vta")),
+        workload=("supported",),
+    )
+    unsupported = SimpleNamespace(
+        name="pool_packed.vta",
+        target=SimpleNamespace(kind=SimpleNamespace(name="vta")),
+        workload=("unsupported",),
+    )
+    monkeypatch.setattr(
+        tuner.autotvm.task,
+        "extract_from_program",
+        lambda *_args, **_kwargs: [supported, unsupported],
+    )
+
+    tasks, report = tuner.extract_model_tasks(SimpleNamespace(mixed_module=object()))
+
+    assert tasks == [supported]
+    assert report["supported"][0]["template"] == "conv2d_packed.vta"
+    assert report["unsupported"] == [
+        {
+            "template": "pool_packed.vta",
+            "workload_sha256": tuner._workload_id(("unsupported",)),
+        }
+    ]
+
+
 def test_dense_autotvm_template_builds_with_vta_target():
     import tvm
     import vta

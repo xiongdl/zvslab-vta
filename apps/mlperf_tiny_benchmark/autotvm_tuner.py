@@ -46,6 +46,11 @@ ARTIFACT_SCHEMA_VERSION = 1
 TUNER_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = TUNER_ROOT / "config" / "vta_64mac.json"
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "build" / "autotvm"
+MODEL_PIPELINES = {
+    "image_classification_v1": ("image_classification_v1", "model", "pretrainedResnet.tflite"),
+    "image_classification_v2": ("image_classification_v2", "model", "pretrainedResnet_large_float.tflite"),
+}
+SUPPORTED_TEMPLATES = {"conv2d_packed.vta", "dense_packed.vta"}
 
 
 def validate_backend(backend):
@@ -279,6 +284,12 @@ def measure_option(backend, **runner_options):
 
 def extract_v1_tasks(prepared):
     """Extract supported VTA AutoTVM tasks from the prepared V1 graph."""
+    tasks, _ = extract_model_tasks(prepared)
+    return tasks
+
+
+def extract_model_tasks(prepared):
+    """Return supported VTA tasks and an explicit supported/unsupported report."""
     import vta
 
     env = vta.get_env()
@@ -289,17 +300,24 @@ def extract_v1_tasks(prepared):
         target_host=env.target_host,
         params={},
     )
-    supported_templates = {"conv2d_packed.vta", "dense_packed.vta"}
-    tasks = [
-        task
-        for task in extracted
-        if task.target.kind.name == "vta" and task.name in supported_templates
-    ]
+    vta_tasks = [task for task in extracted if task.target.kind.name == "vta"]
+    tasks = [task for task in vta_tasks if task.name in SUPPORTED_TEMPLATES]
+    unsupported = [task for task in vta_tasks if task.name not in SUPPORTED_TEMPLATES]
     for task in tasks:
         # AutoTVM's LocalBuilder selects VTA's build_config by device_name;
         # the canonical ext_dev target keeps the measurement device usable.
         task.target = env.target
-    return tasks
+    report = {
+        "supported": [
+            {"template": task.name, "workload_sha256": _task_workload_id(task)}
+            for task in tasks
+        ],
+        "unsupported": [
+            {"template": task.name, "workload_sha256": _task_workload_id(task)}
+            for task in unsupported
+        ],
+    }
+    return tasks, report
 
 
 def _sha256_file(path):
@@ -395,6 +413,7 @@ def write_tuning_sidecar(
     config_path,
     tasks,
     tuning_options,
+    task_report=None,
 ):
     """Write a deterministic JSON sidecar for a complete native AutoTVM log."""
     validate_backend(backend)
@@ -431,6 +450,13 @@ def write_tuning_sidecar(
         "trial_count": trial_count,
         "task_workloads": task_workloads,
         "task_trials": dict(sorted(trial_counts.items())),
+        "task_report": task_report or {
+            "supported": [
+                {"template": task.name, "workload_sha256": _task_workload_id(task)}
+                for task in tasks
+            ],
+            "unsupported": [],
+        },
         "tuning_options": tuning_options,
     }
     sidecar_path = Path(sidecar_path).expanduser().resolve()
@@ -503,6 +529,23 @@ def validate_tuning_artifacts(
         or trial_count <= 0
     ):
         raise ValueError("tuning sidecar task/trial counts are incomplete")
+    report = metadata.get("task_report")
+    if not isinstance(report, dict) or set(report) != {"supported", "unsupported"}:
+        raise ValueError("tuning sidecar task_report is incomplete")
+    for category in ("supported", "unsupported"):
+        entries = report.get(category)
+        if not isinstance(entries, list) or not all(
+            isinstance(entry, dict)
+            and isinstance(entry.get("template"), str)
+            and isinstance(entry.get("workload_sha256"), str)
+            and len(entry["workload_sha256"]) == 64
+            for entry in entries
+        ):
+            raise ValueError(f"tuning sidecar task_report {category} entries are invalid")
+    reported_supported = {entry["workload_sha256"] for entry in report["supported"]}
+    reported_unsupported = {entry["workload_sha256"] for entry in report["unsupported"]}
+    if reported_supported != set(workloads) or reported_supported & reported_unsupported:
+        raise ValueError("tuning sidecar task_report does not match supported log coverage")
     log_path, actual_trials, successful, actual_trial_count = _load_log_summary(log_path)
     if actual_trial_count != trial_count:
         raise ValueError("tuning sidecar trial_count does not match the native AutoTVM log")
@@ -565,35 +608,44 @@ def build_tuning_options(backend, trials_per_task=None, timeout=None):
     }
 
 
-def _load_v1_pipeline():
-    pipeline_path = Path(__file__).resolve().parent / "image_classification_v1" / "model_pipeline.py"
+def _load_model_pipeline(model_id):
+    if model_id not in MODEL_PIPELINES:
+        raise ValueError(f"unsupported MLPerf Tiny model {model_id!r}")
+    pipeline_name = MODEL_PIPELINES[model_id][0]
+    pipeline_path = Path(__file__).resolve().parent / pipeline_name / "model_pipeline.py"
     spec = importlib.util.spec_from_file_location(
-        "mlperf_resnet_autotvm_model_pipeline", pipeline_path
+        f"mlperf_{model_id}_autotvm_model_pipeline", pipeline_path
     )
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"cannot load image_classification_v1 model pipeline: {pipeline_path}")
+        raise RuntimeError(f"cannot load {model_id} model pipeline: {pipeline_path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def tune_v1(
+def tune_model(
+    model_id,
     backend,
     *,
     trials_per_task=None,
     timeout=None,
     output_dir=DEFAULT_OUTPUT_DIR,
 ):
-    """Tune all supported V1 VTA tasks and write a native log/JSON pair."""
+    """Tune supported VTA tasks for one prepared MLPerf Tiny model."""
     validate_backend(backend)
+    if model_id not in MODEL_PIPELINES:
+        raise ValueError(f"unsupported MLPerf Tiny model {model_id!r}")
     config_path, _ = _config_identity(DEFAULT_CONFIG_PATH)
-    model_id = "image_classification_v1"
-    pipeline = _load_v1_pipeline()
-    model_path = Path(__file__).resolve().parent / model_id / "model" / "pretrainedResnet.tflite"
+    pipeline = _load_model_pipeline(model_id)
+    _, model_dir, model_filename = MODEL_PIPELINES[model_id]
+    model_path = Path(__file__).resolve().parent / model_id / model_dir / model_filename
     prepared = pipeline.prepare_model(model_path)
-    tasks = extract_v1_tasks(prepared)
+    tasks, task_report = extract_model_tasks(prepared)
     if not tasks:
-        raise RuntimeError(f"{model_id} contains no supported VTA AutoTVM tasks")
+        raise RuntimeError(
+            f"{model_id} contains no supported VTA AutoTVM tasks; "
+            f"task report: {json.dumps(task_report, sort_keys=True)}"
+        )
 
     options = build_tuning_options(backend, trials_per_task, timeout)
     output_dir = Path(output_dir).expanduser().resolve()
@@ -643,8 +695,14 @@ def tune_v1(
         config_path=config_path,
         tasks=tasks,
         tuning_options=options,
+        task_report=task_report,
     )
     return log_path, sidecar_path, metadata
+
+
+def tune_v1(backend, **kwargs):
+    """Compatibility wrapper for the original V1 tuner API."""
+    return tune_model("image_classification_v1", backend, **kwargs)
 
 
 def _positive_integer(value):
@@ -661,7 +719,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Tune MLPerf Tiny VTA schedules with AutoTVM"
     )
-    parser.add_argument("--model", choices=("image_classification_v1",), required=True)
+    parser.add_argument("--model", choices=tuple(MODEL_PIPELINES), required=True)
     parser.add_argument("--backend", choices=("fsim", "tsim"), required=True)
     parser.add_argument(
         "--trials-per-task",
@@ -673,7 +731,8 @@ def main(argv=None):
     )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     args = parser.parse_args(argv)
-    log_path, sidecar_path, metadata = tune_v1(
+    log_path, sidecar_path, metadata = tune_model(
+        args.model,
         args.backend,
         trials_per_task=args.trials_per_task,
         timeout=args.timeout,

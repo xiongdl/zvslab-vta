@@ -8,9 +8,9 @@ PNG samples, and requires positive simulator activity. The matrix mode builds
 LLVM and C variants below separate `llvm-fsim/` and `c-fsim/` (FSIM) or
 `llvm-tsim/` and `c-tsim/` (TSIM) bundle roots.
 
-The mixed artifacts use the `resnet8_large` identity and contain exactly four
+The mixed artifacts use the `resnet8_large` identity and contain exactly eight
 single-convolution VTA regions (`tvmgen_mlperf_resnet_large_vta_main_0` through
-`_3`) plus five HOST convolutions.
+`_7`) plus five HOST convolutions.
 
 Importing `vta` loads and validates the compiler target extension. The mixed
 branch explicitly applies `vta.relay.partition_for_vta()` once, then passes
@@ -82,10 +82,48 @@ PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   --simulator tsim --host-codegen all
 ```
 
-Successful output reports four deterministic VTA regions and five HOST convolutions, ten exact output
+Successful output reports eight deterministic VTA regions and five HOST convolutions, ten exact output
 comparisons per host, and positive simulator counters. FSIM validates GEMM,
 weight-load, and output-store counters; TSIM validates its supported
 `cycle_count` counter only. Missing libraries, unexpected model or routing
 structure, output differences, wrong configuration, and absent accelerator
 activity cause a nonzero exit. TSIM initialization and hardware loading remain
-lazy until all four bundles have been built, exported, and reloaded.
+lazy until all four reference/mixed bundles have been built, exported, and reloaded.
+
+## AutoTVM tuning and replay
+
+Tune the V2 prepared mixed graph independently for FSIM and TSIM. Each command
+writes a backend-specific native log and JSON sidecar under the ignored shared
+AutoTVM output directory. The sidecar includes the V2 model hash and a report
+of supported and unsupported VTA task templates; unsupported operators are
+not counted as tuned.
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
+  --model image_classification_v2 --backend fsim --trials-per-task 1
+
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
+  --model image_classification_v2 --backend tsim --trials-per-task 1
+```
+
+Replay a matching pair with the same simulator selector and geometry. The
+runtime validates the model/backend/config/log pairing before compiling the
+mixed graph with history-best; it clears the TECompiler cache before tuned
+lowering so an earlier baseline compile cannot mask the selected schedule.
+Output tensors are still checked against the existing reference path.
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/image_classification_v2/run.py \
+  --simulator tsim \
+  --autotvm-log <image_classification_v2-tsim.log> \
+  --autotvm-sidecar <image_classification_v2-tsim.json>
+```
