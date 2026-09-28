@@ -2,11 +2,12 @@
 
 import json
 import hashlib
+import importlib.util
 import math
 import os
 import stat
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,7 @@ import tvm
 import vta
 from tvm import relay
 from tvm.contrib import graph_executor
+from tvm.relay.backend import te_compiler
 
 from graph_artifacts import export_graph_bundle
 from model_pipeline import (
@@ -43,6 +45,7 @@ DEFAULT_TSIM_WINDOW_BUDGET = 1
 TSIM_WINDOW_BUDGET_ENV = "VTA_ANOMALY_TSIM_WINDOW_BUDGET"
 FULL_SCORE_SCOPE = "full_windows"
 TSIM_SCORE_SCOPE = "representative_windows"
+MODEL_ID = "anomaly_detection_v1"
 
 
 @dataclass(frozen=True)
@@ -399,6 +402,24 @@ def _mixed_target(host_codegen):
     return tvm.target.Target("vta", host=host)
 
 
+def _history_best(log_path, sidecar_path, prepared, simulator):
+    tuner_path = APP_ROOT.parent / "autotvm_tuner.py"
+    spec = importlib.util.spec_from_file_location("mlperf_tiny_autotvm_tuner", tuner_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load AutoTVM tuner: {tuner_path}")
+    tuner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = tuner
+    spec.loader.exec_module(tuner)
+    return tuner.history_best(
+        log_path,
+        sidecar_path,
+        model_id=MODEL_ID,
+        model_sha256=prepared.imported.model_sha256,
+        backend=simulator,
+        config_path=tuner.DEFAULT_CONFIG_PATH,
+    )
+
+
 def _model_metadata(prepared):
     return {
         "model_sha256": prepared.imported.model_sha256,
@@ -427,10 +448,12 @@ def _execution_metadata(prepared, execution):
 
 
 def build_host_artifacts(prepared, build_dir=DEFAULT_BUILD_DIR, host_codegen=DEFAULT_HOST_CODEGEN,
-                         mode="host"):
+                         mode="host", autotvm_log=None, autotvm_sidecar=None):
     """Build and reload reference/mixed artifacts without loading a simulator."""
     _validate_host_codegen(host_codegen)
     _validate_mode(mode)
+    if (autotvm_log is None) != (autotvm_sidecar is None):
+        raise ValueError("AutoTVM replay requires both --autotvm-log and --autotvm-sidecar")
     if prepared.reference_module is not prepared.quantized_module:
         raise RuntimeError("reference must be the shared quantized module")
     build_root = Path(build_dir) / f"{host_codegen}-{mode}"
@@ -439,12 +462,21 @@ def build_host_artifacts(prepared, build_dir=DEFAULT_BUILD_DIR, host_codegen=DEF
             reference_factory = relay.build(prepared.reference_module, target=tvm.target.Target("c"))
     else:
         reference_factory = relay.build(prepared.reference_module, target="llvm")
-    if host_codegen == "c":
-        with vta.build_config(config={"tir.disable_vectorize": True}):
-            mixed_factory = relay.build(prepared.mixed_module, target=_mixed_target(host_codegen))
-    else:
-        with vta.build_config():
-            mixed_factory = relay.build(prepared.mixed_module, target=_mixed_target(host_codegen))
+    history_context = (
+        _history_best(autotvm_log, autotvm_sidecar, prepared, mode)
+        if autotvm_log is not None
+        else nullcontext()
+    )
+    with history_context:
+        if autotvm_log is not None:
+            # TECompiler cache keys omit AutoTVM history-best dispatch state.
+            te_compiler.get().clear()
+        if host_codegen == "c":
+            with vta.build_config(config={"tir.disable_vectorize": True}):
+                mixed_factory = relay.build(prepared.mixed_module, target=_mixed_target(host_codegen))
+        else:
+            with vta.build_config():
+                mixed_factory = relay.build(prepared.mixed_module, target=_mixed_target(host_codegen))
     metadata = _model_metadata(prepared)
     reference = export_graph_bundle(
         reference_factory, build_root, "reference",
@@ -707,7 +739,8 @@ def _execute_tsim_matrix(artifacts, records, reference_raw, session, simulator, 
 
 
 def deploy(build_dir=DEFAULT_BUILD_DIR, host_codegen=DEFAULT_HOST_CODEGEN, mode="host",
-           manifest_path=MANIFEST_PATH, tsim_window_budget=None):
+           manifest_path=MANIFEST_PATH, tsim_window_budget=None,
+           autotvm_log=None, autotvm_sidecar=None):
     _validate_mode(mode)
     window_budget = None
     if mode in ("fsim", "tsim"):
@@ -716,7 +749,10 @@ def deploy(build_dir=DEFAULT_BUILD_DIR, host_codegen=DEFAULT_HOST_CODEGEN, mode=
         window_budget = resolve_tsim_window_budget(tsim_window_budget)
     prepared = prepare_model(MODEL_PATH)
     records = committed_sample_records(manifest_path)
-    artifacts = build_host_artifacts(prepared, build_dir, host_codegen, mode)
+    artifacts = build_host_artifacts(
+        prepared, build_dir, host_codegen, mode,
+        autotvm_log=autotvm_log, autotvm_sidecar=autotvm_sidecar,
+    )
     if mode == "host":
         execution = execute_host(artifacts, records)
     elif mode == "fsim":

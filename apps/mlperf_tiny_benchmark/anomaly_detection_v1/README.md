@@ -145,3 +145,39 @@ a positive integer `cycle_count`. Missing TSIM registries, a non-TSIM
 `VTA_BACKEND`, or absent `libvta_hw` causes a nonzero exit. The scores and
 labels are deployment contracts only; they do not claim classification
 accuracy.
+
+## AutoTVM tuning and replay
+
+The tuner extracts from the prepared anomaly mixed graph and writes a separate
+native log and JSON sidecar for each backend. The sidecar records the model
+hash and supported/unsupported VTA task templates; only supported templates
+are measured and represented in history-best replay.
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
+  --model anomaly_detection_v1 --backend fsim --trials-per-task 1
+
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
+  --model anomaly_detection_v1 --backend tsim --trials-per-task 1
+```
+
+Pass a matching log/sidecar pair to the runner to compile and execute with
+history-best. TSIM replay keeps the existing bounded-window policy; the default
+is one deterministic representative feature window per sample, which is a
+smoke score rather than a full-window anomaly score.
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/anomaly_detection_v1/run.py \
+  --mode tsim --tsim-window-budget 1 \
+  --autotvm-log <anomaly_detection_v1-tsim.log> \
+  --autotvm-sidecar <anomaly_detection_v1-tsim.json>
+```

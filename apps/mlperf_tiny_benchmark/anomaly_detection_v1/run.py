@@ -54,6 +54,8 @@ def _parser():
             f"or {runtime.TSIM_WINDOW_BUDGET_ENV}"
         ),
     )
+    parser.add_argument("--autotvm-log", type=Path, help="native AutoTVM log for tuned replay")
+    parser.add_argument("--autotvm-sidecar", type=Path, help="matching JSON sidecar")
     return parser
 
 
@@ -97,6 +99,13 @@ def main(argv=None):
             return 2
         mode = args.simulator
 
+    if (args.autotvm_log is None) != (args.autotvm_sidecar is None):
+        print("--autotvm-log and --autotvm-sidecar must be provided together", file=sys.stderr)
+        return 2
+    if args.autotvm_log is not None and (mode not in ("fsim", "tsim") or args.host_codegen == "all"):
+        print("AutoTVM replay requires one FSIM/TSIM backend and one host codegen", file=sys.stderr)
+        return 2
+
     try:
         if args.host_codegen == "all":
             if mode not in ("fsim", "tsim"):
@@ -122,6 +131,8 @@ def main(argv=None):
                 result = runtime.deploy(
                     args.build_dir, args.host_codegen, mode, args.manifest,
                     tsim_window_budget=args.tsim_window_budget,
+                    autotvm_log=args.autotvm_log,
+                    autotvm_sidecar=args.autotvm_sidecar,
                 )
             payload = _json_result(result)
         _write_or_print(payload, args.output_json)

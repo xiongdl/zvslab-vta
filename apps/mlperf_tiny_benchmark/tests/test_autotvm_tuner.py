@@ -253,6 +253,35 @@ def test_task_extraction_names_unsupported_vta_template(tuner, monkeypatch):
     ]
 
 
+def test_anomaly_task_extraction_reports_supported_and_unsupported_vta_tasks(tuner):
+    model_id = "anomaly_detection_v1"
+    pipeline = tuner._load_model_pipeline(model_id)
+    model_path = Path(__file__).resolve().parents[1] / model_id / "model" / "ad01_fp32.tflite"
+    prepared = pipeline.prepare_model(model_path)
+
+    tasks, report = tuner.extract_model_tasks(prepared)
+
+    assert tasks
+    assert {entry["template"] for entry in report["supported"]} == {
+        task.name for task in tasks
+    }
+    assert report["unsupported"]
+    assert all(
+        entry["template"] not in tuner.SUPPORTED_TEMPLATES
+        and len(entry["workload_sha256"]) == 64
+        for entry in report["unsupported"]
+    )
+    assert {entry["workload_sha256"] for entry in report["supported"]} == {
+        tuner._task_workload_id(task) for task in tasks
+    }
+    for task in tasks:
+        with task.target:
+            schedule, args = task.instantiate(task.config_space.get(0))
+        assert schedule
+        import vta
+        vta.build(schedule, args, target=task.target, target_host=task.target_host)
+
+
 def test_dense_autotvm_template_builds_with_vta_target():
     import tvm
     import vta
