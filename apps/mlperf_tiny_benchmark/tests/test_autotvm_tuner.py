@@ -86,6 +86,76 @@ def test_vww_model_pipeline_reports_supported_and_unsupported_vta_tasks(tuner):
     }
 
 
+def test_all_model_selector_is_the_exact_repository_application_set(tuner):
+    assert tuple(tuner.MODEL_PIPELINES) == (
+        "image_classification_v1",
+        "image_classification_v2",
+        "anomaly_detection_v1",
+        "keyword_spotting_v1",
+        "streaming_wakeword_v1",
+        "visual_wake_words_v1",
+    )
+
+
+def test_aggregate_tuning_records_failures_and_resumes_valid_pairs(
+    tuner, monkeypatch, tmp_path
+):
+    config_path = tuner.DEFAULT_CONFIG_PATH.resolve()
+    monkeypatch.setenv("VTA_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv("VTA_BACKEND", "fsim")
+    calls = []
+    failures_remaining = {"keyword_spotting_v1": 1}
+
+    def fake_tune_model(model_id, backend, **kwargs):
+        calls.append(model_id)
+        if failures_remaining.get(model_id, 0):
+            failures_remaining[model_id] -= 1
+            raise RuntimeError("fixture tuning failure")
+        log_path = tmp_path / f"{model_id}-{backend}.log"
+        sidecar_path = tmp_path / f"{model_id}-{backend}.json"
+        log_path.write_text("native log", encoding="utf-8")
+        sidecar_path.write_text("{}", encoding="utf-8")
+        return log_path, sidecar_path, {
+            "task_count": 1,
+            "trial_count": 1,
+            "task_report": {"supported": [{"template": "conv2d_packed.vta"}], "unsupported": []},
+            "tuning_options": tuner.build_tuning_options(
+                backend, kwargs["trials_per_task"], kwargs["timeout"]
+            ),
+        }
+
+    monkeypatch.setattr(tuner, "tune_model", fake_tune_model)
+    monkeypatch.setattr(
+        tuner, "_load_model_pipeline", lambda _model_id: type("Pipeline", (), {"MODEL_SHA256": "a" * 64})
+    )
+    monkeypatch.setattr(
+        tuner,
+        "validate_tuning_artifacts",
+        lambda log, sidecar, **kwargs: {
+            "task_count": 1,
+            "trial_count": 1,
+            "task_report": {"supported": [{"template": "conv2d_packed.vta"}], "unsupported": []},
+            "tuning_options": kwargs["expected_tuning_options"],
+        },
+    )
+
+    first = tuner.tune_all("fsim", trials_per_task=1, output_dir=tmp_path)
+    assert calls == list(tuner.MODEL_PIPELINES)
+    assert first["results"]["keyword_spotting_v1"]["status"] == "failed"
+    assert first["results"]["visual_wake_words_v1"]["status"] == "succeeded"
+    assert first["summary_path"]
+
+    calls.clear()
+    resumed = tuner.tune_all(
+        "fsim", trials_per_task=1, output_dir=tmp_path, resume_summary=first["summary_path"]
+    )
+    assert calls == ["keyword_spotting_v1"]
+    assert all(
+        resumed["results"][model_id]["status"] in {"reused", "succeeded"}
+        for model_id in tuner.MODEL_PIPELINES
+    )
+
+
 def test_backend_loading_preserves_missing_library_diagnostic(tuner, monkeypatch):
     from vta.testing import simulator
 

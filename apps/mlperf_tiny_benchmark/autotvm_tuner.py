@@ -711,6 +711,143 @@ def tune_v1(backend, **kwargs):
     return tune_model("image_classification_v1", backend, **kwargs)
 
 
+def _write_json_atomic(path, payload):
+    path = Path(path)
+    temporary_path = path.with_name(path.name + ".tmp")
+    temporary_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary_path.replace(path)
+
+
+def _resume_entry(summary, model_id, *, backend, config_path, tuning_options):
+    """Return a prior model result only when its paired artifact still validates."""
+    entry = summary.get("results", {}).get(model_id)
+    if not isinstance(entry, dict) or entry.get("status") != "succeeded":
+        return None
+    log_path = entry.get("log_path")
+    sidecar_path = entry.get("sidecar_path")
+    if not isinstance(log_path, str) or not isinstance(sidecar_path, str):
+        return None
+    pipeline = _load_model_pipeline(model_id)
+    try:
+        metadata = validate_tuning_artifacts(
+            log_path,
+            sidecar_path,
+            model_id=model_id,
+            model_sha256=pipeline.MODEL_SHA256,
+            backend=backend,
+            config_path=config_path,
+            expected_tuning_options=tuning_options,
+        )
+    except (OSError, ValueError, RuntimeError):
+        return None
+    if metadata.get("task_count") != entry.get("task_count"):
+        return None
+    return {
+        "status": "reused",
+        "log_path": str(Path(log_path).resolve()),
+        "sidecar_path": str(Path(sidecar_path).resolve()),
+        "task_count": metadata["task_count"],
+        "trial_count": metadata["trial_count"],
+        "task_report": metadata["task_report"],
+        "tuning_options": metadata["tuning_options"],
+    }
+
+
+def tune_all(
+    backend,
+    *,
+    trials_per_task=None,
+    timeout=None,
+    output_dir=DEFAULT_OUTPUT_DIR,
+    resume_summary=None,
+):
+    """Tune all registered models sequentially and atomically record progress."""
+    validate_backend(backend)
+    config_path, config_sha256 = _config_identity(DEFAULT_CONFIG_PATH)
+    options = build_tuning_options(backend, trials_per_task, timeout)
+    output_dir = Path(output_dir).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    model_order = list(MODEL_PIPELINES)
+    if resume_summary is None:
+        run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        summary_path = output_dir / f"autotvm-all-{backend}-{run_id}.json"
+        previous = None
+    else:
+        summary_path = Path(resume_summary).expanduser().resolve(strict=True)
+        try:
+            previous = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f"resume summary is not valid JSON: {summary_path}") from error
+        if (
+            not isinstance(previous, dict)
+            or previous.get("schema_version") != ARTIFACT_SCHEMA_VERSION
+            or previous.get("model_order") != model_order
+            or previous.get("backend") != backend
+            or previous.get("config_path") != str(config_path)
+            or previous.get("config_sha256") != config_sha256
+            or previous.get("tuning_options") != options
+            or not isinstance(previous.get("results"), dict)
+        ):
+            raise ValueError("resume summary does not match the current models/backend/config/options")
+    summary = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "model_selector": "all",
+        "model_order": model_order,
+        "backend": backend,
+        "config_path": str(config_path),
+        "config_sha256": config_sha256,
+        "tuning_options": options,
+        "results": {},
+    }
+    if previous is not None:
+        summary["results"].update(previous["results"])
+    _write_json_atomic(summary_path, summary)
+
+    for model_id in model_order:
+        reused = (
+            _resume_entry(
+                previous, model_id, backend=backend, config_path=config_path,
+                tuning_options=options,
+            )
+            if previous is not None
+            else None
+        )
+        if reused is not None:
+            summary["results"][model_id] = reused
+            _write_json_atomic(summary_path, summary)
+            continue
+
+        summary["results"][model_id] = {"status": "running"}
+        _write_json_atomic(summary_path, summary)
+        try:
+            log_path, sidecar_path, metadata = tune_model(
+                model_id,
+                backend,
+                trials_per_task=trials_per_task,
+                timeout=timeout,
+                output_dir=output_dir,
+            )
+            summary["results"][model_id] = {
+                "status": "succeeded",
+                "log_path": str(Path(log_path).resolve()),
+                "sidecar_path": str(Path(sidecar_path).resolve()),
+                "task_count": metadata["task_count"],
+                "trial_count": metadata["trial_count"],
+                "task_report": metadata["task_report"],
+                "tuning_options": metadata["tuning_options"],
+            }
+        except Exception as error:  # Continue so per-model failures are all reported.
+            summary["results"][model_id] = {
+                "status": "failed",
+                "error": f"{type(error).__name__}: {error}",
+            }
+        _write_json_atomic(summary_path, summary)
+
+    summary["summary_path"] = str(summary_path)
+    _write_json_atomic(summary_path, summary)
+    return summary
+
+
 def _positive_integer(value):
     try:
         parsed = int(value)
@@ -725,7 +862,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Tune MLPerf Tiny VTA schedules with AutoTVM"
     )
-    parser.add_argument("--model", choices=tuple(MODEL_PIPELINES), required=True)
+    parser.add_argument("--model", choices=(*MODEL_PIPELINES, "all"), required=True)
     parser.add_argument("--backend", choices=("fsim", "tsim"), required=True)
     parser.add_argument(
         "--trials-per-task",
@@ -736,7 +873,35 @@ def main(argv=None):
         "--timeout", type=_positive_integer, help="override backend default timeout in seconds"
     )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--resume-summary", type=Path,
+        help="resume --model all from an earlier aggregate summary with valid completed pairs",
+    )
     args = parser.parse_args(argv)
+    if args.resume_summary is not None and args.model != "all":
+        parser.error("--resume-summary is only valid with --model all")
+    if args.model == "all":
+        summary = tune_all(
+            args.backend,
+            trials_per_task=args.trials_per_task,
+            timeout=args.timeout,
+            output_dir=args.output_dir,
+            resume_summary=args.resume_summary,
+        )
+        print(f"Aggregate summary: {summary['summary_path']}")
+        for model_id in summary["model_order"]:
+            result = summary["results"][model_id]
+            if result["status"] in {"succeeded", "reused"}:
+                unsupported = len(result["task_report"]["unsupported"])
+                print(
+                    f"model={model_id} status={result['status']} backend={args.backend} "
+                    f"tasks={result['task_count']} trials={result['trial_count']} "
+                    f"unsupported={unsupported} log={result['log_path']} "
+                    f"sidecar={result['sidecar_path']}"
+                )
+            else:
+                print(f"model={model_id} status=failed error={result['error']}")
+        return int(any(value["status"] == "failed" for value in summary["results"].values()))
     log_path, sidecar_path, metadata = tune_model(
         args.model,
         args.backend,

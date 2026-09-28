@@ -195,11 +195,20 @@ def test_runtime_assets_are_repository_owned_and_do_not_reference_envs():
     runtime_files = [
         path
         for path in APP_ROOT.rglob("*")
-        if path.is_file() and "tests" not in path.relative_to(APP_ROOT).parts
+        if path.is_file()
+        and not {"tests", "build", "__pycache__"}.intersection(
+            path.relative_to(APP_ROOT).parts
+        )
     ]
     for path in runtime_files:
         assert not path.is_symlink()
-        if path.suffix.lower() not in {".wav", ".tflite", ".a", ".so", ".dylib"}:
+        if path.suffix.lower() not in {
+            ".wav",
+            ".tflite",
+            ".a",
+            ".so",
+            ".dylib",
+        }:
             assert ".envs" not in path.read_text(encoding="utf-8")
 
     for item in _manifest()["samples"]:
