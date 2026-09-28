@@ -468,15 +468,24 @@ def build_host_artifacts(prepared, build_dir=DEFAULT_BUILD_DIR, host_codegen=DEF
         else nullcontext()
     )
     with history_context:
+        compiler = te_compiler.get() if autotvm_log is not None else None
         if autotvm_log is not None:
             # TECompiler cache keys omit AutoTVM history-best dispatch state.
-            te_compiler.get().clear()
-        if host_codegen == "c":
-            with vta.build_config(config={"tir.disable_vectorize": True}):
-                mixed_factory = relay.build(prepared.mixed_module, target=_mixed_target(host_codegen))
-        else:
-            with vta.build_config():
-                mixed_factory = relay.build(prepared.mixed_module, target=_mixed_target(host_codegen))
+            compiler.clear()
+        try:
+            if host_codegen == "c":
+                with vta.build_config(config={"tir.disable_vectorize": True}):
+                    mixed_factory = relay.build(
+                        prepared.mixed_module, target=_mixed_target(host_codegen)
+                    )
+            else:
+                with vta.build_config():
+                    mixed_factory = relay.build(
+                        prepared.mixed_module, target=_mixed_target(host_codegen)
+                    )
+        finally:
+            if compiler is not None:
+                compiler.clear()
     metadata = _model_metadata(prepared)
     reference = export_graph_bundle(
         reference_factory, build_root, "reference",

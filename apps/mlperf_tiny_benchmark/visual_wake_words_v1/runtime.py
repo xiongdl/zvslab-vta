@@ -387,11 +387,16 @@ def build_host_artifacts(
         else nullcontext()
     )
     with history_context:
+        compiler = te_compiler.get() if autotvm_log is not None else None
         if autotvm_log is not None:
-            # TECompiler's cache key omits history-best dispatch state.
-            te_compiler.get().clear()
-        with vta.build_config():
-            mixed_factory = relay.build(device_plan.module, target=device_plan.targets)
+            # TECompiler's cache key omits AutoTVM history-best dispatch state.
+            compiler.clear()
+        try:
+            with vta.build_config():
+                mixed_factory = relay.build(device_plan.module, target=device_plan.targets)
+        finally:
+            if compiler is not None:
+                compiler.clear()
 
     reference_identity = _artifact_identity(host_codegen, "reference")
     mixed_identity = _artifact_identity(host_codegen, "mixed")

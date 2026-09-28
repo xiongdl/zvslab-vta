@@ -409,11 +409,16 @@ def build_host_artifacts(prepared, output_dir=DEFAULT_OUTPUT_DIR,
         else nullcontext()
     )
     with history_context:
+        compiler = te_compiler.get() if autotvm_log is not None else None
         if autotvm_log is not None:
             # TECompiler's cache key omits history-best dispatch state.
-            te_compiler.get().clear()
-        with vta.build_config(config=build_config):
-            mixed_factory = relay.build(device_plan.module, target=device_plan.targets)
+            compiler.clear()
+        try:
+            with vta.build_config(config=build_config):
+                mixed_factory = relay.build(device_plan.module, target=device_plan.targets)
+        finally:
+            if compiler is not None:
+                compiler.clear()
     metadata = _model_metadata(prepared)
     model_sha256 = metadata["model_sha256"]
     reference = export_graph_bundle(

@@ -371,25 +371,30 @@ def build_host_artifacts(
         else nullcontext()
     )
     with history_context:
+        compiler = te_compiler.get() if autotvm_log is not None else None
         if autotvm_log is not None:
             # TECompiler cache keys omit AutoTVM history-best dispatch state.
-            te_compiler.get().clear()
-        if host_codegen == "c":
-            with vta.build_config(config={"tir.disable_vectorize": True}):
-                mixed_factory = relay.build(
-                    prepared.mixed_module,
-                    target=_mixed_target(
-                        *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
-                    ),
-                )
-        else:
-            with vta.build_config():
-                mixed_factory = relay.build(
-                    prepared.mixed_module,
-                    target=_mixed_target(
-                        *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
-                    ),
-                )
+            compiler.clear()
+        try:
+            if host_codegen == "c":
+                with vta.build_config(config={"tir.disable_vectorize": True}):
+                    mixed_factory = relay.build(
+                        prepared.mixed_module,
+                        target=_mixed_target(
+                            *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
+                        ),
+                    )
+            else:
+                with vta.build_config():
+                    mixed_factory = relay.build(
+                        prepared.mixed_module,
+                        target=_mixed_target(
+                            *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
+                        ),
+                    )
+        finally:
+            if compiler is not None:
+                compiler.clear()
 
     reference_identity = _artifact_identity(host_codegen, "reference")
     mixed_identity = _artifact_identity(host_codegen, "mixed")
