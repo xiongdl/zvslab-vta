@@ -17,6 +17,8 @@
 
 """Validated per-occurrence useful MAC utilization estimates for VTA tasks."""
 
+import argparse
+import csv
 import hashlib
 import importlib.util
 import json
@@ -28,7 +30,20 @@ import sys
 
 APP_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = APP_ROOT.parents[1] / "config" / "vta_64mac.json"
+DEFAULT_OUTPUT_DIR = APP_ROOT / "build" / "autotvm" / "mac-utilization"
 SUPPORTED_TEMPLATES = {"conv2d_packed.vta", "dense_packed.vta"}
+CSV_FIELDS = (
+    "model_id", "backend", "layer_ordinal", "layer_id", "template",
+    "workload_sha256", "flop_count", "mac_count", "best_trial_cycles",
+    "peak_macs_per_cycle", "useful_mac_utilization",
+    "useful_mac_utilization_percent", "model_sha256", "config_path",
+    "config_sha256", "log_path", "log_sha256", "sidecar_path", "sidecar_sha256",
+)
+
+
+def _model_order():
+    """Return model identities in the aggregate tuner order."""
+    return list(_load_tuner().MODEL_PIPELINES)
 
 
 def _load_tuner():
@@ -210,20 +225,9 @@ def _load_model_occurrences(model_id):
     _, model_dir, model_filename = tuner.MODEL_PIPELINES[model_id]
     model_path = APP_ROOT / model_id / model_dir / model_filename
     prepared = pipeline.prepare_model(model_path)
-    prior_env = TaskExtractEnv.current
-    prior_allow_duplicate = (
-        prior_env.allow_duplicate if prior_env is not None else False
+    tasks, report = _extract_tasks_with_duplicates(
+        lambda: tuner.extract_model_tasks(prepared), task_extract_env=TaskExtractEnv
     )
-    extract_env = TaskExtractEnv.get(allow_duplicate=True)
-    original_get = TaskExtractEnv.__dict__["get"]
-    # The shared tuner's extraction helper calls get() with its default False;
-    # preserve this opt-in setting only while that existing extraction path runs.
-    TaskExtractEnv.get = staticmethod(lambda allow_duplicate=False: extract_env)
-    try:
-        tasks, report = tuner.extract_model_tasks(prepared)
-    finally:
-        TaskExtractEnv.get = original_get
-        extract_env.allow_duplicate = prior_allow_duplicate
     occurrences = []
     templates = {}
     for task in tasks:
@@ -242,6 +246,25 @@ def _load_model_occurrences(model_id):
             raise ValueError(f"ambiguous extracted template mapping for workload {workload_id}")
         occurrences.append(occurrence)
     return tuner, prepared, occurrences, report
+
+
+def _extract_tasks_with_duplicates(extract, *, task_extract_env=None):
+    """Temporarily preserve repeated tasks without leaking global extractor state."""
+    if task_extract_env is None:
+        from tvm.autotvm.task.topi_integration import TaskExtractEnv as task_extract_env
+
+    prior_env = task_extract_env.current
+    original_get = task_extract_env.__dict__["get"]
+    extract_env = task_extract_env(allow_duplicate=True)
+    task_extract_env.current = extract_env
+    # extract_model_tasks calls get() with its deduplicating default. Keep this
+    # opt-in scoped to extraction, then restore both the method and singleton.
+    task_extract_env.get = staticmethod(lambda allow_duplicate=False: extract_env)
+    try:
+        return extract()
+    finally:
+        task_extract_env.get = original_get
+        task_extract_env.current = prior_env
 
 
 def _validate_extracted_coverage(metadata, occurrences, report):
@@ -341,3 +364,310 @@ def build_rows(model_id, log_path, sidecar_path, *, config_path=None):
             }
         )
     return rows
+
+
+def build_parser():
+    """Create the per-layer report command-line parser."""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Report useful-MAC utilization estimates from validated TSIM AutoTVM "
+            "task records. These are isolated-task estimates, not full-model profiling."
+        )
+    )
+    parser.add_argument("--model", required=True, help="one benchmark model id or all")
+    parser.add_argument("--backend", required=True, choices=("tsim",))
+    parser.add_argument(
+        "--config", type=Path, default=DEFAULT_CONFIG_PATH,
+        help=f"VTA geometry JSON (default: {DEFAULT_CONFIG_PATH})",
+    )
+    parser.add_argument("--log", type=Path, help="single-model native TSIM AutoTVM log")
+    parser.add_argument("--sidecar", type=Path, help="matching single-model JSON sidecar")
+    parser.add_argument("--summary", type=Path, help="six-model TSIM aggregate summary")
+    parser.add_argument(
+        "--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR,
+        help=f"report directory (default: {DEFAULT_OUTPUT_DIR})",
+    )
+    return parser
+
+
+def _read_json_object(path, description):
+    path = Path(path).expanduser().resolve(strict=True)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"{description} is not valid JSON: {path}") from error
+    if not isinstance(value, dict):
+        raise ValueError(f"{description} must be a JSON object: {path}")
+    return path, value
+
+
+def _summary_artifact_path(path, base_dir):
+    value = Path(path).expanduser()
+    if not value.is_absolute():
+        value = base_dir / value
+    return value.resolve(strict=True)
+
+
+def load_aggregate_inputs(summary_path, config_path):
+    """Validate aggregate model coverage and all declared sidecar identities."""
+    summary_path, summary = _read_json_object(summary_path, "TSIM aggregate summary")
+    model_order = _model_order()
+    if summary.get("backend") != "tsim":
+        raise ValueError("aggregate summary backend must be 'tsim'")
+    if summary.get("model_order") != model_order:
+        raise ValueError("aggregate summary model_order does not match the six benchmark models")
+    results = summary.get("results")
+    if not isinstance(results, dict):
+        raise ValueError("aggregate summary results must be an object")
+    missing = [model for model in model_order if model not in results]
+    unexpected = sorted(set(results) - set(model_order))
+    if missing or unexpected:
+        raise ValueError(
+            f"aggregate summary model coverage mismatch: missing models={missing}, "
+            f"unexpected models={unexpected}"
+        )
+    if any(not isinstance(results[model], dict) or results[model].get("status") != "succeeded"
+           for model in model_order):
+        raise ValueError("aggregate summary has failed or incomplete model results")
+
+    config_path = Path(config_path).expanduser().resolve(strict=True)
+    config_hash = sha256_file(config_path)
+    declared_config = summary.get("config_path")
+    if not isinstance(declared_config, str) or Path(declared_config).expanduser().resolve() != config_path:
+        raise ValueError("aggregate summary config_path does not match the requested geometry")
+    if summary.get("config_sha256") != config_hash:
+        raise ValueError("aggregate summary config_sha256 does not match the requested geometry")
+
+    inputs = []
+    for model_id in model_order:
+        result = results[model_id]
+        if not isinstance(result.get("log_path"), str) or not isinstance(
+            result.get("sidecar_path"), str
+        ):
+            raise ValueError(f"aggregate summary has incomplete artifact paths for {model_id}")
+        log_path = _summary_artifact_path(result["log_path"], summary_path.parent)
+        sidecar_path = _summary_artifact_path(result["sidecar_path"], summary_path.parent)
+        _, sidecar = _read_json_object(sidecar_path, f"{model_id} TSIM sidecar")
+        if sidecar.get("model_id") != model_id or sidecar.get("backend") != "tsim":
+            raise ValueError(f"aggregate summary {model_id} sidecar model/backend identity mismatch")
+        if sidecar.get("log_path") != str(log_path):
+            raise ValueError(f"aggregate summary {model_id} log/sidecar pairing mismatch")
+        if sidecar.get("config_path") != str(config_path) or sidecar.get("config_sha256") != config_hash:
+            raise ValueError(f"aggregate summary {model_id} sidecar geometry identity mismatch")
+        for field in ("task_count", "trial_count", "task_report"):
+            if result.get(field) != sidecar.get(field):
+                raise ValueError(f"aggregate summary {model_id} {field} differs from its sidecar")
+        inputs.append(
+            {
+                "model_id": model_id,
+                "log_path": log_path,
+                "sidecar_path": sidecar_path,
+                "sidecar": sidecar,
+                "summary_result": result,
+            }
+        )
+    return summary_path, summary, inputs
+
+
+def _validate_cli_inputs(args):
+    model_order = _model_order()
+    if args.model != "all" and args.model not in model_order:
+        raise ValueError(f"unknown MLPerf Tiny model {args.model!r}")
+    single_artifacts = args.log is not None or args.sidecar is not None
+    if args.model == "all":
+        if args.summary is None or single_artifacts:
+            raise ValueError("--model all requires --summary and does not accept --log/--sidecar")
+    elif args.summary is not None or args.log is None or args.sidecar is None:
+        raise ValueError("single-model mode requires both --log and --sidecar, and no --summary")
+    return model_order
+
+
+def _model_summary(model_id, rows, unsupported, sidecar):
+    workloads = {}
+    for row in rows:
+        workload = workloads.setdefault(
+            row["workload_sha256"],
+            {
+                "template": row["template"],
+                "workload_sha256": row["workload_sha256"],
+                "flop_count": row["flop_count"],
+                "mac_count": row["mac_count"],
+                "best_trial_cycles": row["best_trial_cycles"],
+                "row_count": 0,
+            },
+        )
+        workload["row_count"] += 1
+    first = rows[0]
+    unsupported = sorted(
+        unsupported,
+        key=lambda entry: (entry.get("template", ""), entry.get("workload_sha256", "")),
+    )
+    return {
+        "model_id": model_id,
+        "model_sha256": first["model_sha256"],
+        "row_count": len(rows),
+        "workload_count": len(workloads),
+        "workloads": sorted(workloads.values(), key=lambda item: item["workload_sha256"]),
+        "artifact_identities": {
+            name: {
+                "path": first[f"{name}_path"],
+                "sha256": first[f"{name}_sha256"],
+            }
+            for name in ("log", "sidecar")
+        },
+        "unsupported_task_coverage": {
+            "count": len(unsupported),
+            "entries": unsupported,
+        },
+        "task_count": sidecar["task_count"],
+        "trial_count": sidecar["trial_count"],
+    }
+
+
+def _stable_run_stem(model_selector, identities):
+    payload = json.dumps(identities, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"mac-utilization-{model_selector}-tsim-{digest}"
+
+
+def _write_reports(args, model_rows, model_sidecars, *, aggregate_identity=None):
+    """Write paired reports after every selected artifact pair was validated."""
+    all_rows = [row for model in model_rows for row in model_rows[model]]
+    model_summaries = []
+    identities = []
+    for model_id, rows in model_rows.items():
+        sidecar = model_sidecars[model_id]
+        model_summary = _model_summary(
+            model_id, rows, sidecar["task_report"]["unsupported"], sidecar
+        )
+        model_summaries.append(model_summary)
+        identities.append(model_summary["artifact_identities"])
+    identity = {"models": identities, "aggregate": aggregate_identity}
+    stem = _stable_run_stem(args.model, identity)
+    output_dir = args.output_dir.expanduser().resolve()
+    csv_path = output_dir / f"{stem}.csv"
+    json_path = output_dir / f"{stem}.json"
+    config_path = args.config.expanduser().resolve(strict=True)
+    peak = peak_macs_per_cycle(config_path)
+    summary = {
+        "schema_version": 1,
+        "model_selector": args.model,
+        "model_order": list(model_rows),
+        "backend": "tsim",
+        "metric": {
+            "name": "useful_mac_utilization",
+            "formula": "logical_MACs / (best_successful_isolated_TSIM_task_cycles * peak_MACs_per_cycle)",
+            "units": {
+                "logical_mac_count": "MAC",
+                "best_trial_cycles": "TSIM cycle",
+                "peak_macs_per_cycle": "MAC/cycle",
+                "useful_mac_utilization": "ratio",
+                "useful_mac_utilization_percent": "percent",
+            },
+            "semantics": (
+                "Isolated AutoTVM task estimate associated with a graph layer occurrence; "
+                "not per-layer profiling inside full-model execution."
+            ),
+        },
+        "geometry": {
+            "config_path": str(config_path),
+            "config_sha256": sha256_file(config_path),
+            "peak_macs_per_cycle": peak,
+        },
+        "row_count": len(all_rows),
+        "models": model_summaries,
+        "unsupported_task_coverage": {
+            "count": sum(item["unsupported_task_coverage"]["count"] for item in model_summaries),
+            "by_model": {
+                item["model_id"]: item["unsupported_task_coverage"] for item in model_summaries
+            },
+        },
+        "aggregate_summary": aggregate_identity,
+        "csv_path": str(csv_path),
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    csv_tmp = csv_path.with_name(csv_path.name + ".tmp")
+    json_tmp = json_path.with_name(json_path.name + ".tmp")
+    try:
+        with csv_tmp.open("w", encoding="utf-8", newline="") as output:
+            writer = csv.DictWriter(output, fieldnames=CSV_FIELDS, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(all_rows)
+        json_tmp.write_text(
+            json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        csv_tmp.replace(csv_path)
+        json_tmp.replace(json_path)
+    finally:
+        csv_tmp.unlink(missing_ok=True)
+        json_tmp.unlink(missing_ok=True)
+    return csv_path, json_path
+
+
+def run_report(args):
+    """Validate inputs, calculate all rows, and then write paired reports."""
+    if args.backend != "tsim":
+        raise ValueError("only TSIM task cycle records are supported")
+    _load_tuner().validate_backend("tsim")
+    model_order = _validate_cli_inputs(args)
+    config_path = args.config.expanduser().resolve(strict=True)
+    peak_macs_per_cycle(config_path)
+    model_inputs = {}
+    aggregate_identity = None
+    if args.model == "all":
+        summary_path, aggregate, inputs = load_aggregate_inputs(args.summary, config_path)
+        model_inputs = {entry["model_id"]: entry for entry in inputs}
+        aggregate_identity = {
+            "path": str(summary_path),
+            "sha256": sha256_file(summary_path),
+        }
+        selected_models = model_order
+    else:
+        log_path = Path(args.log).expanduser().resolve(strict=True)
+        sidecar_path = Path(args.sidecar).expanduser().resolve(strict=True)
+        _, sidecar = _read_json_object(sidecar_path, "TSIM sidecar")
+        model_inputs[args.model] = {
+            "model_id": args.model,
+            "log_path": log_path,
+            "sidecar_path": sidecar_path,
+            "sidecar": sidecar,
+        }
+        selected_models = [args.model]
+
+    model_rows = {}
+    model_sidecars = {}
+    for model_id in selected_models:
+        entry = model_inputs[model_id]
+        rows = build_rows(
+            model_id, entry["log_path"], entry["sidecar_path"], config_path=config_path
+        )
+        sidecar = entry["sidecar"]
+        if args.model == "all":
+            result = entry["summary_result"]
+            for field in ("task_count", "trial_count", "task_report"):
+                if result.get(field) != sidecar.get(field):
+                    raise ValueError(f"aggregate summary {model_id} {field} differs from its sidecar")
+        model_rows[model_id] = rows
+        model_sidecars[model_id] = sidecar
+
+    # No output directory or report is created until every selected model pair
+    # has passed graph, config, log, sidecar, TSIM-target, and workload checks.
+    return _write_reports(
+        args, model_rows, model_sidecars, aggregate_identity=aggregate_identity
+    )
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        csv_path, json_path = run_report(args)
+    except (OSError, RuntimeError, ValueError) as error:
+        parser.error(str(error))
+    print(f"CSV: {csv_path}")
+    print(f"JSON: {json_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

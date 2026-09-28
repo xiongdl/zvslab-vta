@@ -1,7 +1,9 @@
 """Tests for the validated per-layer VTA MAC utilization core."""
 
 import importlib.util
+import json
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -195,3 +197,121 @@ def test_tsim_log_targets_and_extracted_workload_coverage_are_validated(utilizat
             occurrences,
             {"supported": [{"template": "conv2d_packed.vta", "workload_sha256": "b" * 64}]},
         )
+
+
+def test_cli_requires_mode_specific_artifacts_and_tsim(utilization):
+    parser = utilization.build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            ["--model", "all", "--backend", "fsim", "--summary", "summary.json"]
+        )
+    single = parser.parse_args(
+        [
+            "--model", "image_classification_v1", "--backend", "tsim",
+            "--log", "model.log", "--sidecar", "model.json",
+        ]
+    )
+    aggregate = parser.parse_args(
+        ["--model", "all", "--backend", "tsim", "--summary", "summary.json"]
+    )
+    incomplete_single = parser.parse_args(
+        ["--model", "image_classification_v1", "--backend", "tsim"]
+    )
+    with pytest.raises(ValueError, match="requires both --log and --sidecar"):
+        utilization._validate_cli_inputs(incomplete_single)
+    conflicting = parser.parse_args(
+        [
+            "--model", "all", "--backend", "tsim", "--summary", "summary.json",
+            "--log", "model.log", "--sidecar", "model.json",
+        ]
+    )
+    with pytest.raises(ValueError, match="does not accept --log/--sidecar"):
+        utilization._validate_cli_inputs(conflicting)
+    assert single.log == Path("model.log")
+    assert aggregate.summary == Path("summary.json")
+
+
+def test_aggregate_requires_complete_successful_tsim_identity_before_outputs(
+    utilization, tmp_path, monkeypatch
+):
+    models = ["image_classification_v1", "image_classification_v2"]
+    summary = tmp_path / "aggregate.json"
+    summary.write_text(
+        json.dumps(
+            {
+                "backend": "tsim",
+                "config_path": "/geometry.json",
+                "config_sha256": "c" * 64,
+                "model_order": models,
+                "results": {models[0]: {"status": "succeeded", "log_path": "l", "sidecar_path": "s"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = tmp_path / "geometry.json"
+    config.write_text('{"LOG_BATCH": 0, "LOG_BLOCK": 3}\n', encoding="utf-8")
+    output_dir = tmp_path / "reports"
+    monkeypatch.setattr(utilization, "_model_order", lambda: models)
+
+    with pytest.raises(ValueError, match="missing models"):
+        utilization.load_aggregate_inputs(summary, config)
+    assert not output_dir.exists()
+
+    args = utilization.build_parser().parse_args(
+        [
+            "--model", "all", "--backend", "tsim", "--summary", str(summary),
+            "--config", str(config), "--output-dir", str(output_dir),
+        ]
+    )
+    with pytest.raises(ValueError, match="missing models"):
+        utilization.run_report(args)
+    assert not output_dir.exists()
+
+
+def test_duplicate_task_extraction_restores_task_extract_environment(utilization, monkeypatch):
+    class FakeTaskExtractEnv:
+        current = None
+
+        def __init__(self, allow_duplicate=False):
+            self.allow_duplicate = allow_duplicate
+            self.marker = object()
+
+        @staticmethod
+        def get(allow_duplicate=False):
+            if FakeTaskExtractEnv.current is None:
+                FakeTaskExtractEnv.current = FakeTaskExtractEnv(allow_duplicate)
+            else:
+                FakeTaskExtractEnv.current.allow_duplicate = allow_duplicate
+            return FakeTaskExtractEnv.current
+
+    fake_topi = SimpleNamespace(TaskExtractEnv=FakeTaskExtractEnv)
+    monkeypatch.setitem(sys.modules, "tvm.autotvm.task.topi_integration", fake_topi)
+    prior_get = FakeTaskExtractEnv.__dict__["get"]
+    assert FakeTaskExtractEnv.current is None
+
+    def extract_with_repeats_enabled():
+        active = FakeTaskExtractEnv.get()
+        assert active is FakeTaskExtractEnv.current
+        assert active.allow_duplicate is True
+        return "tasks"
+
+    assert utilization._extract_tasks_with_duplicates(extract_with_repeats_enabled) == "tasks"
+
+    assert FakeTaskExtractEnv.current is None
+    assert FakeTaskExtractEnv.__dict__["get"] is prior_get
+
+    existing = FakeTaskExtractEnv(allow_duplicate=False)
+    FakeTaskExtractEnv.current = existing
+    prior_marker = existing.marker
+    assert utilization._extract_tasks_with_duplicates(lambda: "tasks") == "tasks"
+    assert FakeTaskExtractEnv.current is existing
+    assert existing.allow_duplicate is False
+    assert existing.marker is prior_marker
+
+    with pytest.raises(RuntimeError, match="extract failed"):
+        utilization._extract_tasks_with_duplicates(
+            lambda: (_ for _ in ()).throw(RuntimeError("extract failed"))
+        )
+    assert FakeTaskExtractEnv.current is existing
+    assert FakeTaskExtractEnv.__dict__["get"] is prior_get

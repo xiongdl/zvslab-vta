@@ -86,3 +86,49 @@ contract, runtime mode, and backend-specific CLI options. In particular:
 
 Per-model native logs and sidecars are independent for FSIM and TSIM. FSIM
 measurement costs must not be interpreted as TSIM cycle counts.
+
+## Per-layer useful-MAC utilization estimates
+
+`mac_utilization.py` associates each extracted VTA Conv/Dense graph occurrence
+with the best successful cycle cost for its matching workload in a validated
+TSIM AutoTVM log. For each occurrence it reports
+`logical_MACs / (best_successful_isolated_TSIM_task_cycles * peak_MACs_per_cycle)`.
+AutoTVM records FLOPs, so the script divides by two for logical MACs. Peak
+throughput comes from the geometry as
+`2**LOG_BATCH * 2**LOG_BLOCK * 2**LOG_BLOCK` MAC/cycle; the checked-in
+`vta_64mac.json` yields 64 MAC/cycle. The report includes both a ratio and a
+percentage, units, config hash, workload identity, paired log/sidecar identity,
+unsupported task coverage, and row counts.
+
+This is an isolated AutoTVM task estimate associated with a layer occurrence.
+TSIM does not provide per-layer full-model cycle profiling here, so this value
+must not be read as that occurrence's measured cost in full-model execution.
+Unsupported task templates are listed in the JSON summary and receive no
+fabricated utilization. Repeated layer occurrences remain separate CSV rows,
+even when they share a workload and its selected task cost.
+
+The commands require the existing `.envs/tvm-vta-env`, built TVM/VTA TSIM
+libraries, and a validated TSIM log/sidecar pair. Their default output is under
+the ignored `build/autotvm/mac-utilization/` directory:
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/mac_utilization.py \
+  --model image_classification_v1 --backend tsim \
+  --log vta/apps/mlperf_tiny_benchmark/build/autotvm/<v1-tsim-log>.log \
+  --sidecar vta/apps/mlperf_tiny_benchmark/build/autotvm/<v1-tsim-sidecar>.json
+
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/mac_utilization.py \
+  --model all --backend tsim \
+  --summary vta/apps/mlperf_tiny_benchmark/build/autotvm/<autotvm-all-tsim-summary>.json
+```
+
+The six-model command validates the aggregate summary, every model's sidecar,
+and each native log before writing reports. It produces a CSV with one row per
+supported occurrence and a JSON summary; stable output names are derived from
+the validated artifact identities. Set `--output-dir PATH` to write elsewhere.
