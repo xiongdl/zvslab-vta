@@ -518,6 +518,25 @@ def test_cli_exposes_llvm_c_and_all_matrix_modes(deployment_runtime, monkeypatch
     assert run_module._parser().parse_args([]).host_codegen == "llvm"
     assert run_module._parser().parse_args(["--host-codegen", "c"]).host_codegen == "c"
     assert run_module._parser().parse_args(["--host-codegen", "all"]).host_codegen == "all"
+    parsed = run_module._parser().parse_args(
+        ["--autotvm-log", "tuned.log", "--autotvm-sidecar", "tuned.json"]
+    )
+    assert parsed.autotvm_log == Path("tuned.log")
+    assert parsed.autotvm_sidecar == Path("tuned.json")
+
+
+def test_cli_requires_a_complete_autotvm_pair_and_rejects_matrix_replay(
+    deployment_runtime, monkeypatch, tmp_path
+):
+    monkeypatch.setitem(sys.modules, "runtime", deployment_runtime)
+    run_module = _load_module(RUN_PATH, "mlperf_vww_run_autotvm_contract")
+    with pytest.raises(SystemExit, match="must be provided together"):
+        run_module.main(["--autotvm-log", "tuned.log"])
+    with pytest.raises(SystemExit, match="one --host-codegen"):
+        run_module.main([
+            "--host-codegen", "all", "--autotvm-log", "tuned.log",
+            "--autotvm-sidecar", "tuned.json",
+        ])
 
 
 def test_application_sources_use_only_the_approved_host_flow():
@@ -533,7 +552,6 @@ def test_application_sources_use_only_the_approved_host_flow():
     for forbidden in [
         "tensorflow",
         "tflite_runtime",
-        "autotvm",
         "graphpack",
         "relay.ext." + "vta",
         "tiny-v1.4",
@@ -543,6 +561,14 @@ def test_application_sources_use_only_the_approved_host_flow():
         "fvp",
     ]:
         assert forbidden not in lowered
+
+    runtime_source = sources["runtime.py"]
+    run_source = sources["run.py"]
+    assert 'model_id=MODEL_ID' in runtime_source
+    assert 'tuner.history_best(' in runtime_source
+    assert 'autotvm_log' in runtime_source and 'autotvm_sidecar' in runtime_source
+    assert '"--autotvm-log"' in run_source and '"--autotvm-sidecar"' in run_source
+    assert "must be provided together" in run_source
 
     runtime_tree = ast.parse(sources["runtime.py"])
     top_level_imports = [

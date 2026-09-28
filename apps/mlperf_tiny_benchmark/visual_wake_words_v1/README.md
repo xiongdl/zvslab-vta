@@ -100,3 +100,47 @@ Missing libraries, unexpected model or routing
 structure, output differences, wrong configuration, and absent accelerator
 activity cause a nonzero exit. TSIM initialization and hardware loading remain
 lazy until all four bundles have been built, exported, and reloaded.
+
+## AutoTVM tuned replay
+
+The shared tuner registers `visual_wake_words_v1` and records supported and
+unsupported VTA task templates in a JSON sidecar next to each backend-specific
+native AutoTVM log. The model hash, active simulator, shared
+`vta/config/vta_64mac.json` hash, log hash, and trial options are checked before
+the history-best schedule is applied. FSIM and TSIM each need their own log
+and sidecar; TSIM logs contain cycle-based trial costs. Tune with a bounded
+trial count while validating the workflow:
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
+  --model visual_wake_words_v1 --backend fsim --trials-per-task 1
+
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
+  --model visual_wake_words_v1 --backend tsim --trials-per-task 1
+```
+
+Pass the matching log and sidecar to `run.py` for a tuned replay. It preserves
+the CPU/VTA partition routing and compares all ten committed sample outputs
+against the CPU reference:
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/visual_wake_words_v1/run.py \
+  --simulator tsim \
+  --autotvm-log <visual_wake_words_v1-tsim.log> \
+  --autotvm-sidecar <visual_wake_words_v1-tsim.json>
+```
+
+Replace the placeholders with the paired paths printed by the tuner. Generated
+logs, sidecars, and replay bundles are stored below ignored `build/` paths.
+Reported TSIM `cycle_count` is simulated accelerator work, not FPGA latency or
+an MLPerf result. The existing CPU/VTA routing and ten-sample correctness
+contract remain in force for tuned replay.

@@ -54,6 +54,7 @@ MODEL_PIPELINES = {
     "streaming_wakeword_v1": (
         "streaming_wakeword_v1", "model", "str_ww_ref_model.tflite"
     ),
+    "visual_wake_words_v1": ("visual_wake_words_v1", "model", "vww_96_float.tflite"),
 }
 SUPPORTED_TEMPLATES = {"conv2d_packed.vta", "dense_packed.vta"}
 
