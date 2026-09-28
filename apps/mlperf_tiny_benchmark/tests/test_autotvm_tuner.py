@@ -47,6 +47,7 @@ def test_backend_validation_requires_explicit_matching_selector(tuner, monkeypat
     "model_id,model_filename",
     [
         ("keyword_spotting_v1", "kws_ref_model.tflite"),
+        ("streaming_wakeword_v1", "str_ww_ref_model.tflite"),
     ],
 )
 def test_audio_model_pipelines_are_registered(tuner, model_id, model_filename):

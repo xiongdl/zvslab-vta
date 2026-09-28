@@ -127,3 +127,33 @@ FSIM and TSIM report `mixed top-1` only after strict output equality and
 positive simulator activity have been verified. These records demonstrate
 reproducible graph construction and execution contracts only; they are not
 benchmark accuracy or performance measurements.
+
+## AutoTVM schedule tuning
+
+The shared tuner extracts supported VTA convolution/dense task families from
+the prepared wakeword graph and records unsupported VTA task families in its
+JSON sidecar. Run FSIM and TSIM separately; each writes a model/backend-specific
+AutoTVM log and sidecar under
+`vta/apps/mlperf_tiny_benchmark/build/autotvm/`. Use `--trials-per-task 1` for
+a bounded workflow check:
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  "$PYTHON" \
+  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
+  --model streaming_wakeword_v1 --backend fsim --trials-per-task 1
+
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  "$PYTHON" \
+  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
+  --model streaming_wakeword_v1 --backend tsim --trials-per-task 1
+```
+
+Replay a run by passing its matching `--autotvm-log` and `--autotvm-sidecar`
+to `run.py` with that backend. Validation checks model identity, backend,
+configuration, log hash, and task coverage before history-best compilation.
+Tuning changes only the compiled schedule: streaming state, chunk boundaries,
+and the existing three-sample output checks remain in the runtime path. TSIM
+reports simulator `cycle_count`.

@@ -1,12 +1,13 @@
 """Build and execute the streaming wakeword graph on HOST or FSIM."""
 
 import hashlib
+import importlib.util
 import json
 import math
 import re
 import stat
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,7 @@ import tvm
 import vta
 from tvm import relay
 from tvm.contrib import graph_executor
+from tvm.relay.backend import te_compiler
 from vta.relay import plan_devices_for_vta
 
 from graph_artifacts import export_graph_bundle, validate_output_root
@@ -38,6 +40,7 @@ MANIFEST_PATH = APP_ROOT / "samples" / "manifest.json"
 DEFAULT_OUTPUT_DIR = APP_ROOT / "build"
 SUPPORTED_HOST_CODEGENS = ("llvm", "c")
 DEFAULT_HOST_CODEGEN = "llvm"
+MODEL_ID = "streaming_wakeword_v1"
 SUPPORTED_SIMULATORS = ("host", "fsim", "tsim")
 EXPECTED_LABEL_NAMES = ("Marvin", "Silence", "Unknown")
 REQUIRED_PROFILER_COUNTERS = ("gemm_counter", "wgt_load_nbytes", "out_store_nbytes")
@@ -354,6 +357,24 @@ def _mixed_build_plan(module, host_codegen):
     return SimpleNamespace(module=module, targets=_mixed_target(host_codegen))
 
 
+def _history_best(log_path, sidecar_path, prepared, simulator):
+    tuner_path = APP_ROOT.parent / "autotvm_tuner.py"
+    spec = importlib.util.spec_from_file_location("mlperf_tiny_autotvm_tuner", tuner_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load AutoTVM tuner: {tuner_path}")
+    tuner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = tuner
+    spec.loader.exec_module(tuner)
+    return tuner.history_best(
+        log_path,
+        sidecar_path,
+        model_id=MODEL_ID,
+        model_sha256=prepared.imported.model_sha256,
+        backend=simulator,
+        config_path=tuner.DEFAULT_CONFIG_PATH,
+    )
+
+
 def _model_metadata(prepared):
     return {
         "model_sha256": getattr(getattr(prepared, "imported", None), "model_sha256", MODEL_SHA256),
@@ -365,10 +386,13 @@ def _model_metadata(prepared):
 
 
 def build_host_artifacts(prepared, output_dir=DEFAULT_OUTPUT_DIR,
-                         host_codegen=DEFAULT_HOST_CODEGEN, simulator="fsim"):
+                         host_codegen=DEFAULT_HOST_CODEGEN, simulator="fsim",
+                         autotvm_log=None, autotvm_sidecar=None):
     """Build and reload reference/mixed bundles without loading a simulator."""
     _validate_host_codegen(host_codegen)
     _validate_simulator(simulator)
+    if (autotvm_log is None) != (autotvm_sidecar is None):
+        raise ValueError("AutoTVM replay requires both --autotvm-log and --autotvm-sidecar")
     output_dir = validate_output_root(output_dir)
     if host_codegen == "llvm":
         reference_factory = relay.build(prepared.reference_module, target="llvm")
@@ -379,8 +403,17 @@ def build_host_artifacts(prepared, output_dir=DEFAULT_OUTPUT_DIR,
             )
     device_plan = _mixed_build_plan(prepared.mixed_module, host_codegen)
     build_config = {"tir.disable_vectorize": True} if host_codegen == "c" else {}
-    with vta.build_config(config=build_config):
-        mixed_factory = relay.build(device_plan.module, target=device_plan.targets)
+    history_context = (
+        _history_best(autotvm_log, autotvm_sidecar, prepared, simulator)
+        if autotvm_log is not None
+        else nullcontext()
+    )
+    with history_context:
+        if autotvm_log is not None:
+            # TECompiler's cache key omits history-best dispatch state.
+            te_compiler.get().clear()
+        with vta.build_config(config=build_config):
+            mixed_factory = relay.build(device_plan.module, target=device_plan.targets)
     metadata = _model_metadata(prepared)
     model_sha256 = metadata["model_sha256"]
     reference = export_graph_bundle(
@@ -604,7 +637,8 @@ def deploy_tsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HO
     return SimulationMatrixResult("tsim", prepared, artifacts, executions)
 
 
-def deploy(output_dir=DEFAULT_OUTPUT_DIR, host_codegen=DEFAULT_HOST_CODEGEN, simulator="fsim"):
+def deploy(output_dir=DEFAULT_OUTPUT_DIR, host_codegen=DEFAULT_HOST_CODEGEN, simulator="fsim",
+           autotvm_log=None, autotvm_sidecar=None):
     """Build one artifact pair and execute HOST reference or FSIM mixed output."""
     output_dir = validate_output_root(output_dir)
     _validate_host_codegen(host_codegen)
@@ -613,7 +647,10 @@ def deploy(output_dir=DEFAULT_OUTPUT_DIR, host_codegen=DEFAULT_HOST_CODEGEN, sim
         _simulator_session(simulator).validate_environment()
     prepared = prepare_model(MODEL_PATH)
     paths = committed_sample_paths()
-    artifacts = build_host_artifacts(prepared, output_dir, host_codegen, simulator)
+    artifacts = build_host_artifacts(
+        prepared, output_dir, host_codegen, simulator,
+        autotvm_log=autotvm_log, autotvm_sidecar=autotvm_sidecar,
+    )
     if simulator == "host":
         execution = execute_host(artifacts, paths)
     elif simulator == "fsim":
