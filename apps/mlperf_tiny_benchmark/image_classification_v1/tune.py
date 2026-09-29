@@ -113,7 +113,8 @@ def _cleanup_runner(runner):
 def run_tuning(workload_index, *, output_dir=DEFAULT_OUTPUT_DIR, trials=32, timeout=120):
     """Tune one selected workload with FSIM, then measure its best record on TSIM."""
     options = build_tuning_options(trials, timeout)
-    shared._config_identity(shared.DEFAULT_CONFIG_PATH)
+    config_path = os.environ.get("VTA_CONFIG_FILE", shared.DEFAULT_CONFIG_PATH)
+    shared._config_identity(config_path)
     tasks = prepare_v1_tasks()
     task = select_workload(tasks, workload_index)
     workload_id = shared._task_workload_id(task)

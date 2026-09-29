@@ -64,6 +64,21 @@ def test_invalid_index_fails_before_runner_creation_or_output_write(tune, monkey
     assert not output_dir.exists()
 
 
+def test_tuning_validates_active_alternate_geometry_before_workload_selection(
+    tune, monkeypatch, tmp_path
+):
+    config_path = tmp_path / "alternate-vta-geometry.json"
+    config_path.write_text(
+        '{"LOG_BATCH": 0, "LOG_BLOCK": 3, "LOG_OUT_WIDTH": 3, "LOG_OUT_HEIGHT": 3}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VTA_CONFIG_FILE", str(config_path))
+    monkeypatch.setattr(tune, "prepare_v1_tasks", lambda: [SimpleNamespace(name="only-task")])
+
+    with pytest.raises(ValueError, match="valid workload indices"):
+        tune.run_tuning(1, output_dir=tmp_path / "out")
+
+
 def test_tsim_measures_best_fsim_record_config(tune, monkeypatch, tmp_path):
     task = SimpleNamespace(name="conv2d_packed.vta", config_space=[0, 1, 2], flop=2048)
     selected_config = object()
