@@ -88,6 +88,38 @@ artifacts are written under `build/autotvm-comparison/` by default. Pass
 `--output-dir PATH` to choose another artifact location. The untuned default
 commands retain their existing behavior.
 
+## Tune one VTA workload
+
+`tune.py` selects one supported VTA task in the prepared graph's extraction
+order using a zero-based workload index. It uses AutoTVM random search with a
+local FSIM runner, at most 32 trials, and a 120-second timeout for each
+measurement. It then builds and measures the best successful FSIM record with
+TSIM, preserving that record's exact AutoTVM configuration. The output prints
+the task template, workload SHA-256, logical MAC count, TSIM `cycle_count`,
+and generated artifact paths. FSIM timing is only the search signal; reported
+cycles come from the separate TSIM measurement.
+
+Run from the repository root with both simulator libraries built for the same
+geometry file. Start with `VTA_BACKEND=fsim`; the command switches its own
+process to `tsim` only for the final measurement:
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/image_classification_v1/tune.py \
+  --workload-index 0
+```
+
+`--workload-index` is required. `--trials N` and `--timeout SECONDS` override
+the defaults for a bounded run; the trial count is capped at the selected
+task's configuration-space size. `--output-dir PATH` changes the artifact
+directory. By default, the FSIM log, best-record log, and JSON result are
+written under the ignored
+`vta/apps/mlperf_tiny_benchmark/build/autotvm/image_classification_v1/`
+directory. An invalid index reports the valid range before creating a runner
+or writing output.
+
 FSIM matrix:
 
 ```bash
