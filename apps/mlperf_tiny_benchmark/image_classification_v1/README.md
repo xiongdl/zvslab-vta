@@ -140,6 +140,38 @@ The previous single-workload `image_classification_v1/tune.py` command and its
 `--replay-result` options remain available for compatibility. New all-workload
 tuning and self-contained replay use `tune/tune.py`.
 
+## Validate selected schedules in the real deployment
+
+After selecting a complete best manifest, run the V1 deployment profiler with
+TSIM. It builds the baseline and selected mixed graphs, compares both against
+the pure HOST reference on all ten committed samples, measures each real VTA
+graph node with its matching occurrence configuration, and measures uninstrumented
+full-model cycles separately. It rejects mismatched identity, missing
+occurrences, profiling changes to full-model cycles, and any per-occurrence
+difference above 10% relative to that selected AutoTVM cycle count.
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/image_classification_v1" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/image_classification_v1/tune/deployment.py \
+  --best-manifest vta/apps/mlperf_tiny_benchmark/image_classification_v1/tune/optimal/<run-id>/best-manifest.json \
+  --output vta/apps/mlperf_tiny_benchmark/image_classification_v1/tune/deployment.json \
+  --build-dir vta/apps/mlperf_tiny_benchmark/image_classification_v1/build/deployment-validation
+
+./.envs/tvm-vta-env/bin/python scripts/mac_utilization.py \
+  --deployment-report vta/apps/mlperf_tiny_benchmark/image_classification_v1/tune/deployment.json \
+  --output-json vta/apps/mlperf_tiny_benchmark/image_classification_v1/tune/mac-utilization.json
+```
+
+The deployment JSON is a versioned model-independent contract with geometry,
+selected configuration/workload hashes, per-occurrence logical MACs and cycles,
+full-model baseline/tuned cycles, invocation protocol, profiling scope and
+correctness samples. Full-model utilization uses the actual uninstrumented
+whole-model cycle count; host operations are excluded from VTA MAC totals. A
+bounded selected manifest remains labeled incomplete and does not claim that
+the full search has completed.
+
 FSIM matrix:
 
 ```bash
