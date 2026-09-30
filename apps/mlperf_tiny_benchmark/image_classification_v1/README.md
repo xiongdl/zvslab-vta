@@ -96,7 +96,11 @@ local FSIM runner, at most 32 trials, and a 120-second timeout for each
 measurement. Each candidate gets a fresh local runner so an FSIM RPC worker
 crash is recorded as a failed candidate and does not prevent later trials.
 It then builds and measures the best successful FSIM record with TSIM,
-preserving that record's exact AutoTVM configuration. The output prints
+preserving that record's exact AutoTVM configuration. TSIM cost counts exactly
+one formal invocation: its time evaluator runs a warmup, clears the profiler,
+then reads the native counter after one formal call. Warmup is excluded; do
+not divide TSIM costs by two. FSIM timing is unchanged. Older TSIM result files
+without the single-call protocol must be remeasured. The output prints
 the task template, workload SHA-256, logical MAC count, TSIM `cycle_count`,
 and generated artifact paths. FSIM timing is only the search signal; reported
 cycles come from the separate TSIM measurement.
