@@ -205,25 +205,32 @@ def test_tsim_profiler_module_loader_resets_and_collects_each_candidate(
             readings = iter(({"cycle_count": 0}, {"cycle_count": 37}))
             return lambda: json.dumps(next(readings))
 
+        def time_evaluator(self, *args, **kwargs):
+            events.append(("time-evaluator", args, kwargs))
+            return lambda *_inputs: None
+
     class BaseLoader:
         @contextmanager
         def __call__(self, remote_kwargs, build_result):
-            yield Remote(), object()
+            yield Remote(), Remote()
 
     collected = {}
     loader = tuner.ProfilerModuleLoader("tsim", BaseLoader(), collected)
     filename = str(tmp_path / "candidate.tar")
-    with loader({}, type("Build", (), {"filename": filename})()):
+    with loader({}, type("Build", (), {"filename": filename})()) as (_remote, module):
+        module.time_evaluator("main", object(), number=1, repeat=1, min_repeat_ms=0)
         events.append("run")
 
-    assert events == [
+    assert events[:5] == [
         "upload",
         "load-hardware",
         "init-hardware",
         "remove",
         "clear",
-        "run",
     ]
+    assert events[5][0] == "time-evaluator"
+    assert events[5][2]["f_preproc"] == "vta.tsim.profiler_clear"
+    assert events[-1] == "run"
     assert collected[filename] == {"cycle_count": 37}
     assert json.loads(Path(filename + ".tsim.json").read_text(encoding="utf-8")) == {
         "cycle_count": 37
@@ -282,6 +289,56 @@ def test_tsim_runner_replaces_wall_clock_result_with_integer_cycles(tuner, monke
     result = runner.run([measure_input], [build_result])[0]
     assert result.costs == (43,)
     assert not (tmp_path / "candidate.tar.tsim.json").exists()
+
+
+def test_tsim_time_evaluator_excludes_distinct_warmup_cycles(tuner):
+    import tvm
+    from tvm import te, tir
+
+    state = {"calls": 0, "cycles": 0}
+
+    @tvm.register_func("test.tsim.single_call.increment", override=True)
+    def increment():
+        state["calls"] += 1
+        state["cycles"] += 101 if state["calls"] == 1 else 13
+
+    @tvm.register_func("vta.tsim.profiler_clear", override=True)
+    def clear_counter():
+        state["cycles"] = 0
+
+    value = te.compute((1,), lambda _i: tir.call_packed("test.tsim.single_call.increment"))
+    module = tvm.build(te.create_schedule(value.op), [], target="llvm")
+    module.time_evaluator(
+        module.entry_name,
+        tvm.cpu(),
+        number=1,
+        repeat=1,
+        min_repeat_ms=0,
+        f_preproc="vta.tsim.profiler_clear",
+    )()
+
+    assert state == {"calls": 2, "cycles": 13}
+
+
+@pytest.mark.parametrize(
+    "runner_options",
+    [
+        {"number": 2},
+        {"number": True},
+        {"repeat": 2},
+        {"min_repeat_ms": 1},
+        {"enable_cpu_cache_flush": True},
+        {"f_preproc": "other.preproc"},
+    ],
+)
+def test_tsim_runner_rejects_options_that_break_single_call_contract(
+    tuner, monkeypatch, runner_options
+):
+    monkeypatch.setattr(tuner, "load_simulator_backend", lambda _backend: None)
+    monkeypatch.setenv("VTA_BACKEND", "tsim")
+
+    with pytest.raises(ValueError, match="single-call TSIM"):
+        tuner.create_runner("tsim", **runner_options)
 
 
 def test_v1_task_extraction_builds_supported_vta_templates(tuner):

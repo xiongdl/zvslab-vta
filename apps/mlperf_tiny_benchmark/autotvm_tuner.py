@@ -42,6 +42,7 @@ PROFILER_REGISTRIES = {
     "fsim": ("vta.simulator.profiler_clear", "vta.simulator.profiler_status"),
     "tsim": ("vta.tsim.profiler_clear", "vta.tsim.profiler_status"),
 }
+TSIM_PROFILER_CLEAR = PROFILER_REGISTRIES["tsim"][0]
 ARTIFACT_SCHEMA_VERSION = 1
 TUNER_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = TUNER_ROOT / "config" / "vta_64mac.json"
@@ -199,7 +200,10 @@ class ProfilerModuleLoader:
                     f"FSIM profiler did not reset before candidate measurement: {reset_stats}"
                 )
             try:
-                yield remote, module
+                measured_module = (
+                    TSIMTimeEvaluatorModule(module) if self.backend == "tsim" else module
+                )
+                yield remote, measured_module
             finally:
                 if self.backend == "tsim":
                     try:
@@ -210,6 +214,32 @@ class ProfilerModuleLoader:
                     self.collected[filename] = stats
                     with open(filename + ".tsim.json", "w", encoding="utf-8") as stats_file:
                         json.dump(stats, stats_file, sort_keys=True)
+
+
+class TSIMTimeEvaluatorModule:
+    """Inject a post-warmup profiler clear into TVM's RPC time evaluator."""
+
+    def __init__(self, module):
+        self.module = module
+
+    def __getattr__(self, name):
+        return getattr(self.module, name)
+
+    def time_evaluator(self, *args, **kwargs):
+        expected = {"number": 1, "repeat": 1, "min_repeat_ms": 0}
+        for name, value in expected.items():
+            if kwargs.get(name) != value:
+                raise ValueError(
+                    "single-call TSIM measurement requires "
+                    f"{name}={value}; got {kwargs.get(name)!r}"
+                )
+        if kwargs.get("cache_flush_bytes", 0):
+            raise ValueError("single-call TSIM measurement does not support cache flushing")
+        preproc = kwargs.get("f_preproc", "")
+        if preproc not in ("", TSIM_PROFILER_CLEAR):
+            raise ValueError("single-call TSIM measurement reserves f_preproc for profiler clear")
+        kwargs["f_preproc"] = TSIM_PROFILER_CLEAR
+        return self.module.time_evaluator(*args, **kwargs)
 
 
 def tsim_cycle_cost(stats):
@@ -226,9 +256,27 @@ class TSIMLocalRunner(SimulatorLocalRunner):
     """Use native TSIM cycle counts instead of local RPC wall-clock durations."""
 
     def __init__(self, **kwargs):
+        single_call_options = {
+            "number": 1,
+            "repeat": 1,
+            "min_repeat_ms": 0,
+            "enable_cpu_cache_flush": False,
+        }
+        for name, required in single_call_options.items():
+            supplied = kwargs.pop(name, required)
+            if type(supplied) is not type(required) or supplied != required:
+                raise ValueError(
+                    "single-call TSIM measurement requires "
+                    f"{name}={required}; got {supplied!r}"
+                )
         self.cycle_stats = {}
         loader = ProfilerModuleLoader("tsim", collected=self.cycle_stats)
-        super().__init__("tsim", module_loader=loader, **kwargs)
+        super().__init__(
+            "tsim",
+            module_loader=loader,
+            **single_call_options,
+            **kwargs,
+        )
 
     def run(self, measure_inputs, build_results):
         results = super().run(measure_inputs, build_results)
@@ -265,18 +313,53 @@ class TSIMLocalRunner(SimulatorLocalRunner):
         return converted
 
 
-def create_runner(backend, timeout=60, number=1, repeat=1, cooldown_interval=0):
+def create_runner(
+    backend,
+    timeout=60,
+    number=1,
+    repeat=1,
+    min_repeat_ms=0,
+    cooldown_interval=0,
+    enable_cpu_cache_flush=False,
+    f_preproc="",
+):
     """Create an isolated backend runner with cycle-based TSIM costs."""
     validate_backend(backend)
+    if backend == "tsim":
+        expected = {
+            "number": 1,
+            "repeat": 1,
+            "min_repeat_ms": 0,
+            "enable_cpu_cache_flush": False,
+        }
+        supplied = {
+            "number": number,
+            "repeat": repeat,
+            "min_repeat_ms": min_repeat_ms,
+            "enable_cpu_cache_flush": enable_cpu_cache_flush,
+        }
+        for name, required in expected.items():
+            value = supplied[name]
+            if type(value) is not type(required) or value != required:
+                raise ValueError(
+                    "single-call TSIM measurement requires "
+                    f"{name}={required}; got {value!r}"
+                )
+        if f_preproc:
+            raise ValueError("single-call TSIM measurement reserves f_preproc for profiler clear")
     load_simulator_backend(backend)
     runner_options = {
         "timeout": timeout,
         "number": number,
         "repeat": repeat,
+        "min_repeat_ms": min_repeat_ms,
         "cooldown_interval": cooldown_interval,
+        "enable_cpu_cache_flush": enable_cpu_cache_flush,
     }
     if backend == "tsim":
         return TSIMLocalRunner(**runner_options)
+    runner_options.pop("min_repeat_ms")
+    runner_options.pop("enable_cpu_cache_flush")
     return SimulatorLocalRunner("fsim", module_loader=ProfilerModuleLoader("fsim"), **runner_options)
 
 
