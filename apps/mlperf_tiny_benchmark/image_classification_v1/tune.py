@@ -200,6 +200,17 @@ def validate_fusion_result(
         value = result.get(key)
         if not isinstance(value, str) or len(value) != 64:
             raise ValueError(f"fused tuning result {key} is missing or invalid")
+    if result.get("measurement_protocol") != shared.TSIM_MEASUREMENT_PROTOCOL:
+        raise ValueError(
+            "fused tuning result has missing or incompatible TSIM cycles; "
+            "rerun a single-call TSIM measurement"
+        )
+    cycles = result.get("tsim_cycles")
+    if isinstance(cycles, bool) or not isinstance(cycles, int) or cycles <= 0:
+        raise ValueError(
+            "fused tuning result TSIM cycles must be a positive single-call count; "
+            "rerun the TSIM measurement"
+        )
     return result
 
 
@@ -429,6 +440,7 @@ def run_tuning(workload_index, *, output_dir=DEFAULT_OUTPUT_DIR, trials=32, time
         "best_fsim_log_sha256": best_log_sha,
         "mac_count": mac_count,
         "tsim_cycles": cycles,
+        "measurement_protocol": shared.TSIM_MEASUREMENT_PROTOCOL,
         "fsim_trials": trial_count,
         "fsim_log": str(fsim_log),
         "best_fsim_log": str(best_log),

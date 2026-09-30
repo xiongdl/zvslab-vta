@@ -178,6 +178,7 @@ def test_tsim_measures_best_fsim_record_config(tune, monkeypatch, tmp_path):
     assert result["mac_count"] == 1024
     assert result["workload_sha256"] == "a" * 64
     assert result["measurement_scope"] == "isolated_complete_vta_conv_fusion"
+    assert result["measurement_protocol"] == tune.shared.TSIM_MEASUREMENT_PROTOCOL
     assert result["conv_schedule_key"] == tune.fused.conv_schedule_key(identity)
     assert result["fusion_sha256"] == identity.sha256
     persisted = json.loads(Path(result["result_json"]).read_text(encoding="utf-8"))
@@ -272,6 +273,8 @@ def _replay_fixture(tune, tmp_path, monkeypatch):
     result = {
         "schema_version": 1,
         "measurement_scope": "isolated_complete_vta_conv_fusion",
+        "measurement_protocol": tune.shared.TSIM_MEASUREMENT_PROTOCOL,
+        "tsim_cycles": 7654,
         "workload_index": 0,
         "occurrence": 0,
         "symbol": identity.symbol,
@@ -331,6 +334,8 @@ def test_replay_validates_artifacts_and_applies_best_config_to_real_fusion(
         ("changed_config", "Conv config does not match"),
         ("wrong_task", "no successful record"),
         ("best_not_in_fsim", "not a successful matching record"),
+        ("missing_cycle_protocol", "single-call TSIM"),
+        ("accumulated_cycle_protocol", "single-call TSIM"),
     ],
 )
 def test_replay_rejects_missing_or_mismatched_artifacts(tune, tmp_path, monkeypatch, corruption, message):
@@ -345,6 +350,13 @@ def test_replay_rejects_missing_or_mismatched_artifacts(tune, tmp_path, monkeypa
         result["fsim_log_sha256"] = "0" * 64
     elif corruption == "changed_config":
         result["conv_config"] = {"index": 999}
+    elif corruption == "missing_cycle_protocol":
+        result.pop("measurement_protocol")
+    elif corruption == "accumulated_cycle_protocol":
+        result["measurement_protocol"] = {
+            **tune.shared.TSIM_MEASUREMENT_PROTOCOL,
+            "counted_invocations": 2,
+        }
     elif corruption == "wrong_task":
         measure_input, measure_result = records[result["fsim_log"]][0]
         wrong_task = SimpleNamespace(workload=("wrong",))
