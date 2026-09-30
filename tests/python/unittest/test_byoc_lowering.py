@@ -198,13 +198,20 @@ def test_legalize_vta_function_packs_full_convolution_matrix(
     assert str(conv.attrs.data_layout) == f"NCHW{env.BATCH}n{env.BLOCK_IN}c"
     assert str(conv.attrs.kernel_layout) == f"OIHW{env.BLOCK_OUT}o{env.BLOCK_IN}i"
     assert str(conv.attrs.out_layout) == f"NCHW{env.BATCH}n{env.BLOCK_OUT}c"
-    assert tuple(int(dim) for dim in conv.args[0].checked_type.shape) == (1, 1, 8, 8, 1, 16)
+    assert tuple(int(dim) for dim in conv.args[0].checked_type.shape) == (
+        1,
+        1,
+        8,
+        8,
+        env.BATCH,
+        env.BLOCK_IN,
+    )
     assert tuple(int(dim) for dim in conv.args[1].checked_type.shape) == (
         1,
         1,
         *kernel_size,
-        16,
-        16,
+        env.BLOCK_OUT,
+        env.BLOCK_IN,
     )
     assert tuple(int(value) for value in conv.attrs.strides) == strides
 
@@ -515,8 +522,8 @@ def test_lower_to_scheduled_te_uses_packed_output_and_vta_target_across_matrix(
         1,
         spatial,
         spatial,
-        1,
-        16,
+        env.BATCH,
+        env.BLOCK_OUT,
     )
     assert cached.outputs[0].dtype == env.out_dtype
     assert cached.target.kind.name == "ext_dev"
