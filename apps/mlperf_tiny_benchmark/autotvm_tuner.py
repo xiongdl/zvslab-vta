@@ -23,6 +23,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,6 +65,10 @@ MODEL_PIPELINES = {
     "visual_wake_words_v1": ("visual_wake_words_v1", "model", "vww_96_float.tflite"),
 }
 SUPPORTED_TEMPLATES = {"conv2d_packed.vta", "dense_packed.vta"}
+
+
+class SimulatorInfrastructureError(RuntimeError):
+    """An error in local simulator RPC setup or owned-resource cleanup."""
 
 
 def validate_backend(backend):
@@ -127,25 +132,81 @@ class SimulatorLocalRunner(LocalRunner):
         from tvm.rpc.tracker import Tracker
 
         self.task = task
-        tracker = Tracker(host="127.0.0.1", port=9000, port_end=10000, silent=True)
-        device_key = f"$local$device${tracker.port}"
-        server = Server(
-            host="127.0.0.1",
-            port=9000,
-            port_end=10000,
-            key=device_key,
-            load_library=simulator_server_libraries(self.backend),
-            silent=True,
-            tracker_addr=("127.0.0.1", tracker.port),
-        )
-        self.tracker = tracker
-        self.server = server
-        self.key = device_key
-        self.host = "127.0.0.1"
-        self.port = tracker.port
-        if check_remote(vta_target(), self.key, self.host, self.port):
-            return server, tracker
-        raise RuntimeError("VTA ext_dev device is unavailable in the local simulator RPC server")
+        tracker = None
+        server = None
+        stage = "tracker startup"
+        try:
+            tracker = Tracker(host="127.0.0.1", port=9000, port_end=10000, silent=True)
+            device_key = f"$local$device${tracker.port}"
+            stage = "server startup"
+            server = Server(
+                host="127.0.0.1",
+                port=9000,
+                port_end=10000,
+                key=device_key,
+                load_library=simulator_server_libraries(self.backend),
+                silent=True,
+                tracker_addr=("127.0.0.1", tracker.port),
+            )
+            self.tracker = tracker
+            self.server = server
+            self.key = device_key
+            self.host = "127.0.0.1"
+            self.port = tracker.port
+            stage = "device check"
+            if check_remote(vta_target(), self.key, self.host, self.port):
+                return server, tracker
+            raise SimulatorInfrastructureError(
+                "VTA ext_dev device is unavailable in the local simulator RPC server"
+            )
+        except Exception as error:
+            self.tracker = tracker
+            self.server = server
+            try:
+                self.close()
+            except Exception as cleanup_error:
+                raise SimulatorInfrastructureError(
+                    f"{self.backend.upper()} local RPC {stage} failed ({error}); "
+                    f"resource cleanup also failed ({cleanup_error})"
+                ) from error
+            if isinstance(error, SimulatorInfrastructureError):
+                raise
+            detail = f"{type(error).__name__}: {error}"
+            raise SimulatorInfrastructureError(
+                f"{self.backend.upper()} local RPC {stage} failed: {detail}"
+            ) from error
+
+    def close(self):
+        """Terminate this runner's local RPC processes and worker executor."""
+        failures = []
+        for name in ("server", "tracker"):
+            resource = getattr(self, name, None)
+            if resource is not None:
+                try:
+                    _terminate_owned_rpc_resource(resource)
+                    setattr(self, name, None)
+                except Exception as error:  # cleanup both resources before reporting
+                    failures.append(f"{name}: {type(error).__name__}: {error}")
+
+        executor = getattr(self, "executor", None)
+        if executor is not None:
+            worker_map = getattr(executor, "_worker_map", {})
+            worker_failure = False
+            for worker in tuple(worker_map.values()):
+                try:
+                    _terminate_owned_worker(worker)
+                except Exception as error:
+                    worker_failure = True
+                    failures.append(f"worker: {type(error).__name__}: {error}")
+            threadpool = getattr(executor, "_threadpool", None)
+            if threadpool is not None:
+                threadpool.shutdown(wait=True, cancel_futures=True)
+            if not worker_failure:
+                self.executor = None
+        if failures:
+            raise SimulatorInfrastructureError(
+                "local RPC resource cleanup failed: " + "; ".join(failures)
+            )
 
     def run(self, measure_inputs, build_results):
         device_target = vta_target()
@@ -155,6 +216,40 @@ class SimulatorLocalRunner(LocalRunner):
         ]
         return super().run(runtime_inputs, build_results)
 
+
+def _terminate_owned_worker(worker):
+    """Stop a runner-owned PopenWorker without enumerating unrelated processes."""
+    process = getattr(worker, "_proc", None)
+    if process is None:
+        return
+    for stream_name in ("_writer", "_reader"):
+        stream = getattr(worker, stream_name, None)
+        if stream is not None:
+            try:
+                stream.close()
+            except OSError:
+                pass
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=1.0)
+    worker._proc = None
+    worker._remaining_uses = None
+
+
+def _terminate_owned_rpc_resource(resource):
+    """Use normal RPC shutdown, falling back only to its owned subprocess."""
+    try:
+        resource.terminate()
+    except OSError:
+        worker = getattr(resource, "proc", None)
+        if worker is None:
+            raise
+        _terminate_owned_worker(worker)
+        resource.proc = None
 
 def vta_target():
     """Return the configured ext_dev target used to access the VTA runtime."""

@@ -181,6 +181,98 @@ def test_backend_loading_reports_missing_profiler_registries(tuner, monkeypatch)
         tuner.load_simulator_backend("tsim")
 
 
+def test_local_runner_releases_tracker_when_rpc_server_startup_fails(tuner, monkeypatch):
+    from tvm.rpc import server as rpc_server
+    from tvm.rpc import tracker as rpc_tracker
+
+    events = []
+
+    class FakeTracker:
+        port = 9234
+
+        def __init__(self, **_kwargs):
+            events.append("tracker-start")
+
+        def terminate(self):
+            events.append("tracker-stop")
+
+    def fail_server(**_kwargs):
+        raise PermissionError("operation not permitted")
+
+    monkeypatch.setattr(rpc_tracker, "Tracker", FakeTracker)
+    monkeypatch.setattr(rpc_server, "Server", fail_server)
+    monkeypatch.setattr(tuner, "simulator_server_libraries", lambda _backend: "libvta_fsim")
+    runner = tuner.SimulatorLocalRunner("fsim", timeout=1)
+
+    try:
+        with pytest.raises(
+            tuner.SimulatorInfrastructureError,
+            match="FSIM local RPC server startup failed: PermissionError",
+        ):
+            runner.set_task(type("Task", (), {})())
+    finally:
+        runner.close()
+
+    assert events == ["tracker-start", "tracker-stop"]
+
+
+def test_local_runner_close_terminates_both_rpc_resources(tuner, monkeypatch):
+    events = []
+
+    class Resource:
+        def __init__(self, name):
+            self.name = name
+
+        def terminate(self):
+            events.append(self.name)
+
+    class ThreadPool:
+        def shutdown(self, **kwargs):
+            events.append(("executor", kwargs))
+
+    class Executor:
+        _worker_map = {}
+        _threadpool = ThreadPool()
+
+    runner = object.__new__(tuner.SimulatorLocalRunner)
+    runner.server = Resource("server")
+    runner.tracker = Resource("tracker")
+    runner.executor = Executor()
+    runner.close()
+    runner.close()
+
+    assert events == [
+        "server",
+        "tracker",
+        ("executor", {"wait": True, "cancel_futures": True}),
+    ]
+
+
+def test_local_runner_uses_the_ext_dev_target_for_rpc_measurements(tuner, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(tuner, "vta_target", lambda: "vta-ext-dev")
+
+    def capture_run(_runner, inputs, builds):
+        captured["inputs"] = inputs
+        captured["builds"] = builds
+        return ["result"]
+
+    monkeypatch.setattr(tuner.LocalRunner, "run", capture_run)
+    runner = object.__new__(tuner.SimulatorLocalRunner)
+    task = object()
+    config = object()
+    measure_input = type("Input", (), {"task": task, "config": config})()
+    build = object()
+
+    result = runner.run([measure_input], [build])
+
+    assert result == ["result"]
+    assert captured["inputs"][0].target == "vta-ext-dev"
+    assert captured["inputs"][0].task is task
+    assert captured["inputs"][0].config is config
+    assert captured["builds"] == [build]
+
+
 def test_tsim_profiler_module_loader_resets_and_collects_each_candidate(
     tuner, monkeypatch, tmp_path
 ):
