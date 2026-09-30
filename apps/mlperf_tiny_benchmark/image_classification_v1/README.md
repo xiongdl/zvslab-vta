@@ -115,12 +115,21 @@ PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
 
 `--workload-index` is required. `--trials N` and `--timeout SECONDS` override
 the defaults for a bounded run; the trial count is capped at the selected
-task's configuration-space size. `--output-dir PATH` changes the artifact
-directory. By default, the FSIM log, best-record log, and JSON result are
-written under the ignored
+task's configuration-space size. Each candidate contains the actual outlined
+Conv fusion, including its model-derived bias, shift, clip limits, and output
+cast. The result identifies that full fusion separately from the original
+`conv2d_packed.vta` bare-Conv records; their TSIM cycles must not be compared as
+before/after measurements. `--output-dir PATH` changes the artifact directory.
+By default, the FSIM log, best-record log, and JSON result are written under the ignored
 `vta/apps/mlperf_tiny_benchmark/build/autotvm/image_classification_v1/`
 directory. An invalid index reports the valid range before creating a runner
 or writing output.
+
+The fusion workload is correctness-checked against the prepared Relay function,
+including negative and saturated values. The VTA dump uses ALU instructions for
+postprocessing. See
+`docs/initiatives/20260930-ic-v1-mac-utilization/CONSISTENCY.md` for the
+bounded FSIM/TSIM evidence and reproducible pinned-config smoke procedure.
 
 FSIM matrix:
 
