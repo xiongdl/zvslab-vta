@@ -95,6 +95,7 @@ def test_tsim_measures_best_fsim_record_config(tune, monkeypatch, tmp_path):
         lambda _path: iter([(measure_input, fsim_result)]),
     )
     calls = []
+    fsim_runners = []
 
     class FakeTuner:
         def __init__(self, actual_task):
@@ -134,7 +135,12 @@ def test_tsim_measures_best_fsim_record_config(tune, monkeypatch, tmp_path):
             return [tsim_result]
 
     monkeypatch.setattr(tune.shared.autotvm.tuner, "RandomTuner", FakeTuner)
-    monkeypatch.setattr(tune.shared, "measure_option", lambda _backend, **_opts: {"runner": SimpleNamespace(timeout=120)})
+    def make_measure_option(_backend, **_opts):
+        runner = SimpleNamespace(timeout=120, server=None, tracker=None)
+        fsim_runners.append(runner)
+        return {"runner": runner}
+
+    monkeypatch.setattr(tune.shared, "measure_option", make_measure_option)
     monkeypatch.setattr(tune.shared.autotvm, "LocalBuilder", lambda **_opts: FakeBuilder())
     monkeypatch.setattr(tune.shared, "create_runner", lambda backend, **_opts: FakeRunner())
     monkeypatch.setattr(tune.shared, "validate_backend", lambda _backend: None)
@@ -143,8 +149,9 @@ def test_tsim_measures_best_fsim_record_config(tune, monkeypatch, tmp_path):
 
     result = tune.run_tuning(0, output_dir=tmp_path / "out", trials=32, timeout=120)
 
-    assert calls[0] == ("fsim", 3, 120)
-    assert calls[1] == ("tsim", selected_config)
+    assert calls[:3] == [("fsim", 1, 120)] * 3
+    assert len({id(runner) for runner in fsim_runners}) == 3
+    assert calls[3] == ("tsim", selected_config)
     assert result["tsim_cycles"] == 7654
     assert result["mac_count"] == 1024
     assert result["workload_sha256"] == "a" * 64

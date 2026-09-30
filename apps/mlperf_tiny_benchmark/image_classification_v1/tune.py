@@ -133,16 +133,27 @@ def run_tuning(workload_index, *, output_dir=DEFAULT_OUTPUT_DIR, trials=32, time
     if trial_count <= 0:
         raise RuntimeError(f"AutoTVM workload {workload_index} has an empty configuration space")
 
-    fsim_measure = shared.measure_option("fsim", timeout=timeout, number=1, repeat=1, cooldown_interval=0)
-    fsim_runner = fsim_measure["runner"]
-    try:
-        shared.autotvm.tuner.RandomTuner(task).tune(
-            n_trial=trial_count,
-            measure_option=fsim_measure,
-            callbacks=[shared.autotvm.callback.log_to_file(str(fsim_log))],
+    # A candidate can abort the FSIM RPC server process. AutoTVM's LocalRunner
+    # keeps that server for its lifetime, so a later candidate would otherwise
+    # continue against a dead server (or remain blocked waiting for its RPC
+    # future). Keep RandomTuner's visited-config state, but give each trial a
+    # fresh local runner so a failed candidate cannot poison the remaining
+    # search.
+    tuner = shared.autotvm.tuner.RandomTuner(task)
+    log_callback = shared.autotvm.callback.log_to_file(str(fsim_log))
+    for _ in range(trial_count):
+        fsim_measure = shared.measure_option(
+            "fsim", timeout=timeout, number=1, repeat=1, cooldown_interval=0
         )
-    finally:
-        _cleanup_runner(fsim_runner)
+        fsim_runner = fsim_measure["runner"]
+        try:
+            tuner.tune(
+                n_trial=1,
+                measure_option=fsim_measure,
+                callbacks=[log_callback],
+            )
+        finally:
+            _cleanup_runner(fsim_runner)
 
     shared.autotvm.record.pick_best(str(fsim_log), str(best_log))
     best_records = list(shared.autotvm.record.load_from_file(str(best_log)))
