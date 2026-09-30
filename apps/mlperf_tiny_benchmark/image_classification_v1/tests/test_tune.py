@@ -53,8 +53,11 @@ def test_tuning_defaults_are_random_fsim_local_32_trials_and_120_seconds(tune):
 
 def test_invalid_index_fails_before_runner_creation_or_output_write(tune, monkeypatch, tmp_path):
     tasks = [SimpleNamespace(name="only-task")]
-    monkeypatch.setattr(tune, "prepare_v1_tasks", lambda: tasks)
-    monkeypatch.setattr(tune.shared, "_config_identity", lambda _path: None)
+    identity = SimpleNamespace()
+    monkeypatch.setattr(
+        tune, "prepare_v1_workloads", lambda: (SimpleNamespace(), [identity], tasks)
+    )
+    monkeypatch.setattr(tune.shared, "_config_identity", lambda _path: (Path("config"), "a" * 64))
     monkeypatch.setattr(tune.shared, "create_runner", lambda *_a, **_k: pytest.fail("runner created"))
     output_dir = tmp_path / "must-not-exist"
 
@@ -73,21 +76,37 @@ def test_tuning_validates_active_alternate_geometry_before_workload_selection(
         encoding="utf-8",
     )
     monkeypatch.setenv("VTA_CONFIG_FILE", str(config_path))
-    monkeypatch.setattr(tune, "prepare_v1_tasks", lambda: [SimpleNamespace(name="only-task")])
+    monkeypatch.setattr(
+        tune,
+        "prepare_v1_workloads",
+        lambda: (SimpleNamespace(), [SimpleNamespace()], [SimpleNamespace(name="only-task")]),
+    )
 
     with pytest.raises(ValueError, match="valid workload indices"):
         tune.run_tuning(1, output_dir=tmp_path / "out")
 
 
 def test_tsim_measures_best_fsim_record_config(tune, monkeypatch, tmp_path):
-    task = SimpleNamespace(name="conv2d_packed.vta", config_space=[0, 1, 2], flop=2048)
-    selected_config = object()
-    measure_input = SimpleNamespace(config=selected_config, task=task, target="vta")
+    identity = tune.fused.FusedConvIdentity(
+        ("conv2d_packed.vta", ("TENSOR", (1, 2, 32, 32, 1, 8), "int8"),
+         ("TENSOR", (2, 2, 3, 3, 8, 8), "int8"), (1, 1), (1, 1, 1, 1), (1, 1),
+         "NCHW1n8c", "int32"),
+        64, 7, -127, 127, "int8", "tvmgen_test_vta_main_0", 0,
+    )
+    workload = (tune.fused.TASK_NAME, *identity.task_args())
+    selected_config = SimpleNamespace(to_json_dict=lambda: {"index": 1})
+    task = SimpleNamespace(name=tune.fused.TASK_NAME, workload=workload,
+                           config_space=[0, 1, 2], flop=2048)
+    target = SimpleNamespace(kind=SimpleNamespace(name="vta"))
+    measure_input = SimpleNamespace(config=selected_config, task=task, target=target)
     fsim_result = SimpleNamespace(error_no=0, costs=(0.001,))
     tsim_result = SimpleNamespace(error_no=0, costs=(7654,))
-    monkeypatch.setattr(tune, "prepare_v1_tasks", lambda: [task])
-    monkeypatch.setattr(tune.shared, "_config_identity", lambda _path: None)
+    prepared = SimpleNamespace()
+    monkeypatch.setattr(tune, "prepare_v1_workloads", lambda: (prepared, [identity], [task]))
+    monkeypatch.setattr(tune.shared, "_config_identity", lambda _path: (Path("geometry.json"), "g" * 64))
+    monkeypatch.setattr(tune.shared, "_sha256_file", lambda _path: "m" * 64)
     monkeypatch.setattr(tune.shared, "_task_workload_id", lambda _task: "a" * 64)
+    monkeypatch.setattr(tune.fused, "lower_with_fused_config", lambda *_: SimpleNamespace(schedule=object()))
     monkeypatch.setattr(tune.shared.autotvm.record, "pick_best", lambda _src, _dst: None)
     monkeypatch.setattr(
         tune.shared.autotvm.record,
@@ -151,7 +170,44 @@ def test_tsim_measures_best_fsim_record_config(tune, monkeypatch, tmp_path):
 
     assert calls[:3] == [("fsim", 1, 120)] * 3
     assert len({id(runner) for runner in fsim_runners}) == 3
+    assert all(runner.server is None and runner.tracker is None for runner in fsim_runners)
     assert calls[3] == ("tsim", selected_config)
     assert result["tsim_cycles"] == 7654
     assert result["mac_count"] == 1024
     assert result["workload_sha256"] == "a" * 64
+    assert result["measurement_scope"] == "isolated_complete_vta_conv_fusion"
+    assert result["conv_schedule_key"] == tune.fused.conv_schedule_key(identity)
+    assert result["fusion_sha256"] == identity.sha256
+
+
+def test_fused_result_validator_rejects_old_bare_conv_record(tune):
+    identity = tune.fused.FusedConvIdentity(
+        ("conv2d_packed.vta", ("TENSOR", (1, 2, 8, 8, 1, 8), "int8"),
+         ("TENSOR", (2, 2, 3, 3, 8, 8), "int8"), (1, 1), (1, 1, 1, 1), (1, 1),
+         "NCHW1n8c", "int32"),
+        64, 7, -127, 127, "int8", "symbol", 0,
+    )
+    bare = {"template": "conv2d_packed.vta", "workload_sha256": "a" * 64}
+
+    with pytest.raises(ValueError, match="schema"):
+        tune.validate_fusion_result(bare, identity, "m" * 64, "g" * 64)
+
+
+def test_fused_result_validator_rejects_mismatched_semantic_identity(tune):
+    identity = tune.fused.FusedConvIdentity(
+        ("conv2d_packed.vta", ("TENSOR", (1, 2, 8, 8, 1, 8), "int8"),
+         ("TENSOR", (2, 2, 3, 3, 8, 8), "int8"), (1, 1), (1, 1, 1, 1), (1, 1),
+         "NCHW1n8c", "int32"),
+        64, 7, -127, 127, "int8", "symbol", 0,
+    )
+    result = {
+        "schema_version": 1,
+        "measurement_scope": "isolated_complete_vta_conv_fusion",
+        "fusion_sha256": "x" * 64,
+        "fusion_identity": {},
+        "template": tune.fused.TASK_NAME,
+        "real_conv_lowering": True,
+    }
+
+    with pytest.raises(ValueError, match="identity"):
+        tune.validate_fusion_result(result, identity, "m" * 64, "g" * 64)

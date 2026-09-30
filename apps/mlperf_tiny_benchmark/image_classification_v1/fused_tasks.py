@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 import tvm
-from tvm import autotvm, te, topi
+from tvm import autotvm, relay, te, topi
 
 from vta.top.vta_conv2d import conv2d_packed, schedule_conv2d_packed
 
@@ -63,7 +63,7 @@ def _int_constant(expr, label):
     return result
 
 
-def _conv_workload(conv, occurrence):
+def _conv_workload(conv):
     """Translate one real NHWC/HWIO Conv into its packed VTA TOPI arguments."""
     import vta
 
@@ -141,7 +141,7 @@ def extract_fused_identities(prepared):
             raise ValueError(f"{symbol} fusion must contain nn.conv2d before postprocessing")
         occurrence = len(identities)
         identity = FusedConvIdentity(
-            conv_workload=_conv_workload(conv, occurrence),
+            conv_workload=_conv_workload(conv),
             bias=bias,
             shift=_int_constant(shift.args[1], "right_shift"),
             clip_min=int(clip.attrs.a_min),
@@ -180,11 +180,6 @@ def fused_conv2d_packed(data, kernel, strides, padding, dilation, layout, out_dt
                        name="ic_v1_cast", tag=topi.tag.ELEMWISE)
     schedule = schedule_conv2d_packed.__wrapped__(cfg, [value])
     return schedule, [value, data, kernel]
-
-
-@autotvm.register_topi_schedule(TASK_NAME)
-def schedule_fused_conv2d_packed(cfg, outs):
-    return schedule_conv2d_packed.__wrapped__(cfg, outs)
 
 
 def create_task(identity, target):
@@ -227,6 +222,3 @@ def lower_with_fused_config(prepared, identity, config):
             f"expected {conv_schedule_key(identity)!r}, got {context.workload!r}"
         )
     return scheduled
-
-
-from tvm import relay  # noqa: E402  (keeps the data-only identity import cheap)

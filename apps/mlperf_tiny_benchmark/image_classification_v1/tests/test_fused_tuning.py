@@ -20,6 +20,9 @@ MODEL_PATH = APP_ROOT / "model" / "pretrainedResnet.tflite"
 
 
 def _load_module():
+    registered = sys.modules.get("fused_tasks")
+    if registered is not None and Path(registered.__file__).resolve() == TASKS_PATH.resolve():
+        return registered
     spec = importlib.util.spec_from_file_location("fused_tasks", TASKS_PATH)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
