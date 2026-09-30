@@ -428,10 +428,14 @@ def run_tuning(workload_index, *, output_dir=DEFAULT_OUTPUT_DIR, trials=32, time
 
     # The environment selector is process-local. Each helper validates that it
     # matches the backend it is about to load and measure.
-    os.environ["VTA_BACKEND"] = "tsim"
-    tsim_runner = shared.create_runner("tsim", timeout=timeout, number=1, repeat=1, cooldown_interval=0)
-    tsim_builder = shared.autotvm.LocalBuilder(n_parallel=1)
+    previous_backend = os.environ.get("VTA_BACKEND")
+    tsim_runner = None
     try:
+        os.environ["VTA_BACKEND"] = "tsim"
+        tsim_runner = shared.create_runner(
+            "tsim", timeout=timeout, number=1, repeat=1, cooldown_interval=0
+        )
+        tsim_builder = shared.autotvm.LocalBuilder(n_parallel=1)
         tsim_runner.set_task(task)
         tsim_builder.set_task(task, tsim_runner.get_build_kwargs())
         tsim_builds = tsim_builder.build([best_input])
@@ -446,7 +450,14 @@ def run_tuning(workload_index, *, output_dir=DEFAULT_OUTPUT_DIR, trials=32, time
             raise RuntimeError(f"TSIM could not build the selected FSIM schedule: {failure}")
         tsim_results = tsim_runner.run([best_input], tsim_builds)
     finally:
-        _cleanup_runner(tsim_runner)
+        try:
+            if tsim_runner is not None:
+                _cleanup_runner(tsim_runner)
+        finally:
+            if previous_backend is None:
+                os.environ.pop("VTA_BACKEND", None)
+            else:
+                os.environ["VTA_BACKEND"] = previous_backend
     if not tsim_results or tsim_results[0].error_no != shared.MeasureErrorNo.NO_ERROR:
         failure = tsim_results[0].costs if tsim_results else "runner returned no result"
         raise RuntimeError(f"TSIM failed to measure the selected FSIM schedule: {failure}")

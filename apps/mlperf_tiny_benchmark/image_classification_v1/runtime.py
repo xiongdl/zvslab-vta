@@ -136,9 +136,12 @@ class SimulatorSession:
     diagnostic: str
 
     def validate_environment(self):
-        from vta.testing import simulator as backend_simulator
+        # The testing.simulator module eagerly loads its selected native backend
+        # at import time. Environment validation must remain a pure selector so
+        # a mismatched backend cannot leave two incompatible simulators loaded.
+        from vta.backend import normalize_backend
 
-        active_target = backend_simulator.normalize_backend(simulator=self.label)
+        active_target = normalize_backend(simulator=self.label)
         if active_target != self.environment_target:
             raise RuntimeError(
                 f"simulator {self.label!r} requires VTA backend "

@@ -199,3 +199,37 @@ weight-load, and output-store counters; TSIM validates its supported
 structure, output differences, wrong configuration, and absent accelerator
 activity cause a nonzero exit. TSIM initialization and hardware loading remain
 lazy until all four bundles have been built, exported, and reloaded.
+
+## Full IC V1 MAC tuning result
+
+The completed eight-workload run is preserved under `tune/optimal/c4-full/`;
+search state, raw logs, failures, and resume data remain under
+`build/two_stage_tuning/c4-full/20260930T120956.692567Z/`. The final selected
+manifest in the optimal directory contains the measured schedules validated
+against real deployment. Configurations 64 for occurrence 2 and 111 for
+occurrence 5 replace their lower-cycle first choices because the first choices
+exceeded the required 10% TSIM/deployment comparison limit. The manifest
+retains the original minimum observed cycles and records the selected schedule
+cycles separately.
+
+The ten committed samples passed exact HOST-output comparison. On that same
+sample set, uninstrumented whole-model TSIM cycles were 38,757,180 baseline and
+2,751,370 tuned. Whole-model MAC utilization rose from 4.8614% to 68.4808%
+(14.09× cycle speedup). Per-occurrence MACs, TSIM/deployed cycles, utilization,
+and the <=10% comparisons are in `tune/REPORT-C4-FULL.md`; versioned deployment
+and generic utilization JSON are `tune/deployment-c4-full.json` and
+`tune/mac-utilization-c4-full.json`.
+
+Replay and recalculate the committed final report with:
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/image_classification_v1" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/image_classification_v1/tune/tune.py \
+  --replay-manifest vta/apps/mlperf_tiny_benchmark/image_classification_v1/tune/optimal/c4-full/best-manifest.json
+
+./.envs/tvm-vta-env/bin/python scripts/mac_utilization.py \
+  --deployment-report vta/apps/mlperf_tiny_benchmark/image_classification_v1/tune/deployment-c4-full.json \
+  --output-json vta/apps/mlperf_tiny_benchmark/image_classification_v1/tune/mac-utilization-c4-full.json
+```

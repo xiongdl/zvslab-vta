@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -220,8 +221,10 @@ def test_tsim_measures_best_fsim_record_config(tune, monkeypatch, tmp_path):
     monkeypatch.setattr(tune.shared, "load_simulator_backend", lambda _backend: None)
     monkeypatch.setattr(tune.shared.autotvm, "callback", SimpleNamespace(log_to_file=lambda _path: object()))
 
+    monkeypatch.setenv("VTA_BACKEND", "fsim")
     result = tune.run_tuning(0, output_dir=tmp_path / "out", trials=32, timeout=120)
 
+    assert os.environ["VTA_BACKEND"] == "fsim"
     assert calls[:3] == [("fsim", 1, 120)] * 3
     assert len({id(runner) for runner in fsim_runners}) == 3
     assert all(runner.server is None and runner.tracker is None for runner in fsim_runners)

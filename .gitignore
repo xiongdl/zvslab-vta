@@ -176,6 +176,8 @@ perf
 !apps/mlperf_tiny_benchmark/image_classification_v1/tune/optimal/c4-full/
 !apps/mlperf_tiny_benchmark/image_classification_v1/tune/optimal/c4-full/*.json
 !apps/mlperf_tiny_benchmark/image_classification_v1/tune/optimal/c4-full/*.tsim.log
+!apps/mlperf_tiny_benchmark/image_classification_v1/tune/deployment-c4-full.json
+!apps/mlperf_tiny_benchmark/image_classification_v1/tune/mac-utilization-c4-full.json
 *.params
 *.onnx
 *.h5

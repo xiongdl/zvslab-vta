@@ -19,6 +19,8 @@
 
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -74,6 +76,37 @@ def test_tsim_rejects_wrong_environment_before_model_preparation(deployment_runt
     monkeypatch.setenv("VTA_BACKEND", "fsim")
     with pytest.raises(ValueError, match="backend mismatch"):
         deployment_runtime.deploy_tsim_matrix(tmp_path)
+
+
+def test_backend_mismatch_validation_does_not_load_any_simulator_library():
+    """Rejecting the wrong backend must not import the eager simulator loader."""
+    env = os.environ.copy()
+    env["VTA_BACKEND"] = "fsim"
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(APP_ROOT), str(APP_ROOT.parent), *filter(None, env.get("PYTHONPATH", "").split(os.pathsep))]
+    )
+    code = """
+import sys
+import runtime
+assert 'vta.testing.simulator' not in sys.modules
+try:
+    runtime._simulator_session('tsim').validate_environment()
+except ValueError as error:
+    assert 'backend mismatch' in str(error)
+else:
+    raise AssertionError('FSIM environment was accepted for TSIM')
+assert 'vta.testing.simulator' not in sys.modules
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=APP_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_tsim_missing_registry_reports_build_command(deployment_runtime, monkeypatch):
