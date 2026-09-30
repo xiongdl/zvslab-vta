@@ -56,6 +56,7 @@ def _load_local_module(name):
 legacy = _load_legacy()
 search = _load_local_module("search")
 measurement = _load_local_module("measurement")
+artifacts = _load_local_module("artifacts")
 
 
 def _sha256_json(value):
@@ -281,12 +282,22 @@ def _tsim_worker(args):
             "infrastructure_errors": [],
         }
     tsim_log = _record_path(run_dir, index, "tsim")
-    completed = {item["config_key"] for item in state["candidates"]}
+    if not args.resume and tsim_log.exists():
+        raise ValueError(f"TSIM native log already exists; choose --resume or a new run: {tsim_log}")
+    state_keys = [item.get("config_key") for item in state["candidates"]]
+    if len(set(state_keys)) != len(state_keys):
+        raise ValueError("TSIM state contains duplicate candidate identities")
+    if not set(state_keys).issubset(successful):
+        raise ValueError("TSIM state contains a config absent from successful FSIM records")
+    logged_keys = []
     if args.resume and tsim_log.exists():
         for measure_input, _ in autotvm.record.load_from_file(str(tsim_log)):
-            completed.add(_config_identity(measure_input.config))
-    elif completed:
+            logged_keys.append(_config_identity(measure_input.config))
+    elif state_keys:
         raise ValueError("TSIM state records candidates but its native log is missing")
+    if args.resume and set(logged_keys) != set(state_keys):
+        raise ValueError("TSIM native log and persisted candidate state disagree")
+    completed = set(state_keys)
 
     for config_key, fsim_input in successful.items():
         if config_key in completed:
@@ -389,12 +400,137 @@ def _worker_env(backend):
     return env
 
 
+def _export_best_artifacts(run_dir, run_manifest, prepared, identities, tasks, artifact_dir):
+    """Export selected TSIM records and metadata without build/ references."""
+    artifact_dir = artifact_dir.expanduser().resolve()
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    _, model_dir, model_filename = legacy.shared.MODEL_PIPELINES["image_classification_v1"]
+    model_path = APP_ROOT / model_dir / model_filename
+    model_sha = legacy.shared._sha256_file(model_path)
+    geometry_path = Path(run_manifest["run_identity"]["geometry_path"])
+    geometry_sha = run_manifest["run_identity"]["geometry_sha256"]
+    _, active_geometry_sha = legacy.shared._config_identity(str(geometry_path))
+    if active_geometry_sha != geometry_sha:
+        raise ValueError("run manifest geometry hash does not match the active geometry file")
+    entries = []
+    failures = []
+    for index in run_manifest["selected_workload_indices"]:
+        fsim_state_path = _state_path(run_dir, index, "fsim")
+        tsim_state_path = _state_path(run_dir, index, "tsim")
+        if not fsim_state_path.is_file() or not tsim_state_path.is_file():
+            failures.append({"workload_index": index, "reason": "missing backend state"})
+            continue
+        fsim_state = search.load_state(
+            fsim_state_path,
+            _task_run_identity(
+                index, identities[index], tasks[index], geometry_path, geometry_sha,
+                model_path,
+                run_manifest["run_identity"]["trial_batch"],
+                run_manifest["run_identity"]["min_successful"],
+                run_manifest["run_identity"]["fsim_timeout_seconds"],
+                run_manifest["run_identity"]["tsim_timeout_seconds"],
+            ),
+        )
+        tsim_state = json.loads(tsim_state_path.read_text(encoding="utf-8"))
+        if tsim_state.get("status") != "complete" or "best_tsim_cycles" not in tsim_state:
+            failures.append({"workload_index": index, "reason": tsim_state.get("status", "no TSIM best")})
+            continue
+        native_log = _record_path(run_dir, index, "tsim")
+        records = list(legacy.shared.autotvm.record.load_from_file(str(native_log)))
+        best_config = next(
+            (item["config"] for item in tsim_state["candidates"]
+             if item["config_index"] == tsim_state["best_config_index"]
+             and item["tsim_cycles"] == tsim_state["best_tsim_cycles"]),
+            None,
+        )
+        if best_config is None:
+            raise ValueError(f"TSIM state selected config is missing for workload {index}")
+        prefix = f"image_classification_v1-workload-{index:03d}"
+        native_path = artifact_dir / f"{prefix}-best.tsim.log"
+        native_meta = artifacts.export_selected_record(
+            records, best_config, tsim_state["best_tsim_cycles"], native_path,
+            legacy.shared.autotvm.record,
+        )
+        expected_config = json.dumps(best_config, sort_keys=True, separators=(",", ":"))
+        best_input = next(
+            (record_input for record_input, record_result in records
+             if _config_identity(record_input.config) == expected_config
+             and record_result.error_no == legacy.shared.MeasureErrorNo.NO_ERROR),
+            None,
+        )
+        if best_input is None:
+            raise ValueError(f"selected TSIM native record is missing for workload {index}")
+        lowered = legacy.fused.lower_with_fused_config(
+            prepared, identities[index], best_input.config
+        )
+        if lowered.schedule is None:
+            raise ValueError(f"selected Conv config did not lower for workload {index}")
+        result = {
+            "schema_version": 1,
+            "artifact_kind": "self_contained_native_best_v1",
+            "measurement_scope": "isolated_complete_vta_conv_fusion",
+            "measurement_protocol": legacy.shared.TSIM_MEASUREMENT_PROTOCOL,
+            "workload_index": index,
+            "occurrence": identities[index].occurrence,
+            "symbol": identities[index].symbol,
+            "template": tasks[index].name,
+            "workload_sha256": legacy.shared._task_workload_id(tasks[index]),
+            "fusion_identity": json.loads(identities[index].canonical_json()),
+            "fusion_sha256": identities[index].sha256,
+            "model": "image_classification_v1",
+            "model_sha256": model_sha,
+            "geometry_path": str(geometry_path),
+            "geometry_sha256": geometry_sha,
+            "conv_schedule_key": legacy.fused.conv_schedule_key(identities[index]),
+            "conv_config": best_config,
+            "real_conv_lowering": True,
+            "best_native_record": native_path.name,
+            "best_native_record_sha256": native_meta["sha256"],
+            "mac_count": legacy._logical_mac_count(tasks[index]),
+            "tsim_cycles": int(tsim_state["best_tsim_cycles"]),
+            "fsim_trials": fsim_state["attempted_count"],
+            "fsim_success_count": search.success_count(fsim_state),
+            "fsim_failures": fsim_state["failures"],
+            "fsim_stop_reason": fsim_state["stop_reason"],
+            "valid_config_space_size": fsim_state["identity"]["valid_config_space_size"],
+            "tsim_candidate_count": len(tsim_state["candidates"]),
+            "tsim_failures": [item for item in tsim_state["candidates"] if item.get("error")],
+            "bounded": run_manifest["bounded"],
+        }
+        result_path = artifacts.write_json(artifact_dir / f"{prefix}-best.json", result)
+        entries.append({
+            "workload_index": index,
+            "occurrence": identities[index].occurrence,
+            "symbol": identities[index].symbol,
+            "fusion_sha256": identities[index].sha256,
+            "result_json": result_path.name,
+            "native_record": native_path.name,
+            "native_record_sha256": native_meta["sha256"],
+            "tsim_cycles": int(tsim_state["best_tsim_cycles"]),
+        })
+    manifest = {
+        "schema_version": 1,
+        "model": "image_classification_v1",
+        "model_sha256": model_sha,
+        "geometry_path": str(geometry_path),
+        "geometry_sha256": geometry_sha,
+        "measurement_protocol": legacy.shared.TSIM_MEASUREMENT_PROTOCOL,
+        "bounded": run_manifest["bounded"],
+        "completion_label": run_manifest["completion_label"],
+        "workload_count": len(tasks),
+        "selected_workload_indices": run_manifest["selected_workload_indices"],
+        "entries": entries,
+        "failures": failures,
+    }
+    manifest_path = artifacts.write_json(artifact_dir / "best-manifest.json", manifest)
+    return manifest_path
+
+
 def _run_controller(args):
     import vta
 
     del vta
     prepared, identities, tasks = legacy.prepare_v1_workloads()
-    del prepared
     if args.workload_index is not None:
         legacy.select_workload(tasks, args.workload_index)
         indices = [args.workload_index]
@@ -483,9 +619,43 @@ def _run_controller(args):
     manifest["bounded"] = manifest.get("bounded", False)
     manifest["completion_label"] = "BOUNDED_SMOKE_INCOMPLETE" if manifest["bounded"] else "FULL_SEARCH"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    artifact_dir = args.artifact_dir or (TUNE_DIR / "optimal" / run_dir.name)
+    artifact_manifest = _export_best_artifacts(
+        run_dir, manifest, prepared, identities, tasks, artifact_dir
+    )
+    manifest["best_manifest"] = str(artifact_manifest)
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"Run manifest: {manifest_path}")
+    print(f"Best artifact manifest: {artifact_manifest}")
     print(f"Run status: {manifest['status']} ({manifest['completion_label']})")
     return 0 if all_ok else 2
+
+
+def _replay_manifest(path):
+    path = Path(path).expanduser().resolve(strict=True)
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"best manifest is not readable JSON: {path}") from error
+    if manifest.get("schema_version") != 1 or manifest.get("model") != "image_classification_v1":
+        raise ValueError("unsupported or mismatched best manifest")
+    entries = manifest.get("entries")
+    if not isinstance(entries, list):
+        raise ValueError("best manifest entries must be a list")
+    for entry in entries:
+        result_path = path.parent / entry["result_json"]
+        replay = legacy.replay_result(
+            result_path, expected_workload_index=entry.get("workload_index")
+        )
+        result = replay["result"]
+        if result.get("fusion_sha256") != entry.get("fusion_sha256"):
+            raise ValueError("best manifest fusion identity does not match its result")
+        if result.get("tsim_cycles") != entry.get("tsim_cycles"):
+            raise ValueError("best manifest cycles do not match its result")
+    print(f"Validated self-contained best manifest: {path}")
+    print(f"Replayed artifacts: {len(entries)}")
+    print(f"Completion label: {manifest.get('completion_label', 'unknown')}")
+    return 0
 
 
 def _positive_int(value):
@@ -518,6 +688,8 @@ def _parser():
     parser.add_argument("--tsim-timeout", type=_positive_int, default=120)
     parser.add_argument("--build-dir", type=Path, help="intermediate run directory parent (default: IC V1/build/two_stage_tuning)")
     parser.add_argument("--resume-manifest", type=Path, help="resume the run identified by a prior manifest")
+    parser.add_argument("--artifact-dir", type=Path, help="self-contained best artifacts output directory (default: tune/optimal/<run-id>)")
+    parser.add_argument("--replay-manifest", type=Path, help="validate and apply every result in a self-contained best manifest")
     parser.add_argument("--max-workloads", type=_positive_int, help="bounded smoke: process at most N workloads and label the result incomplete")
     parser.add_argument("--worker-backend", choices=("fsim", "tsim"), help=argparse.SUPPRESS)
     parser.add_argument("--run-dir", type=Path, help=argparse.SUPPRESS)
@@ -529,6 +701,11 @@ def main(argv=None):
     args = _parser().parse_args(argv)
     if args.trial_batch <= 0 or args.min_successful <= 0:
         raise SystemExit("--trial-batch and --min-successful must be positive")
+    if args.replay_manifest:
+        try:
+            return _replay_manifest(args.replay_manifest)
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
     if args.worker_backend:
         if args.workload_index is None or args.run_dir is None:
             raise SystemExit("worker requires --workload-index and --run-dir")

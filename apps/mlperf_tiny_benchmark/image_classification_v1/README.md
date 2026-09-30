@@ -88,69 +88,57 @@ artifacts are written under `build/autotvm-comparison/` by default. Pass
 `--output-dir PATH` to choose another artifact location. The untuned default
 commands retain their existing behavior.
 
-## Tune one VTA workload
+## Tune IC V1 workloads
 
-`tune.py` selects one supported VTA task in the prepared graph's extraction
-order using a zero-based workload index. It uses AutoTVM random search with a
-local FSIM runner, at most 32 trials, and a 120-second timeout for each
-measurement. Each candidate gets a fresh local runner so an FSIM RPC worker
-crash is recorded as a failed candidate and does not prevent later trials.
-It then builds and measures the best successful FSIM record with TSIM,
-preserving that record's exact AutoTVM configuration. TSIM cost counts exactly
-one formal invocation: its time evaluator runs a warmup, clears the profiler,
-then reads the native counter after one formal call. Warmup is excluded; do
-not divide TSIM costs by two. FSIM timing is unchanged. Older TSIM result files
-without the single-call protocol must be remeasured. The output prints
-the task template, workload SHA-256, logical MAC count, TSIM `cycle_count`,
-and generated artifact paths. FSIM timing is only the search signal; reported
-cycles come from the separate TSIM measurement.
+The maintained two-stage entry point is `tune/tune.py`. By default it searches
+each prepared VTA fusion occurrence in 100-distinct-configuration FSIM batches
+until at least 20 distinct successful schedules are found or that task's
+configuration space is exhausted. It measures every distinct FSIM success on
+TSIM, then selects the lowest positive native `cycle_count`. FSIM and TSIM
+workers run as separate processes with 60-second and 120-second per-candidate
+timeouts. A failed schedule remains in the progress state and does not stop
+later candidates. A bounded run is labeled `BOUNDED_SMOKE_INCOMPLETE`.
 
 Run from the repository root with both simulator libraries built for the same
-geometry file. Start with `VTA_BACKEND=fsim`; the command switches its own
-process to `tsim` only for the final measurement:
+geometry file. The controller starts each worker with its required backend:
 
 ```bash
 VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/image_classification_v1" \
   ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/image_classification_v1/tune.py \
-  --workload-index 0
+  vta/apps/mlperf_tiny_benchmark/image_classification_v1/tune/tune.py --all
 ```
 
-`--workload-index` is required. `--trials N` and `--timeout SECONDS` override
-the defaults for a bounded run; the trial count is capped at the selected
-task's configuration-space size. Each candidate contains the actual outlined
-Conv fusion, including its model-derived bias, shift, clip limits, and output
-cast. The result identifies that full fusion separately from the original
-`conv2d_packed.vta` bare-Conv records; their TSIM cycles must not be compared as
-before/after measurements. `--output-dir PATH` changes the artifact directory.
-By default, the FSIM log, best-record log, and JSON result are written under the ignored
-`vta/apps/mlperf_tiny_benchmark/build/autotvm/image_classification_v1/`
-directory. An invalid index reports the valid range before creating a runner
-or writing output.
-
-The fusion workload is correctness-checked against the prepared Relay function,
-including negative and saturated values. The VTA dump uses ALU instructions for
-postprocessing. See
-`docs/initiatives/20260930-ic-v1-mac-utilization/CONSISTENCY.md` for the
-bounded FSIM/TSIM evidence and reproducible pinned-config smoke procedure.
-
-To validate a saved single-workload result and replay its selected config
-through the real outlined model fusion lowering, use `--replay-result`. Replay
-checks model, geometry, fusion, and workload identities; verifies both native
-FSIM log hashes; confirms the selected task/config is the successful best
-record and also appears as a successful FSIM record; then checks that the real
-fusion lowering uses its Conv schedule key. This validates configuration
-replay and lowering, but does not rerun FSIM or TSIM measurement. Optionally
-pass `--workload-index` to require a particular occurrence:
+For a two-workload smoke with one successful schedule per occurrence:
 
 ```bash
 VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/image_classification_v1" \
   ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/image_classification_v1/tune.py \
-  --replay-result vta/apps/mlperf_tiny_benchmark/build/autotvm/image_classification_v1/<run>-result.json
+  vta/apps/mlperf_tiny_benchmark/image_classification_v1/tune/tune.py \
+  --all --max-workloads 2 --trial-batch 1 --min-successful 1
 ```
+
+Use `--workload-index N` to select one zero-based fusion occurrence. `--resume-manifest PATH` continues a compatible run; it rejects changed model, geometry, workload, timeout, or search options and reuses completed FSIM/TSIM records. FSIM/TSIM native logs, per-trial errors, progress, and resume state live below `image_classification_v1/build/two_stage_tuning/`. Self-contained selected native records and their manifest are exported below `tune/optimal/<run-id>/` by default. Set `--artifact-dir PATH` to change that output directory.
+
+Replay checks the model and geometry hashes, full fusion occurrence identity,
+workload and schedule configuration, TSIM protocol and selected native-record
+hash; it applies the saved Conv configuration to the real outlined fusion. The
+replay uses only the files under the artifact directory and does not need the
+intermediate `build/` directory:
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/image_classification_v1" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/image_classification_v1/tune/tune.py \
+  --replay-manifest vta/apps/mlperf_tiny_benchmark/image_classification_v1/tune/optimal/<run-id>/best-manifest.json
+```
+
+The previous single-workload `image_classification_v1/tune.py` command and its
+`--workload-index`, `--trials`, `--timeout`, `--output-dir`, and
+`--replay-result` options remain available for compatibility. New all-workload
+tuning and self-contained replay use `tune/tune.py`.
 
 FSIM matrix:
 

@@ -325,6 +325,38 @@ def test_replay_validates_artifacts_and_applies_best_config_to_real_fusion(
     assert calls == [(prepared, identity, config)]
 
 
+def test_self_contained_best_record_replays_without_build_logs(tune, tmp_path, monkeypatch):
+    result_path, result, records, config, lowered, calls, prepared, identity = _replay_fixture(
+        tune, tmp_path, monkeypatch
+    )
+    native_path = tmp_path / "best.tsim.log"
+    native_path.write_bytes(b"standalone native TSIM record")
+    result.update({
+        "artifact_kind": "self_contained_native_best_v1",
+        "best_native_record": native_path.name,
+        "best_native_record_sha256": hashlib.sha256(native_path.read_bytes()).hexdigest(),
+    })
+    result.pop("fsim_log")
+    result.pop("best_fsim_log")
+    native_result = SimpleNamespace(
+        error_no=tune.shared.MeasureErrorNo.NO_ERROR, costs=(7654,)
+    )
+    measure_input = records[str(tmp_path / "fsim.log")][0][0]
+
+    def load_only_standalone(path):
+        assert Path(path) == native_path
+        return iter([(measure_input, native_result)])
+
+    monkeypatch.setattr(tune.shared.autotvm.record, "load_from_file", load_only_standalone)
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+
+    replay = tune.replay_result(result_path)
+
+    assert replay["config"] is config
+    assert replay["lowered"] is lowered
+    assert calls == [(prepared, identity, config)]
+
+
 @pytest.mark.parametrize(
     ("corruption", "message"),
     [

@@ -138,3 +138,40 @@ def test_worker_selection_keeps_occurrence_index_separate_from_task():
 
     assert index == 1
     assert selected is task
+
+
+def test_exported_native_record_is_hashed_and_independently_loadable(tmp_path):
+    artifacts_spec = importlib.util.spec_from_file_location(
+        "ic_v1_artifact_helpers", TUNE_DIR / "artifacts.py"
+    )
+    artifacts = importlib.util.module_from_spec(artifacts_spec)
+    sys.modules[artifacts_spec.name] = artifacts
+    artifacts_spec.loader.exec_module(artifacts)
+    config = {"index": 7, "entity": [["tile", "sp", [1, 2]]]}
+    measure_input = type("Input", (), {"config": type(
+        "Config", (), {"to_json_dict": lambda self: config}
+    )()})()
+    result = type("Result", (), {"error_no": 0, "costs": (321,)})()
+
+    class RecordModule:
+        @staticmethod
+        def encode(actual_input, actual_result):
+            return json.dumps({"config": actual_input.config.to_json_dict(), "cycles": actual_result.costs[0]})
+
+        @staticmethod
+        def load_from_file(path):
+            item = json.loads(Path(path).read_text().strip())
+            assert item == {"config": config, "cycles": 321}
+            return iter([(measure_input, result)])
+
+    destination = tmp_path / "best-native.log"
+    exported = artifacts.export_selected_record(
+        [(measure_input, result)], config, 321, destination, RecordModule
+    )
+
+    loaded_input, loaded_result = artifacts.load_validated_record(
+        destination, exported["sha256"], RecordModule
+    )
+
+    assert loaded_input is measure_input
+    assert loaded_result is result

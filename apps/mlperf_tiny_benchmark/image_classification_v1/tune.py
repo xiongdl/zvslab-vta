@@ -196,10 +196,15 @@ def validate_fusion_result(
         raise ValueError("fused tuning result workload identity is missing or invalid")
     if expected_workload_sha256 is not None and workload_id != expected_workload_sha256:
         raise ValueError("fused tuning result AutoTVM workload hash does not match")
-    for key in ("fsim_log_sha256", "best_fsim_log_sha256"):
-        value = result.get(key)
+    if result.get("artifact_kind") == "self_contained_native_best_v1":
+        value = result.get("best_native_record_sha256")
         if not isinstance(value, str) or len(value) != 64:
-            raise ValueError(f"fused tuning result {key} is missing or invalid")
+            raise ValueError("fused tuning best native record hash is missing or invalid")
+    else:
+        for key in ("fsim_log_sha256", "best_fsim_log_sha256"):
+            value = result.get(key)
+            if not isinstance(value, str) or len(value) != 64:
+                raise ValueError(f"fused tuning result {key} is missing or invalid")
     if result.get("measurement_protocol") != shared.TSIM_MEASUREMENT_PROTOCOL:
         raise ValueError(
             "fused tuning result has missing or incompatible TSIM cycles; "
@@ -234,8 +239,43 @@ def _record_matches_task(measure_input, task):
     )
 
 
-def _load_result_records(result, task):
+def _load_result_records(result, task, result_dir=None):
     """Verify referenced AutoTVM bytes and return the selected native record."""
+    if result.get("artifact_kind") == "self_contained_native_best_v1":
+        raw_path = result.get("best_native_record")
+        if not isinstance(raw_path, str) or not raw_path:
+            raise ValueError("fused tuning best native record path is missing")
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute() and result_dir is not None:
+            path = Path(result_dir) / path
+        try:
+            actual_hash = shared._sha256_file(path)
+        except OSError as error:
+            raise ValueError(f"fused tuning best native record is missing or unreadable: {path}") from error
+        if actual_hash != result.get("best_native_record_sha256"):
+            raise ValueError("fused tuning best native record SHA-256 does not match")
+        try:
+            records = list(shared.autotvm.record.load_from_file(str(path)))
+        except Exception as error:
+            raise ValueError("fused tuning best native record cannot be decoded") from error
+        matches = [
+            (measure_input, measure_result)
+            for measure_input, measure_result in records
+            if _record_matches_task(measure_input, task)
+            and measure_result.error_no == shared.MeasureErrorNo.NO_ERROR
+        ]
+        if len(matches) != 1:
+            raise ValueError("fused tuning best native record must contain one successful matching task")
+        best_input, best_result = matches[0]
+        if not isinstance(result.get("conv_config"), dict) or _freeze_json_value(
+            result["conv_config"]
+        ) != _freeze_json_value(best_input.config.to_json_dict()):
+            raise ValueError("fused tuning result Conv config does not match the best native record")
+        cycles = best_result.costs[0] if best_result.costs else None
+        if cycles != result.get("tsim_cycles"):
+            raise ValueError("fused tuning result cycles do not match the best native record")
+        return best_input
+
     paths = {}
     for path_key, hash_key in (
         ("fsim_log", "fsim_log_sha256"),
@@ -317,7 +357,7 @@ def replay_result(result_path, *, expected_workload_index=None):
         raise ValueError("fused tuning result geometry path does not match the active config")
     workload_id = shared._task_workload_id(task)
     validate_fusion_result(result, identity, model_sha, geometry_sha, workload_id)
-    best_input = _load_result_records(result, task)
+    best_input = _load_result_records(result, task, result_path.parent)
     lowered = fused.lower_with_fused_config(prepared, identity, best_input.config)
     if lowered.schedule is None:
         raise ValueError("saved Conv config did not produce a real model fusion schedule")
