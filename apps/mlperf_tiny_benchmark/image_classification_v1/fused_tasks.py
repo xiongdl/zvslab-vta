@@ -103,13 +103,33 @@ def extract_fused_identities(prepared):
     """Extract ordered complete VTA Conv identities from a prepared mixed module."""
     from tvm import relay
 
-    identities = []
+    functions = {}
     for gv in prepared.mixed_module.get_global_vars():
         func = prepared.mixed_module[gv]
         attrs = func.attrs
         if attrs is None or "Compiler" not in attrs or attrs["Compiler"] != "vta":
             continue
-        symbol = attrs.get_str("global_symbol")
+        symbol = attrs.get_str("global_symbol") if "global_symbol" in attrs else None
+        if not symbol:
+            raise ValueError("outlined VTA fusion is missing its global_symbol")
+        if symbol in functions:
+            raise ValueError(f"prepared model contains duplicate VTA fusion symbol {symbol!r}")
+        functions[symbol] = func
+
+    expected_symbols = tuple(prepared.routing.symbols)
+    if len(expected_symbols) != len(set(expected_symbols)):
+        raise ValueError("prepared routing report contains duplicate VTA fusion symbols")
+    missing = [symbol for symbol in expected_symbols if symbol not in functions]
+    unexpected = [symbol for symbol in functions if symbol not in expected_symbols]
+    if missing or unexpected:
+        raise ValueError(
+            "VTA fusion coverage does not match prepared deployment routing: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+
+    identities = []
+    for symbol in expected_symbols:
+        func = functions[symbol]
         composite_calls = []
 
         def visit(node):
@@ -166,7 +186,13 @@ def fused_conv2d_packed(data, kernel, strides, padding, dilation, layout, out_dt
     conv = conv2d_packed.__wrapped__(
         cfg, data, kernel, strides, padding, dilation, layout, out_dtype
     )
-    value = conv
+    value = apply_postprocessing(conv, bias, shift, clip_min, clip_max, output_dtype)
+    schedule = schedule_conv2d_packed.__wrapped__(cfg, [value])
+    return schedule, [value, data, kernel]
+
+
+def apply_postprocessing(value, bias, shift, clip_min, clip_max, output_dtype):
+    """Apply the deployment fusion's bias, shift, clip and cast in order."""
     if bias is not None:
         value = te.compute(value.shape, lambda *i: value[i] + bias,
                            name="ic_v1_bias", tag=topi.tag.ELEMWISE)
@@ -178,8 +204,7 @@ def fused_conv2d_packed(data, kernel, strides, padding, dilation, layout, out_dt
                        name="ic_v1_clip_min", tag=topi.tag.ELEMWISE)
     value = te.compute(value.shape, lambda *i: value[i].astype(output_dtype),
                        name="ic_v1_cast", tag=topi.tag.ELEMWISE)
-    schedule = schedule_conv2d_packed.__wrapped__(cfg, [value])
-    return schedule, [value, data, kernel]
+    return value
 
 
 def create_task(identity, target):

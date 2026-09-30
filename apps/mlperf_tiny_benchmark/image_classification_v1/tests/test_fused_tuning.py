@@ -66,13 +66,21 @@ def test_extracts_complete_ordered_fusion_and_occurrence_identity(fused, prepare
 
     assert len(identities) == 8
     assert [item.occurrence for item in identities] == list(range(8))
-    assert [item.symbol for item in identities] == [
-        function.attrs.get_str("global_symbol") for function in _outlined_vta_functions(prepared)
-    ]
+    assert [item.symbol for item in identities] == list(prepared.routing.symbols)
     assert all((item.bias, item.shift, item.clip_min, item.clip_max, item.output_dtype)
                == (64, 7, -127, 127, "int8") for item in identities[:2])
     assert identities[0].conv_workload == identities[1].conv_workload
     assert identities[0].sha256 != identities[1].sha256
+
+
+def test_rejects_incomplete_deployment_fusion_coverage(fused, prepared):
+    incomplete = replace(
+        prepared,
+        routing=replace(prepared.routing, symbols=prepared.routing.symbols[:-1]),
+    )
+
+    with pytest.raises(ValueError, match="fusion coverage.*unexpected"):
+        fused.extract_fused_identities(incomplete)
 
 
 def test_identity_roundtrips_and_distinguishes_postprocessing(fused, prepared):
@@ -142,6 +150,12 @@ def test_local_builder_compiles_two_configs_and_keeps_fusion_semantics(
 ):
     import vta
 
+    monkeypatch.setenv(
+        "PYTHONPATH",
+        os.pathsep.join(
+            [str(APP_ROOT), *filter(None, os.environ.get("PYTHONPATH", "").split(os.pathsep))]
+        ),
+    )
     identity = fused.extract_fused_identities(prepared)[0]
     task = fused.create_task(identity, "vta")
     assert task.name == fused.TASK_NAME
@@ -163,5 +177,52 @@ def test_local_builder_compiles_two_configs_and_keeps_fusion_semantics(
     assert all(result.filename for result in results)
     assert results[0].filename != results[1].filename
 
+    output, data, kernel = task.instantiate(configs[0])[1]
+    assert output.name == "ic_v1_cast"
+    assert tuple(data.shape) == identity.conv_workload[1][1]
+    assert tuple(kernel.shape) == identity.conv_workload[2][1]
+    assert data.dtype == identity.conv_workload[1][2]
+    assert kernel.dtype == identity.conv_workload[2][2]
+
+    packed_data = identity.conv_workload[1][1]
+    packed_kernel = identity.conv_workload[2][1]
+    n = packed_data[0] * packed_data[4]
+    input_channels = packed_data[1] * packed_data[5]
+    height, width = packed_data[2:4]
+    output_channels = packed_kernel[0] * packed_kernel[4]
+    kh, kw = packed_kernel[2:4]
+    strides, padding, dilation = identity.conv_workload[3:6]
+    if len(padding) == 2:
+        pad_top = pad_left = padding[0]
+        pad_bottom = pad_right = padding[1]
+    else:
+        pad_top, pad_left, pad_bottom, pad_right = padding
+    logical_height = (height + pad_top + pad_bottom - dilation[0] * (kh - 1) - 1) // strides[0] + 1
+    logical_width = (width + pad_left + pad_right - dilation[1] * (kw - 1) - 1) // strides[1] + 1
+    logical_macs = n * logical_height * logical_width * output_channels * kh * kw * input_channels
+    assert int(task.flop) // 2 == logical_macs
+    assert int(task.flop) == task.flop
+
     lowered = fused.lower_with_fused_config(prepared, identity, configs[0])
     assert lowered.schedule is not None
+
+
+@pytest.mark.parametrize(
+    "bias,shift,clip_min,clip_max,dtype,expected",
+    [
+        (11, 2, -10, 10, "int8", [-10, -8, 0, 2, 7, 10]),
+        (None, 0, -5, 5, "int16", [-5, -5, -5, 0, 5, 5]),
+    ],
+)
+def test_task_postprocessing_matches_deployment_order(
+    fused, bias, shift, clip_min, clip_max, dtype, expected
+):
+    source = tvm.te.placeholder((6,), dtype="int32", name="accumulator")
+    output = fused.apply_postprocessing(source, bias, shift, clip_min, clip_max, dtype)
+    module = tvm.build(tvm.te.create_schedule(output.op), [source, output], target="llvm")
+    values = np.asarray([-100, -40, -10, 0, 20, 100], dtype="int32")
+    actual = tvm.nd.empty((6,), dtype=dtype)
+
+    module(tvm.nd.array(values), actual)
+
+    np.testing.assert_array_equal(actual.numpy(), np.asarray(expected, dtype=dtype))
