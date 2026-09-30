@@ -78,6 +78,9 @@ def test_tsim_rejects_wrong_environment_before_model_preparation(deployment_runt
 
 def test_tsim_missing_registry_reports_build_command(deployment_runtime, monkeypatch):
     monkeypatch.setattr(deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="tsim"))
+    from vta.testing import simulator
+
+    monkeypatch.setattr(simulator, "load_backend", lambda _label: None)
     monkeypatch.setattr(
         deployment_runtime.tvm,
         "get_global_func",
