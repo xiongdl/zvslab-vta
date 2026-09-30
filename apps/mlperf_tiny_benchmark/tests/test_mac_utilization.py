@@ -199,6 +199,46 @@ def test_tsim_log_targets_and_extracted_workload_coverage_are_validated(utilizat
         )
 
 
+def test_mac_report_rejects_tsim_sidecar_without_single_call_protocol(
+    utilization, tmp_path, monkeypatch
+):
+    tuner = utilization._load_tuner()
+    monkeypatch.setenv("VTA_BACKEND", "tsim")
+    config = tmp_path / "vta_64mac.json"
+    config.write_text('{"LOG_BATCH": 0, "LOG_BLOCK": 3}\n', encoding="utf-8")
+    monkeypatch.setenv("VTA_CONFIG_FILE", str(config))
+    log = tmp_path / "legacy-tsim.log"
+    log.write_text("legacy accumulated cycle record", encoding="utf-8")
+    sidecar = tmp_path / "legacy-tsim.json"
+    sidecar.write_text(
+        json.dumps(
+            {
+                "schema_version": tuner.ARTIFACT_SCHEMA_VERSION,
+                "model_id": "image_classification_v1",
+                "model_sha256": "a" * 64,
+                "backend": "tsim",
+                "config_path": str(config.resolve()),
+                "config_sha256": utilization.sha256_file(config),
+                "log_path": str(log.resolve()),
+                "log_sha256": utilization.sha256_file(log),
+                "tuning_options": {"tuner": "grid_search"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    prepared = SimpleNamespace(imported=SimpleNamespace(model_sha256="a" * 64))
+    monkeypatch.setattr(
+        utilization,
+        "_load_model_occurrences",
+        lambda _model_id: (tuner, prepared, [], {"supported": [], "unsupported": []}),
+    )
+
+    with pytest.raises(ValueError, match="rerun a single-call TSIM measurement"):
+        utilization.build_rows(
+            "image_classification_v1", log, sidecar, config_path=config
+        )
+
+
 def test_cli_requires_mode_specific_artifacts_and_tsim(utilization):
     parser = utilization.build_parser()
 
@@ -235,6 +275,7 @@ def test_cli_requires_mode_specific_artifacts_and_tsim(utilization):
 def test_aggregate_requires_complete_successful_tsim_identity_before_outputs(
     utilization, tmp_path, monkeypatch
 ):
+    monkeypatch.setenv("VTA_BACKEND", "tsim")
     models = ["image_classification_v1", "image_classification_v2"]
     summary = tmp_path / "aggregate.json"
     summary.write_text(

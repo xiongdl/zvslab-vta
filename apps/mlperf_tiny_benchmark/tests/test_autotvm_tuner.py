@@ -543,7 +543,6 @@ def test_tuning_sidecar_validates_pair_and_history_best(tuner, monkeypatch, tmp_
         expected_tuning_options=options,
     )
     assert validated == metadata
-
     with tuner.history_best(
         log_path,
         sidecar_path,
@@ -554,6 +553,137 @@ def test_tuning_sidecar_validates_pair_and_history_best(tuner, monkeypatch, tmp_
         expected_tuning_options=options,
     ):
         assert tuner.autotvm.task.DispatchContext.current is not None
+
+
+def test_tsim_sidecar_records_and_validates_single_call_protocol(tuner, monkeypatch, tmp_path):
+    import vta  # noqa: F401 - register VTA AutoTVM templates for log replay
+
+    monkeypatch.setenv("VTA_BACKEND", "tsim")
+    config_path = (Path(__file__).resolve().parents[3] / "config" / "vta_64mac.json").resolve()
+    monkeypatch.setenv("VTA_CONFIG_FILE", str(config_path))
+    task = _dense_autotvm_task()
+    log_path = tmp_path / "v1-tsim.log"
+    sidecar_path = tmp_path / "v1-tsim.json"
+    _write_native_record(tuner, log_path, task)
+    options = tuner.build_tuning_options("tsim", trials_per_task=1, timeout=60)
+
+    metadata = tuner.write_tuning_sidecar(
+        log_path,
+        sidecar_path,
+        model_id="image_classification_v1",
+        model_sha256="a" * 64,
+        backend="tsim",
+        config_path=config_path,
+        tasks=[task],
+        tuning_options=options,
+    )
+
+    assert metadata["measurement_protocol"] == tuner.TSIM_MEASUREMENT_PROTOCOL
+    assert (
+        metadata["tuning_options"]["measurement_protocol"]
+        == tuner.TSIM_MEASUREMENT_PROTOCOL
+    )
+    assert json.loads(sidecar_path.read_text(encoding="utf-8")) == metadata
+    validated = tuner.validate_tuning_artifacts(
+        log_path,
+        sidecar_path,
+        model_id="image_classification_v1",
+        model_sha256="a" * 64,
+        backend="tsim",
+        config_path=config_path,
+        expected_tuning_options=options,
+    )
+    assert validated == metadata
+    with tuner.history_best(
+        log_path,
+        sidecar_path,
+        model_id="image_classification_v1",
+        model_sha256="a" * 64,
+        backend="tsim",
+        config_path=config_path,
+        expected_tuning_options=options,
+    ):
+        assert tuner.autotvm.task.DispatchContext.current is not None
+
+
+@pytest.mark.parametrize("corruption", ["missing", "accumulated", "options_only"])
+def test_tsim_sidecar_rejects_missing_or_accumulated_measurement_protocol(
+    tuner, monkeypatch, tmp_path, corruption
+):
+    import vta  # noqa: F401 - register VTA AutoTVM templates for log replay
+
+    monkeypatch.setenv("VTA_BACKEND", "tsim")
+    config_path = (Path(__file__).resolve().parents[3] / "config" / "vta_64mac.json").resolve()
+    monkeypatch.setenv("VTA_CONFIG_FILE", str(config_path))
+    task = _dense_autotvm_task()
+    log_path = tmp_path / "v1-tsim.log"
+    sidecar_path = tmp_path / "v1-tsim.json"
+    _write_native_record(tuner, log_path, task)
+    options = tuner.build_tuning_options("tsim", trials_per_task=1, timeout=60)
+    tuner.write_tuning_sidecar(
+        log_path,
+        sidecar_path,
+        model_id="image_classification_v1",
+        model_sha256="a" * 64,
+        backend="tsim",
+        config_path=config_path,
+        tasks=[task],
+        tuning_options=options,
+    )
+    metadata = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    if corruption == "missing":
+        metadata.pop("measurement_protocol")
+    elif corruption == "accumulated":
+        metadata["measurement_protocol"] = {
+            **tuner.TSIM_MEASUREMENT_PROTOCOL,
+            "counted_invocations": 2,
+        }
+        metadata["tuning_options"]["measurement_protocol"] = metadata["measurement_protocol"]
+    else:
+        metadata["tuning_options"].pop("measurement_protocol")
+    sidecar_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="rerun.*single-call TSIM measurement"):
+        tuner.validate_tuning_artifacts(
+            log_path,
+            sidecar_path,
+            model_id="image_classification_v1",
+            model_sha256="a" * 64,
+            backend="tsim",
+            config_path=config_path,
+        )
+
+
+def test_tsim_resume_rejects_aggregate_without_single_call_protocol(tuner, monkeypatch, tmp_path):
+    monkeypatch.setenv("VTA_BACKEND", "tsim")
+    config_path = tuner.DEFAULT_CONFIG_PATH.resolve()
+    monkeypatch.setenv("VTA_CONFIG_FILE", str(config_path))
+    _, config_sha256 = tuner._config_identity(config_path)
+    summary_path = tmp_path / "legacy-tsim-summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "schema_version": tuner.ARTIFACT_SCHEMA_VERSION,
+                "model_order": list(tuner.MODEL_PIPELINES),
+                "backend": "tsim",
+                "config_path": str(config_path),
+                "config_sha256": config_sha256,
+                "tuning_options": {
+                    "tuner": "grid_search",
+                    "trials_per_task": 1,
+                    "timeout": 180,
+                    "number": 1,
+                    "repeat": 1,
+                    "cooldown_interval": 0.0,
+                },
+                "results": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="current single-call cycle protocol"):
+        tuner.tune_all("tsim", trials_per_task=1, resume_summary=summary_path)
 
 
 def test_tuning_sidecar_rejects_incomplete_or_mismatched_replay(tuner, monkeypatch, tmp_path):

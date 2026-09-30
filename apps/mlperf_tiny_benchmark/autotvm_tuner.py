@@ -43,6 +43,12 @@ PROFILER_REGISTRIES = {
     "tsim": ("vta.tsim.profiler_clear", "vta.tsim.profiler_status"),
 }
 TSIM_PROFILER_CLEAR = PROFILER_REGISTRIES["tsim"][0]
+TSIM_MEASUREMENT_PROTOCOL = {
+    "name": "tsim_single_call",
+    "version": 1,
+    "counted_invocations": 1,
+    "warmup_excluded": True,
+}
 ARTIFACT_SCHEMA_VERSION = 1
 TUNER_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = TUNER_ROOT / "config" / "vta_64mac.json"
@@ -548,6 +554,13 @@ def write_tuning_sidecar(
         },
         "tuning_options": tuning_options,
     }
+    if backend == "tsim":
+        if tuning_options.get("measurement_protocol") != TSIM_MEASUREMENT_PROTOCOL:
+            raise ValueError(
+                "TSIM sidecar requires the single-call measurement protocol; "
+                "rerun the TSIM measurement"
+            )
+        metadata["measurement_protocol"] = TSIM_MEASUREMENT_PROTOCOL
     sidecar_path = Path(sidecar_path).expanduser().resolve()
     sidecar_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = sidecar_path.with_name(sidecar_path.name + ".tmp")
@@ -595,6 +608,14 @@ def validate_tuning_artifacts(
         raise ValueError("AutoTVM log SHA-256 does not match its sidecar")
     options = metadata.get("tuning_options")
     _validate_tuning_options(options)
+    if backend == "tsim" and (
+        metadata.get("measurement_protocol") != TSIM_MEASUREMENT_PROTOCOL
+        or options.get("measurement_protocol") != TSIM_MEASUREMENT_PROTOCOL
+    ):
+        raise ValueError(
+            "TSIM artifact has missing or incompatible cycle counts; "
+            "rerun a single-call TSIM measurement"
+        )
     if expected_tuning_options is not None and options != expected_tuning_options:
         raise ValueError("tuning options do not match the expected replay parameters")
 
@@ -687,7 +708,7 @@ def build_tuning_options(backend, trials_per_task=None, timeout=None):
         or selected_timeout <= 0
     ):
         raise ValueError("timeout must be a positive integer number of seconds")
-    return {
+    options = {
         "tuner": "grid_search",
         "trials_per_task": trials_per_task,
         "timeout": selected_timeout,
@@ -695,6 +716,9 @@ def build_tuning_options(backend, trials_per_task=None, timeout=None):
         "repeat": 1,
         "cooldown_interval": 0.0,
     }
+    if backend == "tsim":
+        options["measurement_protocol"] = TSIM_MEASUREMENT_PROTOCOL
+    return options
 
 
 def _load_model_pipeline(model_id):
@@ -869,8 +893,17 @@ def tune_all(
             or previous.get("config_path") != str(config_path)
             or previous.get("config_sha256") != config_sha256
             or previous.get("tuning_options") != options
+            or (
+                backend == "tsim"
+                and previous.get("measurement_protocol") != TSIM_MEASUREMENT_PROTOCOL
+            )
             or not isinstance(previous.get("results"), dict)
         ):
+            if backend == "tsim":
+                raise ValueError(
+                    "TSIM resume summary does not use the current single-call cycle protocol; "
+                    "rerun TSIM measurements"
+                )
             raise ValueError("resume summary does not match the current models/backend/config/options")
     summary = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
@@ -882,6 +915,8 @@ def tune_all(
         "tuning_options": options,
         "results": {},
     }
+    if backend == "tsim":
+        summary["measurement_protocol"] = TSIM_MEASUREMENT_PROTOCOL
     if previous is not None:
         summary["results"].update(previous["results"])
     _write_json_atomic(summary_path, summary)
