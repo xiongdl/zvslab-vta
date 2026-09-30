@@ -1,6 +1,8 @@
 """Focused tests for the IC V1 single-workload AutoTVM command."""
 
+import hashlib
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -178,6 +180,10 @@ def test_tsim_measures_best_fsim_record_config(tune, monkeypatch, tmp_path):
     assert result["measurement_scope"] == "isolated_complete_vta_conv_fusion"
     assert result["conv_schedule_key"] == tune.fused.conv_schedule_key(identity)
     assert result["fusion_sha256"] == identity.sha256
+    persisted = json.loads(Path(result["result_json"]).read_text(encoding="utf-8"))
+    tune.validate_fusion_result(
+        persisted, identity, "m" * 64, "g" * 64, expected_workload_sha256="a" * 64
+    )
 
 
 def test_fused_result_validator_rejects_old_bare_conv_record(tune):
@@ -211,3 +217,149 @@ def test_fused_result_validator_rejects_mismatched_semantic_identity(tune):
 
     with pytest.raises(ValueError, match="identity"):
         tune.validate_fusion_result(result, identity, "m" * 64, "g" * 64)
+
+
+def test_recognizes_vta_targets_serialized_by_autotvm_fsim_runner(tune):
+    target = SimpleNamespace(
+        kind=SimpleNamespace(name="ext_dev"),
+        keys=["vta", "cpu"],
+        attrs={"device": "vta"},
+    )
+    assert tune._is_vta_record_target(target)
+    assert not tune._is_vta_record_target(
+        SimpleNamespace(kind=SimpleNamespace(name="ext_dev"), keys=["cpu"], attrs={"device": "cpu"})
+    )
+
+
+def _replay_fixture(tune, tmp_path, monkeypatch):
+    identity = tune.fused.FusedConvIdentity(
+        ("conv2d_packed.vta", ("TENSOR", (1, 2, 8, 8, 1, 8), "int8"),
+         ("TENSOR", (2, 2, 3, 3, 8, 8), "int8"), (1, 1), (1, 1, 1, 1), (1, 1),
+         "NCHW1n8c", "int32"),
+        64, 7, -127, 127, "int8", "symbol", 0,
+    )
+    task = SimpleNamespace(
+        name=tune.fused.TASK_NAME,
+        workload=(tune.fused.TASK_NAME, *identity.task_args()),
+    )
+    config_json = {"index": 32, "entity": [["tile_h", "sp", [-1, 4]]]}
+    config = SimpleNamespace(to_json_dict=lambda: config_json)
+    measure_input = SimpleNamespace(
+        task=task,
+        target=SimpleNamespace(kind=SimpleNamespace(name="vta")),
+        config=config,
+    )
+    measure_result = SimpleNamespace(error_no=tune.shared.MeasureErrorNo.NO_ERROR, costs=(0.01,))
+    fsim_path = tmp_path / "fsim.log"
+    best_path = tmp_path / "best.log"
+    fsim_path.write_bytes(b"native fsim log bytes")
+    best_path.write_bytes(b"native picked-best log bytes")
+    records_by_path = {
+        str(fsim_path): [(measure_input, measure_result)],
+        str(best_path): [(measure_input, measure_result)],
+    }
+    monkeypatch.setattr(
+        tune.shared.autotvm.record,
+        "load_from_file",
+        lambda path: iter(records_by_path[str(path)]),
+    )
+    model_path = tune.APP_ROOT / "model" / "pretrainedResnet.tflite"
+    model_sha = hashlib.sha256(model_path.read_bytes()).hexdigest()
+    geometry_path = tmp_path / "geometry.json"
+    geometry_path.write_text("{}\n", encoding="utf-8")
+    geometry_sha = hashlib.sha256(geometry_path.read_bytes()).hexdigest()
+    result_path = tmp_path / "result.json"
+    result = {
+        "schema_version": 1,
+        "measurement_scope": "isolated_complete_vta_conv_fusion",
+        "workload_index": 0,
+        "occurrence": 0,
+        "symbol": identity.symbol,
+        "template": task.name,
+        "workload_sha256": "w" * 64,
+        "fusion_identity": json.loads(identity.canonical_json()),
+        "fusion_sha256": identity.sha256,
+        "model": "image_classification_v1",
+        "model_sha256": model_sha,
+        "geometry_path": str(geometry_path),
+        "geometry_sha256": geometry_sha,
+        "conv_schedule_key": tune.fused.conv_schedule_key(identity),
+        "conv_config": config_json,
+        "real_conv_lowering": True,
+        "fsim_log_sha256": hashlib.sha256(fsim_path.read_bytes()).hexdigest(),
+        "best_fsim_log_sha256": hashlib.sha256(best_path.read_bytes()).hexdigest(),
+        "fsim_log": str(fsim_path),
+        "best_fsim_log": str(best_path),
+    }
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    prepared = SimpleNamespace()
+    monkeypatch.setattr(tune, "prepare_v1_workloads", lambda: (prepared, [identity], [task]))
+    monkeypatch.setattr(tune.shared, "_config_identity", lambda _path: (geometry_path, geometry_sha))
+    monkeypatch.setattr(tune.shared, "_task_workload_id", lambda _task: "w" * 64)
+    lowered = SimpleNamespace(schedule=object())
+    lower_calls = []
+
+    def lower(actual_prepared, actual_identity, actual_config):
+        lower_calls.append((actual_prepared, actual_identity, actual_config))
+        return lowered
+
+    monkeypatch.setattr(tune.fused, "lower_with_fused_config", lower)
+    return result_path, result, records_by_path, config, lowered, lower_calls, prepared, identity
+
+
+def test_replay_validates_artifacts_and_applies_best_config_to_real_fusion(
+    tune, tmp_path, monkeypatch
+):
+    result_path, result, _records, config, lowered, calls, prepared, identity = _replay_fixture(
+        tune, tmp_path, monkeypatch
+    )
+
+    replay = tune.replay_result(result_path)
+
+    assert replay["result"] == json.loads(result_path.read_text(encoding="utf-8"))
+    assert replay["config"] is config
+    assert replay["lowered"] is lowered
+    assert calls == [(prepared, identity, config)]
+
+
+@pytest.mark.parametrize(
+    ("corruption", "message"),
+    [
+        ("missing_log", "missing or unreadable"),
+        ("modified_log", "SHA-256 does not match"),
+        ("changed_hash", "SHA-256 does not match"),
+        ("changed_config", "Conv config does not match"),
+        ("wrong_task", "no successful record"),
+        ("best_not_in_fsim", "not a successful matching record"),
+    ],
+)
+def test_replay_rejects_missing_or_mismatched_artifacts(tune, tmp_path, monkeypatch, corruption, message):
+    result_path, result, records, _config, _lowered, calls, *_ = _replay_fixture(
+        tune, tmp_path, monkeypatch
+    )
+    if corruption == "missing_log":
+        Path(result["fsim_log"]).unlink()
+    elif corruption == "modified_log":
+        Path(result["fsim_log"]).write_bytes(b"modified native fsim log")
+    elif corruption == "changed_hash":
+        result["fsim_log_sha256"] = "0" * 64
+    elif corruption == "changed_config":
+        result["conv_config"] = {"index": 999}
+    elif corruption == "wrong_task":
+        measure_input, measure_result = records[result["fsim_log"]][0]
+        wrong_task = SimpleNamespace(workload=("wrong",))
+        records[result["fsim_log"]] = [(SimpleNamespace(
+            task=wrong_task, target=measure_input.target, config=measure_input.config,
+        ), measure_result)]
+    else:
+        measure_input, measure_result = records[result["best_fsim_log"]][0]
+        wrong_config = SimpleNamespace(to_json_dict=lambda: {"index": 999})
+        records[result["best_fsim_log"]] = [(SimpleNamespace(
+            task=measure_input.task, target=measure_input.target, config=wrong_config,
+        ), measure_result)]
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        tune.replay_result(result_path)
+
+    assert calls == []

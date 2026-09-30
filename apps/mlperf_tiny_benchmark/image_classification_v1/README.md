@@ -131,6 +131,23 @@ postprocessing. See
 `docs/initiatives/20260930-ic-v1-mac-utilization/CONSISTENCY.md` for the
 bounded FSIM/TSIM evidence and reproducible pinned-config smoke procedure.
 
+To validate a saved single-workload result and replay its selected config
+through the real outlined model fusion lowering, use `--replay-result`. Replay
+checks model, geometry, fusion, and workload identities; verifies both native
+FSIM log hashes; confirms the selected task/config is the successful best
+record and also appears as a successful FSIM record; then checks that the real
+fusion lowering uses its Conv schedule key. This validates configuration
+replay and lowering, but does not rerun FSIM or TSIM measurement. Optionally
+pass `--workload-index` to require a particular occurrence:
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/image_classification_v1/tune.py \
+  --replay-result vta/apps/mlperf_tiny_benchmark/build/autotvm/image_classification_v1/<run>-result.json
+```
+
 FSIM matrix:
 
 ```bash

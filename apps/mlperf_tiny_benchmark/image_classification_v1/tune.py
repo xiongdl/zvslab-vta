@@ -143,6 +143,23 @@ def _cleanup_runner(runner):
             setattr(runner, name, None)
 
 
+def _freeze_json_value(value):
+    """Normalize tuple/list structures to one comparable JSON-like form."""
+    if isinstance(value, (tuple, list)):
+        return tuple(_freeze_json_value(item) for item in value)
+    if isinstance(value, dict):
+        return tuple(sorted((key, _freeze_json_value(item)) for key, item in value.items()))
+    return value
+
+
+def _config_json(config):
+    return json.dumps(config.to_json_dict(), sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _record_config_matches(left, right):
+    return _config_json(left) == _config_json(right)
+
+
 def validate_fusion_result(
     result, identity, model_sha256, geometry_sha256, expected_workload_sha256=None
 ):
@@ -155,6 +172,13 @@ def validate_fusion_result(
         raise ValueError("fused tuning result identity does not match this occurrence")
     if result.get("fusion_identity") != json.loads(identity.canonical_json()):
         raise ValueError("fused tuning result semantic attributes do not match")
+    if result.get("model") != "image_classification_v1":
+        raise ValueError("fused tuning result model identity does not match")
+    if (
+        result.get("occurrence") != identity.occurrence
+        or result.get("symbol") != identity.symbol
+    ):
+        raise ValueError("fused tuning result occurrence does not match this fusion")
     if result.get("template") != fused.TASK_NAME:
         raise ValueError("result was not measured with the complete fused task template")
     if result.get("real_conv_lowering") is not True:
@@ -163,7 +187,9 @@ def validate_fusion_result(
         raise ValueError("fused tuning result model hash does not match")
     if result.get("geometry_sha256") != geometry_sha256:
         raise ValueError("fused tuning result geometry hash does not match")
-    if tuple(result.get("conv_schedule_key", ())) != fused.conv_schedule_key(identity):
+    if _freeze_json_value(result.get("conv_schedule_key", ())) != _freeze_json_value(
+        fused.conv_schedule_key(identity)
+    ):
         raise ValueError("fused tuning result Conv schedule key does not match")
     workload_id = result.get("workload_sha256")
     if not isinstance(workload_id, str) or len(workload_id) != 64:
@@ -175,6 +201,116 @@ def validate_fusion_result(
         if not isinstance(value, str) or len(value) != 64:
             raise ValueError(f"fused tuning result {key} is missing or invalid")
     return result
+
+
+def _record_cost(record):
+    try:
+        return sum(float(cost) for cost in record[1].costs)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("AutoTVM record has invalid measurement costs") from error
+
+
+def _is_vta_record_target(target):
+    return target.kind.name == "vta" or (
+        "vta" in target.keys and target.attrs.get("device") == "vta"
+    )
+
+
+def _record_matches_task(measure_input, task):
+    return (
+        _freeze_json_value(measure_input.task.workload) == _freeze_json_value(task.workload)
+        and _is_vta_record_target(measure_input.target)
+    )
+
+
+def _load_result_records(result, task):
+    """Verify referenced AutoTVM bytes and return the selected native record."""
+    paths = {}
+    for path_key, hash_key in (
+        ("fsim_log", "fsim_log_sha256"),
+        ("best_fsim_log", "best_fsim_log_sha256"),
+    ):
+        raw_path = result.get(path_key)
+        if not isinstance(raw_path, str) or not raw_path:
+            raise ValueError(f"fused tuning result {path_key} is missing")
+        path = Path(raw_path).expanduser()
+        try:
+            actual_hash = shared._sha256_file(path)
+        except OSError as error:
+            raise ValueError(f"fused tuning result {path_key} is missing or unreadable: {path}") from error
+        if actual_hash != result.get(hash_key):
+            raise ValueError(f"fused tuning result {path_key} SHA-256 does not match")
+        paths[path_key] = path
+
+    try:
+        fsim_records = list(shared.autotvm.record.load_from_file(str(paths["fsim_log"])))
+        best_records = list(shared.autotvm.record.load_from_file(str(paths["best_fsim_log"])))
+    except Exception as error:
+        raise ValueError("fused tuning AutoTVM logs cannot be decoded") from error
+    successful_fsim = [
+        (measure_input, measure_result)
+        for measure_input, measure_result in fsim_records
+        if _record_matches_task(measure_input, task)
+        and measure_result.error_no == shared.MeasureErrorNo.NO_ERROR
+    ]
+    successful_best = [
+        (measure_input, measure_result)
+        for measure_input, measure_result in best_records
+        if _record_matches_task(measure_input, task)
+        and measure_result.error_no == shared.MeasureErrorNo.NO_ERROR
+    ]
+    if not successful_fsim:
+        raise ValueError("fused tuning FSIM log has no successful record for the selected task")
+    if not successful_best:
+        raise ValueError("fused tuning best log has no successful record for the selected task")
+    best_input, best_result = min(successful_best, key=lambda record: _record_cost(record))
+    if not any(
+        _record_config_matches(best_input.config, fsim_input.config)
+        and tuple(best_result.costs) == tuple(fsim_result.costs)
+        for fsim_input, fsim_result in successful_fsim
+    ):
+        raise ValueError("selected best record is not a successful matching record in the FSIM log")
+    if not isinstance(result.get("conv_config"), dict) or _freeze_json_value(
+        result["conv_config"]
+    ) != _freeze_json_value(best_input.config.to_json_dict()):
+        raise ValueError("fused tuning result Conv config does not match the best FSIM record")
+    return best_input
+
+
+def replay_result(result_path, *, expected_workload_index=None):
+    """Validate a saved result, then apply its config to the real outlined fusion."""
+    result_path = Path(result_path).expanduser().resolve(strict=True)
+    try:
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"fused tuning result is not readable JSON: {result_path}") from error
+    if not isinstance(result, dict):
+        raise ValueError("fused tuning result must be a JSON object")
+    workload_index = result.get("workload_index")
+    if isinstance(workload_index, bool) or not isinstance(workload_index, int):
+        raise ValueError("fused tuning result workload index is missing or invalid")
+    if expected_workload_index is not None and workload_index != expected_workload_index:
+        raise ValueError("fused tuning result workload index does not match the requested index")
+
+    prepared, identities, tasks = prepare_v1_workloads()
+    task = select_workload(tasks, workload_index)
+    identity = identities[workload_index]
+    _, model_dir, model_filename = shared.MODEL_PIPELINES["image_classification_v1"]
+    model_sha = shared._sha256_file(APP_ROOT / model_dir / model_filename)
+    config_path = os.environ.get("VTA_CONFIG_FILE", shared.DEFAULT_CONFIG_PATH)
+    geometry_path, geometry_sha = shared._config_identity(config_path)
+    recorded_geometry_path = result.get("geometry_path")
+    if not isinstance(recorded_geometry_path, str) or Path(
+        recorded_geometry_path
+    ).expanduser().resolve() != geometry_path:
+        raise ValueError("fused tuning result geometry path does not match the active config")
+    workload_id = shared._task_workload_id(task)
+    validate_fusion_result(result, identity, model_sha, geometry_sha, workload_id)
+    best_input = _load_result_records(result, task)
+    lowered = fused.lower_with_fused_config(prepared, identity, best_input.config)
+    if lowered.schedule is None:
+        raise ValueError("saved Conv config did not produce a real model fusion schedule")
+    return {"result": result, "config": best_input.config, "lowered": lowered}
 
 
 def run_tuning(workload_index, *, output_dir=DEFAULT_OUTPUT_DIR, trials=32, timeout=120):
@@ -233,7 +369,7 @@ def run_tuning(workload_index, *, output_dir=DEFAULT_OUTPUT_DIR, trials=32, time
     best_input, _ = min(successful, key=lambda record: sum(record[1].costs))
     if best_input.task.workload != task.workload:
         raise ValueError("FSIM record does not contain the selected complete fusion task")
-    if best_input.target.kind.name != "vta":
+    if not _is_vta_record_target(best_input.target):
         raise ValueError("FSIM best record target is not VTA")
     selected_config = best_input.config
     real_lowering = fused.lower_with_fused_config(prepared, identity, selected_config)
@@ -318,8 +454,12 @@ def _parser():
     parser.add_argument(
         "--workload-index",
         type=int,
-        required=True,
-        help="zero-based outlined fusion occurrence index",
+        help="zero-based outlined fusion occurrence index (required for tuning)",
+    )
+    parser.add_argument(
+        "--replay-result",
+        type=Path,
+        help="validate a saved result and apply its config to the real outlined fusion",
     )
     parser.add_argument("--trials", type=_positive_int, default=32, help="maximum random search trials (default: 32)")
     parser.add_argument("--timeout", type=_positive_int, default=120, help="per-measurement timeout in seconds (default: 120)")
@@ -329,6 +469,21 @@ def _parser():
 
 def main(argv=None):
     args = _parser().parse_args(argv)
+    if args.replay_result is not None:
+        try:
+            replay = replay_result(
+                args.replay_result, expected_workload_index=args.workload_index
+            )
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
+        print(f"Validated result: {args.replay_result}")
+        print(f"Fusion occurrence: {replay['result']['occurrence']} ({replay['result']['symbol']})")
+        print(f"Workload SHA-256: {replay['result']['workload_sha256']}")
+        print(f"Conv config: {json.dumps(replay['config'].to_json_dict(), sort_keys=True)}")
+        print("Real outlined model fusion lowering: verified")
+        return 0
+    if args.workload_index is None:
+        raise SystemExit("--workload-index is required unless --replay-result is supplied")
     try:
         result = run_tuning(
             args.workload_index,
