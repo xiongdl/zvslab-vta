@@ -122,6 +122,60 @@ def _config_identity(config):
     return json.dumps(config.to_json_dict(), sort_keys=True, separators=(",", ":"))
 
 
+def _select_deployable_tsim_candidate(tsim_state, records, prepared, identity):
+    """Choose the fastest measured config that lowers for the real fusion."""
+    successful_records = {
+        _config_identity(measure_input.config): measure_input
+        for measure_input, result in records
+        if result.error_no == legacy.shared.MeasureErrorNo.NO_ERROR
+    }
+    candidates = sorted(
+        (
+            candidate
+            for candidate in tsim_state["candidates"]
+            if candidate.get("error") is None
+            and candidate.get("tsim_cycles") is not None
+            and int(candidate["tsim_cycles"]) > 0
+        ),
+        key=lambda candidate: (int(candidate["tsim_cycles"]), candidate["config_index"]),
+    )
+    rejected = []
+    for candidate in candidates:
+        measure_input = successful_records.get(
+            json.dumps(candidate["config"], sort_keys=True, separators=(",", ":"))
+        )
+        if measure_input is None:
+            rejected.append({"config_index": candidate["config_index"], "reason": "missing native TSIM record"})
+            continue
+        try:
+            lowered = legacy.fused.lower_with_fused_config(
+                prepared, identity, measure_input.config
+            )
+        except Exception as exc:  # an AutoTVM-measured schedule may exceed real VTA limits
+            error_lines = str(exc).splitlines()
+            reason = next(
+                (
+                    line.strip()
+                    for marker in ("Allocation exceed bound", "Check failed:", "InternalError:")
+                    for line in error_lines
+                    if marker in line
+                ),
+                error_lines[0] if error_lines else type(exc).__name__,
+            )
+            rejected.append({
+                "config_index": candidate["config_index"],
+                "reason": reason[:240],
+            })
+            continue
+        if lowered.schedule is None:
+            rejected.append({"config_index": candidate["config_index"], "reason": "lowering returned no schedule"})
+            continue
+        return candidate, measure_input, lowered, rejected
+    raise ValueError(
+        f"no measured TSIM candidate lowers for real fusion occurrence {identity.occurrence}"
+    )
+
+
 def _validate_fsim_resume(state, native_log, task):
     """Require durable progress and native AutoTVM records to describe the same trials."""
     attempted = state["attempted_count"]
@@ -437,34 +491,17 @@ def _export_best_artifacts(run_dir, run_manifest, prepared, identities, tasks, a
             continue
         native_log = _record_path(run_dir, index, "tsim")
         records = list(legacy.shared.autotvm.record.load_from_file(str(native_log)))
-        best_config = next(
-            (item["config"] for item in tsim_state["candidates"]
-             if item["config_index"] == tsim_state["best_config_index"]
-             and item["tsim_cycles"] == tsim_state["best_tsim_cycles"]),
-            None,
+        selected, best_input, lowered, rejected = _select_deployable_tsim_candidate(
+            tsim_state, records, prepared, identities[index]
         )
-        if best_config is None:
-            raise ValueError(f"TSIM state selected config is missing for workload {index}")
+        best_config = selected["config"]
+        selected_cycles = int(selected["tsim_cycles"])
         prefix = f"image_classification_v1-workload-{index:03d}"
         native_path = artifact_dir / f"{prefix}-best.tsim.log"
         native_meta = artifacts.export_selected_record(
-            records, best_config, tsim_state["best_tsim_cycles"], native_path,
+            records, best_config, selected_cycles, native_path,
             legacy.shared.autotvm.record,
         )
-        expected_config = json.dumps(best_config, sort_keys=True, separators=(",", ":"))
-        best_input = next(
-            (record_input for record_input, record_result in records
-             if _config_identity(record_input.config) == expected_config
-             and record_result.error_no == legacy.shared.MeasureErrorNo.NO_ERROR),
-            None,
-        )
-        if best_input is None:
-            raise ValueError(f"selected TSIM native record is missing for workload {index}")
-        lowered = legacy.fused.lower_with_fused_config(
-            prepared, identities[index], best_input.config
-        )
-        if lowered.schedule is None:
-            raise ValueError(f"selected Conv config did not lower for workload {index}")
         result = {
             "schema_version": 1,
             "artifact_kind": "self_contained_native_best_v1",
@@ -487,7 +524,10 @@ def _export_best_artifacts(run_dir, run_manifest, prepared, identities, tasks, a
             "best_native_record": native_path.name,
             "best_native_record_sha256": native_meta["sha256"],
             "mac_count": legacy._logical_mac_count(tasks[index]),
-            "tsim_cycles": int(tsim_state["best_tsim_cycles"]),
+            "tsim_cycles": selected_cycles,
+            "tsim_config_index": int(selected["config_index"]),
+            "tsim_best_observed_cycles": int(tsim_state["best_tsim_cycles"]),
+            "rejected_unlowerable_tsim_candidates": rejected,
             "fsim_trials": fsim_state["attempted_count"],
             "fsim_success_count": search.success_count(fsim_state),
             "fsim_failures": fsim_state["failures"],
@@ -506,7 +546,8 @@ def _export_best_artifacts(run_dir, run_manifest, prepared, identities, tasks, a
             "result_json": result_path.name,
             "native_record": native_path.name,
             "native_record_sha256": native_meta["sha256"],
-            "tsim_cycles": int(tsim_state["best_tsim_cycles"]),
+            "tsim_cycles": selected_cycles,
+            "tsim_config_index": int(selected["config_index"]),
         })
     manifest = {
         "schema_version": 1,

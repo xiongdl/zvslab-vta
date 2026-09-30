@@ -11,6 +11,7 @@ import pytest
 
 
 TUNE_PATH = Path(__file__).resolve().parents[1] / "tune.py"
+TWO_STAGE_TUNE_PATH = TUNE_PATH.parent / "tune" / "tune.py"
 
 
 def _load_tune():
@@ -24,6 +25,15 @@ def _load_tune():
 @pytest.fixture
 def tune():
     return _load_tune()
+
+
+@pytest.fixture
+def two_stage_tune():
+    spec = importlib.util.spec_from_file_location("ic_v1_two_stage_test_tune", TWO_STAGE_TUNE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_select_workload_uses_zero_based_extraction_order(tune):
@@ -67,6 +77,48 @@ def test_invalid_index_fails_before_runner_creation_or_output_write(tune, monkey
         tune.run_tuning(1, output_dir=output_dir)
 
     assert not output_dir.exists()
+
+
+def test_full_export_skips_faster_tsim_config_that_cannot_lower(two_stage_tune, monkeypatch):
+    tune = two_stage_tune.legacy
+    identity = SimpleNamespace(occurrence=3)
+    prepared = SimpleNamespace()
+    configs = [
+        SimpleNamespace(to_json_dict=lambda index=index: {"index": index})
+        for index in (7, 8)
+    ]
+    records = [
+        (SimpleNamespace(config=config), SimpleNamespace(error_no=tune.shared.MeasureErrorNo.NO_ERROR))
+        for config in configs
+    ]
+    state = {
+        "candidates": [
+            {"config_index": 7, "config": {"index": 7}, "tsim_cycles": 50},
+            {"config_index": 8, "config": {"index": 8}, "tsim_cycles": 60},
+        ]
+    }
+    calls = []
+
+    def lower(_prepared, _identity, config):
+        index = config.to_json_dict()["index"]
+        calls.append(index)
+        if index == 7:
+            raise RuntimeError("VTA accumulator allocation exceeds hardware bound")
+        return SimpleNamespace(schedule=object())
+
+    monkeypatch.setattr(two_stage_tune.legacy.fused, "lower_with_fused_config", lower)
+
+    candidate, measure_input, lowered, rejected = two_stage_tune._select_deployable_tsim_candidate(
+        state, records, prepared, identity
+    )
+
+    assert calls == [7, 8]
+    assert candidate["config_index"] == 8
+    assert measure_input.config is configs[1]
+    assert lowered.schedule is not None
+    assert rejected == [
+        {"config_index": 7, "reason": "VTA accumulator allocation exceeds hardware bound"}
+    ]
 
 
 def test_tuning_validates_active_alternate_geometry_before_workload_selection(

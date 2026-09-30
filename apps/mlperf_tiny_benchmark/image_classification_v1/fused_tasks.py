@@ -239,8 +239,17 @@ def lower_with_fused_config(prepared, identity, config):
     if func is None:
         raise ValueError(f"fusion symbol {identity.symbol!r} is absent from the prepared model")
     context = autotvm.task.ApplyConfig(config)
-    with context:
-        scheduled = vta.relay.transform._lower_to_scheduled_te(func)
+    # This helper is called once per model occurrence. Reusing TECompiler's
+    # cache across calls can reuse a previous occurrence's shapes/schedule and
+    # either select the wrong AutoTVM workload or exceed VTA local-buffer
+    # bounds while lowering a later, larger fusion.
+    compiler = tvm.relay.backend.te_compiler.get()
+    compiler.clear()
+    try:
+        with context:
+            scheduled = vta.relay.transform._lower_to_scheduled_te(func)
+    finally:
+        compiler.clear()
     if context.workload != conv_schedule_key(identity):
         raise ValueError(
             "real fusion lowering used a different Conv schedule key: "

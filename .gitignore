@@ -172,6 +172,10 @@ cscope*
 perf
 .bash_history
 *.json
+# Keep the approved IC V1 full-search outputs reviewable and reproducible.
+!apps/mlperf_tiny_benchmark/image_classification_v1/tune/optimal/c4-full/
+!apps/mlperf_tiny_benchmark/image_classification_v1/tune/optimal/c4-full/*.json
+!apps/mlperf_tiny_benchmark/image_classification_v1/tune/optimal/c4-full/*.tsim.log
 *.params
 *.onnx
 *.h5

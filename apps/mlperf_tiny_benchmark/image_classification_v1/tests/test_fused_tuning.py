@@ -207,6 +207,33 @@ def test_local_builder_compiles_two_configs_and_keeps_fusion_semantics(
     assert lowered.schedule is not None
 
 
+def test_real_fusions_lower_sequentially_without_stale_te_cache(fused, prepared, monkeypatch):
+    """Each occurrence must lower against its own real Conv workload."""
+    identities = fused.extract_fused_identities(prepared)
+    assert len(identities) >= 3
+    compiler = tvm.relay.backend.te_compiler.get()
+    clear = compiler.clear
+    clears = []
+
+    def track_clear():
+        clears.append(True)
+        clear()
+
+    monkeypatch.setattr(compiler, "clear", track_clear)
+    monkeypatch.setattr(tvm.relay.backend.te_compiler, "get", lambda: compiler)
+
+    observed = []
+    for identity in identities[:3]:
+        task = fused.create_task(identity, target="vta")
+        config = task.config_space.get(0)
+        lowered = fused.lower_with_fused_config(prepared, identity, config)
+        assert lowered.schedule is not None
+        observed.append(identity)
+
+    assert len({identity.sha256 for identity in observed}) == 3
+    assert len(clears) >= 2 * len(observed)
+
+
 @pytest.mark.parametrize(
     "bias,shift,clip_min,clip_max,dtype,expected",
     [
