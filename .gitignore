@@ -198,6 +198,8 @@ perf
 !apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/optimal/20261001T192416.141960Z/
 !apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/optimal/20261001T192416.141960Z/*.json
 !apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/optimal/20261001T192416.141960Z/*.tsim.log
+!apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/deployment-full.json
+!apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/mac-utilization-full.json
 *.params
 *.onnx
 *.h5

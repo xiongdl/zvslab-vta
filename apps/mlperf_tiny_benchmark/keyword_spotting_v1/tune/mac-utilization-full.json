@@ -1,0 +1,104 @@
+{
+  "artifact_kind": "deployment_mac_utilization_v1",
+  "backend": "tsim",
+  "completion_label": "OPTIMAL_DEPLOYMENT",
+  "geometry": {
+    "peak_macs_per_cycle": 64,
+    "sha256": "23b338eacdf5747610d90fd17296e3d0d4236ce416191b7c1cfc597cd67991fa"
+  },
+  "measurement_protocol": {
+    "full_model_counted_invocations": 1,
+    "name": "tsim_single_call",
+    "operator_counted_invocations": 1,
+    "version": 1,
+    "warmup_excluded": true
+  },
+  "model_id": "keyword_spotting_v1",
+  "model_sha256": "aeea436800704fce17b17292e4412630ad856e9d777c044c64ef748a880bd0ae",
+  "occurrences": [
+    {
+      "autotvm_cycles_per_invocation": 24970,
+      "config_sha256": "3251dcbb9816b192421707dbecc0a98f17a7bf74984c381bf02ce2cf37e2f8c5",
+      "counted_invocations": 1,
+      "deployment_cycles_measured": 24971,
+      "deployment_cycles_per_invocation": 24971.0,
+      "logical_macs_measured": 512000,
+      "logical_macs_per_invocation": 512000,
+      "occurrence": 0,
+      "relative_cycle_difference": 4.0048057669203045e-05,
+      "symbol": "tvmgen_mlperf_kws_vta_main_0",
+      "utilization_percent": 32.03716310920668,
+      "utilization_ratio": 0.3203716310920668,
+      "workload_sha256": "0cf732a3218304416359a0014abbd8600b2c7af7afe7e48a0e37d36c0d4276c4"
+    },
+    {
+      "autotvm_cycles_per_invocation": 24970,
+      "config_sha256": "3251dcbb9816b192421707dbecc0a98f17a7bf74984c381bf02ce2cf37e2f8c5",
+      "counted_invocations": 1,
+      "deployment_cycles_measured": 24971,
+      "deployment_cycles_per_invocation": 24971.0,
+      "logical_macs_measured": 512000,
+      "logical_macs_per_invocation": 512000,
+      "occurrence": 1,
+      "relative_cycle_difference": 4.0048057669203045e-05,
+      "symbol": "tvmgen_mlperf_kws_vta_main_1",
+      "utilization_percent": 32.03716310920668,
+      "utilization_ratio": 0.3203716310920668,
+      "workload_sha256": "ddc3d52462ad9ab5fdc708be0cfa476bb844c7af8c9c193277a42ed384a61d0c"
+    },
+    {
+      "autotvm_cycles_per_invocation": 24970,
+      "config_sha256": "3251dcbb9816b192421707dbecc0a98f17a7bf74984c381bf02ce2cf37e2f8c5",
+      "counted_invocations": 1,
+      "deployment_cycles_measured": 24971,
+      "deployment_cycles_per_invocation": 24971.0,
+      "logical_macs_measured": 512000,
+      "logical_macs_per_invocation": 512000,
+      "occurrence": 2,
+      "relative_cycle_difference": 4.0048057669203045e-05,
+      "symbol": "tvmgen_mlperf_kws_vta_main_2",
+      "utilization_percent": 32.03716310920668,
+      "utilization_ratio": 0.3203716310920668,
+      "workload_sha256": "abffeb8f030c33571933828f272cc54fb36904b5da7d1a2d2afcab55cc20807b"
+    },
+    {
+      "autotvm_cycles_per_invocation": 24970,
+      "config_sha256": "3251dcbb9816b192421707dbecc0a98f17a7bf74984c381bf02ce2cf37e2f8c5",
+      "counted_invocations": 1,
+      "deployment_cycles_measured": 24971,
+      "deployment_cycles_per_invocation": 24971.0,
+      "logical_macs_measured": 512000,
+      "logical_macs_per_invocation": 512000,
+      "occurrence": 3,
+      "relative_cycle_difference": 4.0048057669203045e-05,
+      "symbol": "tvmgen_mlperf_kws_vta_main_3",
+      "utilization_percent": 32.03716310920668,
+      "utilization_ratio": 0.3203716310920668,
+      "workload_sha256": "c1c3a3ee06c8dfb92e57f9e5444559b42ee81e732da559cf61bb76ef10d2d2e5"
+    }
+  ],
+  "schema_version": 1,
+  "scope": {
+    "full_model_cycles": "uninstrumented_complete_deployment",
+    "host_operations": "excluded_from_vta_mac_totals",
+    "sample_preprocessing": "existing KWS V1 WAV-to-MFCC preprocessing"
+  },
+  "selected_manifest": "/Users/xdl/Projects/codex-tvm-vta/vta/apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/optimal/20261001T192416.141960Z/best-manifest.json",
+  "selected_manifest_sha256": "6a118db225344680bf97b194e855558125a50a6c64e5f93b1f1c9738cbcfdc50",
+  "whole_model": {
+    "baseline_cycles": 2354444,
+    "baseline_cycles_per_invocation": 2354444.0,
+    "baseline_utilization_percent": 1.359131922441137,
+    "baseline_utilization_ratio": 0.013591319224411369,
+    "cycle_speedup": 23.571783268591567,
+    "invocation_count": 1,
+    "logical_macs": 2048000,
+    "logical_macs_per_invocation": 2048000,
+    "tuned_cycles": 99884,
+    "tuned_cycles_per_invocation": 99884.0,
+    "tuned_operator_cycle_sum_per_invocation": 99884.0,
+    "tuned_residual_cycles_per_invocation": 0.0,
+    "tuned_utilization_percent": 32.03716310920668,
+    "tuned_utilization_ratio": 0.3203716310920668
+  }
+}
