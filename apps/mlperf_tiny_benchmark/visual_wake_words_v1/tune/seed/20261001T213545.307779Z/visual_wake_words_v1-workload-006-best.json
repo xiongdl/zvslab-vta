@@ -1,0 +1,193 @@
+{
+  "artifact_kind": "self_contained_native_best_v1",
+  "best_native_record": "visual_wake_words_v1-workload-006-best.tsim.log",
+  "best_native_record_sha256": "d15e3e851a66a0d0672f3872211fe18616b4ffdf1bfceec909e6882c91a00393",
+  "bounded": false,
+  "conv_config": {
+    "code_hash": null,
+    "entity": [
+      [
+        "tile_b",
+        "sp",
+        [
+          -1,
+          1
+        ]
+      ],
+      [
+        "tile_h",
+        "sp",
+        [
+          -1,
+          1
+        ]
+      ],
+      [
+        "tile_w",
+        "sp",
+        [
+          -1,
+          2
+        ]
+      ],
+      [
+        "tile_ci",
+        "sp",
+        [
+          -1,
+          4
+        ]
+      ],
+      [
+        "tile_co",
+        "sp",
+        [
+          -1,
+          2
+        ]
+      ],
+      [
+        "oc_nthread",
+        "ot",
+        1
+      ],
+      [
+        "h_nthread",
+        "ot",
+        1
+      ]
+    ],
+    "index": 116
+  },
+  "conv_schedule_key": [
+    "conv2d_packed.vta",
+    [
+      "TENSOR",
+      [
+        1,
+        16,
+        6,
+        6,
+        1,
+        8
+      ],
+      "int8"
+    ],
+    [
+      "TENSOR",
+      [
+        16,
+        16,
+        1,
+        1,
+        8,
+        8
+      ],
+      "int8"
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      1,
+      1
+    ],
+    "NCHW1n8c",
+    "int32"
+  ],
+  "fsim_failures": [],
+  "fsim_stop_reason": "successful_schedule_quota",
+  "fsim_success_count": 1,
+  "fsim_trials": 1,
+  "fusion_identity": {
+    "bias_axis": null,
+    "bias_dtype": "int32",
+    "bias_shape": [],
+    "bias_values": [
+      64
+    ],
+    "clip_max": 127,
+    "clip_min": -127,
+    "conv_workload": [
+      "mlperf_tiny_fused_conv2d.vta",
+      [
+        "TENSOR",
+        [
+          1,
+          16,
+          6,
+          6,
+          1,
+          8
+        ],
+        "int8"
+      ],
+      [
+        "TENSOR",
+        [
+          16,
+          16,
+          1,
+          1,
+          8,
+          8
+        ],
+        "int8"
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      "NCHW1n8c",
+      "int32"
+    ],
+    "occurrence": 6,
+    "output_dtype": "int8",
+    "shift": 7,
+    "symbol": "tvmgen_mlperf_vww_vta_main_6"
+  },
+  "fusion_sha256": "557bb56b612c12630375eaaf1645444938e2c06855716cc2ebe1d81ef8c2d712",
+  "geometry_path": "/Users/xdl/Projects/codex-tvm-vta/vta/config/vta_64mac.json",
+  "geometry_sha256": "23b338eacdf5747610d90fd17296e3d0d4236ce416191b7c1cfc597cd67991fa",
+  "mac_count": 589824,
+  "measurement_protocol": {
+    "counted_invocations": 1,
+    "name": "tsim_single_call",
+    "version": 1,
+    "warmup_excluded": true
+  },
+  "measurement_scope": "isolated_complete_vta_conv_fusion",
+  "model": "visual_wake_words_v1",
+  "model_sha256": "115bbc094d2119561320a21f01b6500a18bea8cc8589282ab007097bec8af38c",
+  "occurrence": 6,
+  "real_conv_lowering": true,
+  "rejected_unlowerable_tsim_candidates": [],
+  "schema_version": 1,
+  "symbol": "tvmgen_mlperf_vww_vta_main_6",
+  "template": "mlperf_tiny_fused_conv2d.vta",
+  "tsim_best_observed_cycles": 93544,
+  "tsim_candidate_count": 1,
+  "tsim_config_index": 116,
+  "tsim_cycles": 93544,
+  "tsim_failures": [],
+  "valid_config_space_size": 1600,
+  "workload_index": 6,
+  "workload_sha256": "8527cc7ecfe59e2a9d21a6f273dd825c7c3d48908875ca577af6f703aa7dc1b7"
+}

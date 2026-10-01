@@ -281,3 +281,8 @@ tvm/
 !apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/optimal/20261001T205934.834798Z/*.tsim.log
 !apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/deployment-full.json
 !apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/mac-utilization-full.json
+# Keep the approved VWW V1 C8 seed and deployment gate reviewable.
+!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/seed/20261001T213545.307779Z/
+!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/seed/20261001T213545.307779Z/*.json
+!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/seed/20261001T213545.307779Z/*.tsim.log
+!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/deployment-seed.json

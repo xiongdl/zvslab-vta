@@ -1,0 +1,198 @@
+{
+  "artifact_kind": "self_contained_native_best_v1",
+  "best_native_record": "visual_wake_words_v1-workload-005-best.tsim.log",
+  "best_native_record_sha256": "49cfae9ed959e3ff4321410d59a87ac93c6bb22f7ba5a16e73f7079df2c0b987",
+  "bounded": false,
+  "conv_config": {
+    "code_hash": null,
+    "entity": [
+      [
+        "tile_b",
+        "sp",
+        [
+          -1,
+          1
+        ]
+      ],
+      [
+        "tile_h",
+        "sp",
+        [
+          -1,
+          1
+        ]
+      ],
+      [
+        "tile_w",
+        "sp",
+        [
+          -1,
+          1
+        ]
+      ],
+      [
+        "tile_ci",
+        "sp",
+        [
+          -1,
+          2
+        ]
+      ],
+      [
+        "tile_co",
+        "sp",
+        [
+          -1,
+          4
+        ]
+      ],
+      [
+        "oc_nthread",
+        "ot",
+        1
+      ],
+      [
+        "h_nthread",
+        "ot",
+        1
+      ]
+    ],
+    "index": 144
+  },
+  "conv_schedule_key": [
+    "conv2d_packed.vta",
+    [
+      "TENSOR",
+      [
+        1,
+        8,
+        6,
+        6,
+        1,
+        8
+      ],
+      "int8"
+    ],
+    [
+      "TENSOR",
+      [
+        16,
+        8,
+        1,
+        1,
+        8,
+        8
+      ],
+      "int8"
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      1,
+      1
+    ],
+    "NCHW1n8c",
+    "int32"
+  ],
+  "fsim_failures": [
+    {
+      "config_index": 226,
+      "error": "('Traceback (most recent call last):\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 565, in __call__\\n    func, arg_info = _build_func_common(measure_input, self.runtime, **kwargs)\\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 491, in _build_func_common\\n    func = vta.build(s, args, target_host=task.target_host)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/build_module.py\", line 168, in build\\n    return tvm.build(*args, **kwargs)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 227, in build\\n    input_mod = lower(inputs, args, name=name, binds=binds)\\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 134, in lower\\n    return ffi.lower_schedule(inp, args, name, binds, simple_mode)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/_ctypes/packed_func.py\", line 239, in __call__\\n    raise_last_ffi_error()\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/base.py\", line 481, in raise_last_ffi_error\\n    raise py_err\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 716, in _inject_copy\\n    x_size, y_size, x_stride, offset = _get_2d_pattern(\\n                                       ^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 620, in _get_2d_pattern\\n    raise_error()\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 551, in raise_error\\n    raise RuntimeError(\\nRuntimeError: Scope[local.inp_buffer]: cannot detect 2d pattern with elem_block=8: shape=[4, 3, 8], strides=[288, 48, 1]\\n', ('Traceback (most recent call last):\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 565, in __call__\\n    func, arg_info = _build_func_common(measure_input, self.runtime, **kwargs)\\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 491, in _build_func_common\\n    func = vta.build(s, args, target_host=task.target_host)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/build_module.py\", line 168, in build\\n    return tvm.build(*args, **kwargs)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 227, in build\\n    input_mod = lower(inputs, args, name=name, binds=binds)\\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 134, in lower\\n    return ffi.lower_schedule(inp, args, name, binds, simple_mode)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/_ctypes/packed_func.py\", line 239, in __call__\\n    raise_last_ffi_error()\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/base.py\", line 481, in raise_last_ffi_error\\n    raise py_err\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 716, in _inject_copy\\n    x_size, y_size, x_stride, offset = _get_2d_pattern(\\n                                       ^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 620, in _get_2d_pattern\\n    raise_error()\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 551, in raise_error\\n    raise RuntimeError(\\nRuntimeError: Scope[local.inp_buffer]: cannot detect 2d pattern with elem_block=8: shape=[4, 3, 8], strides=[288, 48, 1]\\n', RuntimeError('Scope[local.inp_buffer]: cannot detect 2d pattern with elem_block=8: shape=[4, 3, 8], strides=[288, 48, 1]')))"
+    }
+  ],
+  "fsim_stop_reason": "successful_schedule_quota",
+  "fsim_success_count": 1,
+  "fsim_trials": 2,
+  "fusion_identity": {
+    "bias_axis": null,
+    "bias_dtype": "int32",
+    "bias_shape": [],
+    "bias_values": [
+      64
+    ],
+    "clip_max": 127,
+    "clip_min": -127,
+    "conv_workload": [
+      "mlperf_tiny_fused_conv2d.vta",
+      [
+        "TENSOR",
+        [
+          1,
+          8,
+          6,
+          6,
+          1,
+          8
+        ],
+        "int8"
+      ],
+      [
+        "TENSOR",
+        [
+          16,
+          8,
+          1,
+          1,
+          8,
+          8
+        ],
+        "int8"
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      "NCHW1n8c",
+      "int32"
+    ],
+    "occurrence": 5,
+    "output_dtype": "int8",
+    "shift": 7,
+    "symbol": "tvmgen_mlperf_vww_vta_main_5"
+  },
+  "fusion_sha256": "064570f7a4f2a0647f0f6c3b6bbbc3f257cc4c1b4db8e1ebba2efc1c2dc53c80",
+  "geometry_path": "/Users/xdl/Projects/codex-tvm-vta/vta/config/vta_64mac.json",
+  "geometry_sha256": "23b338eacdf5747610d90fd17296e3d0d4236ce416191b7c1cfc597cd67991fa",
+  "mac_count": 294912,
+  "measurement_protocol": {
+    "counted_invocations": 1,
+    "name": "tsim_single_call",
+    "version": 1,
+    "warmup_excluded": true
+  },
+  "measurement_scope": "isolated_complete_vta_conv_fusion",
+  "model": "visual_wake_words_v1",
+  "model_sha256": "115bbc094d2119561320a21f01b6500a18bea8cc8589282ab007097bec8af38c",
+  "occurrence": 5,
+  "real_conv_lowering": true,
+  "rejected_unlowerable_tsim_candidates": [],
+  "schema_version": 1,
+  "symbol": "tvmgen_mlperf_vww_vta_main_5",
+  "template": "mlperf_tiny_fused_conv2d.vta",
+  "tsim_best_observed_cycles": 85494,
+  "tsim_candidate_count": 1,
+  "tsim_config_index": 144,
+  "tsim_cycles": 85494,
+  "tsim_failures": [],
+  "valid_config_space_size": 1280,
+  "workload_index": 5,
+  "workload_sha256": "9938a07448f326ce8b3c1c56b15d71a89dc4c674e29ce5d2d4b0a8b2db72bf0e"
+}
