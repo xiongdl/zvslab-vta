@@ -279,3 +279,5 @@ tvm/
 !apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/optimal/20261001T205934.834798Z/
 !apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/optimal/20261001T205934.834798Z/*.json
 !apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/optimal/20261001T205934.834798Z/*.tsim.log
+!apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/deployment-full.json
+!apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/mac-utilization-full.json
