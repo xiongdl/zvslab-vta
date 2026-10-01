@@ -217,7 +217,15 @@ def select_deployment_sample(runtime):
     sample_path = paths[0]
     sample = SimpleNamespace(path=sample_path, filename=sample_path.name, label=labels[0])
     input_data = np.asarray(runtime.load_sample(sample_path))
-    if input_data.shape != runtime.INPUT_SHAPE or input_data.dtype != np.dtype(runtime.INPUT_DTYPE):
+    input_shape = getattr(runtime, "INPUT_SHAPE", None)
+    input_dtype = getattr(runtime, "INPUT_DTYPE", None)
+    if input_shape is None or input_dtype is None:
+        pipeline = sys.modules.get("model_pipeline")
+        if pipeline is None or Path(pipeline.__file__).resolve() != APP_ROOT / "model_pipeline.py":
+            pipeline = _load_module("vww_deployment_model_pipeline", APP_ROOT / "model_pipeline.py")
+        input_shape = pipeline.INPUT_SHAPE
+        input_dtype = pipeline.INPUT_DTYPE
+    if input_data.shape != input_shape or input_data.dtype != np.dtype(input_dtype):
         raise ValueError("Visual Wake Words V1 sample input violates the model tensor contract")
     evidence = {
         "sample_count": 1,

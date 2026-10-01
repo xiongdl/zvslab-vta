@@ -136,6 +136,21 @@ def test_graph_node_mapping_and_resident_cycle_profile():
     assert session.cleared == 1
 
 
+def test_graph_symbol_mapping_does_not_confuse_occurrence_1_with_10():
+    graph = {"nodes": [
+        {"op": "tvm_op", "name": "tvmgen_vww_vta_main_1",
+         "attrs": {"func_name": "tvmgen_vww_vta_main_1"}},
+        {"op": "tvm_op", "name": "tvmgen_vww_vta_main_10",
+         "attrs": {"func_name": "tvmgen_vww_vta_main_10"}},
+    ]}
+    expected = [
+        {"occurrence": 1, "symbol": "tvmgen_vww_vta_main_1"},
+        {"occurrence": 10, "symbol": "tvmgen_vww_vta_main_10"},
+    ]
+
+    assert evidence.resolve_graph_nodes(graph, expected) == {1: 0, 10: 1}
+
+
 def test_one_sample_reference_checker_is_called_once():
     calls = []
     sample = evidence.validate_one_sample(

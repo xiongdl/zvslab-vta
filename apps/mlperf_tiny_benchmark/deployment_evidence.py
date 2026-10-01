@@ -121,7 +121,7 @@ def resolve_graph_nodes(graph_json, expected_occurrences):
             if not isinstance(node, dict) or node.get("op") != "tvm_op":
                 continue
             attrs = node.get("attrs", {})
-            if attrs.get("func_name") == symbol or symbol in node.get("name", ""):
+            if attrs.get("func_name") == symbol or node.get("name") == symbol:
                 matches.append(index)
         if len(matches) != 1:
             raise ValueError(

@@ -75,3 +75,15 @@ def test_deployment_cli_requires_a_manifest_and_report_path():
 
     with pytest.raises(SystemExit):
         deployment.main([])
+
+
+def test_real_runtime_contract_and_manifest_preprocessing_are_visible_to_adapter():
+    deployment = _load_deployment()
+    runtime = deployment._import_runtime()
+
+    sample, input_data, evidence = deployment.select_deployment_sample(runtime)
+
+    assert sample.filename == "00-non-person-000000000009.jpg"
+    assert input_data.shape == (1, 96, 96, 3)
+    assert input_data.dtype == np.dtype("float32")
+    assert evidence["sample_count"] == 1
