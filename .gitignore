@@ -286,3 +286,7 @@ tvm/
 !apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/seed/20261001T213545.307779Z/*.json
 !apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/seed/20261001T213545.307779Z/*.tsim.log
 !apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/deployment-seed.json
+# Keep the C9 VWW full-search winner reviewable and reproducible.
+!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/optimal/20261001T220401.514781Z/
+!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/optimal/20261001T220401.514781Z/*.json
+!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/optimal/20261001T220401.514781Z/*.tsim.log

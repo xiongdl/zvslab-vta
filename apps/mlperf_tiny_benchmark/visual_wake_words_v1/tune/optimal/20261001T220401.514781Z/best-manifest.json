@@ -1,0 +1,947 @@
+{
+  "bounded": false,
+  "completion_label": "FULL_SEARCH",
+  "entries": [
+    {
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              8
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              48
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              2
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            1
+          ],
+          [
+            "h_nthread",
+            "ot",
+            1
+          ]
+        ],
+        "index": 195
+      },
+      "config_sha256": "0c02e39e3dcbad19731128d5ab76be8c1cbba060248ff1bb3d45db1582124b86",
+      "fusion_sha256": "177d019455ae8044f1b703f1390d3a42f6505a4711c559a8bbf8314f37285743",
+      "logical_macs_per_invocation": 294912,
+      "native_record": "visual_wake_words_v1-workload-000-best.tsim.log",
+      "native_record_sha256": "127525ff8c9036f4c6048006280bce3e753b1651c5eff7d4462bbaf91156e9a0",
+      "occurrence": 0,
+      "result_json": "visual_wake_words_v1-workload-000-best.json",
+      "symbol": "tvmgen_mlperf_vww_vta_main_0",
+      "tsim_config_index": 195,
+      "tsim_cycles": 36524,
+      "workload_index": 0,
+      "workload_sha256": "7008382ef997e0d65a30892336f8bf6d3dcd100ec8fe27ede117d88978a08ad8"
+    },
+    {
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              2
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              24
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              2
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            1
+          ],
+          [
+            "h_nthread",
+            "ot",
+            2
+          ]
+        ],
+        "index": 953
+      },
+      "config_sha256": "c7772759406cf0f98c803ec3217a421b9bb1ef7e91b3cfeaa45ee80b8ff04069",
+      "fusion_sha256": "42b9167717a61eba3a68f7cff60e04cc60b49bba41499f3bfd35904ac69ca672",
+      "logical_macs_per_invocation": 294912,
+      "native_record": "visual_wake_words_v1-workload-001-best.tsim.log",
+      "native_record_sha256": "0db83e7531ea119adf1676fca08756f7e48d05570b6a94bffe149947025ae3f7",
+      "occurrence": 1,
+      "result_json": "visual_wake_words_v1-workload-001-best.json",
+      "symbol": "tvmgen_mlperf_vww_vta_main_1",
+      "tsim_config_index": 953,
+      "tsim_cycles": 18149,
+      "workload_index": 1,
+      "workload_sha256": "e8915de766c0d4785d3e9d4393af9279d7800141471836c9c29f83294139b4aa"
+    },
+    {
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              2
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              24
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              4
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              4
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            1
+          ],
+          [
+            "h_nthread",
+            "ot",
+            1
+          ]
+        ],
+        "index": 569
+      },
+      "config_sha256": "9d163f032c87fe35de1fb8bd350d09a0295bd1321c76ec9a7a291046a0e9df8b",
+      "fusion_sha256": "92eef46ac1e1fc53d087d00dce4fdb98a2723bcaa130e76c571500b7f994b9bf",
+      "logical_macs_per_invocation": 589824,
+      "native_record": "visual_wake_words_v1-workload-002-best.tsim.log",
+      "native_record_sha256": "e7b480484c78e627363e398ec5e692e56bc06adad613a23ce6c5483bd9aeb141",
+      "occurrence": 2,
+      "result_json": "visual_wake_words_v1-workload-002-best.json",
+      "symbol": "tvmgen_mlperf_vww_vta_main_2",
+      "tsim_config_index": 569,
+      "tsim_cycles": 28713,
+      "workload_index": 2,
+      "workload_sha256": "26bba58800ae8a514c14ec58711e300bae2cc47222689bfde7b6df65da7323a4"
+    },
+    {
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              4
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              12
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              2
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              2
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            2
+          ],
+          [
+            "h_nthread",
+            "ot",
+            1
+          ]
+        ],
+        "index": 609
+      },
+      "config_sha256": "a4f654ced61a2015642bcf597cfd066ce70cff9877f4cd5094223a50b2526143",
+      "fusion_sha256": "942b93731a68136bbd98f75edc887d26f51e2ed0b87f91ec96e5f8a6a108000b",
+      "logical_macs_per_invocation": 294912,
+      "native_record": "visual_wake_words_v1-workload-003-best.tsim.log",
+      "native_record_sha256": "100f444da311cbee6bb479a3ee90744d7889cc08b777a60da99891f6e579ba34",
+      "occurrence": 3,
+      "result_json": "visual_wake_words_v1-workload-003-best.json",
+      "symbol": "tvmgen_mlperf_vww_vta_main_3",
+      "tsim_config_index": 609,
+      "tsim_cycles": 11827,
+      "workload_index": 3,
+      "workload_sha256": "827c82bd591bb350af1d367f3df9793fdf64cb8f7a273f706f845641276c9e55"
+    },
+    {
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              12
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              2
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              4
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              4
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            2
+          ],
+          [
+            "h_nthread",
+            "ot",
+            1
+          ]
+        ],
+        "index": 947
+      },
+      "config_sha256": "03b1e94db2a897811af8c975a9bece4358426c6c4f5749723bc15c1939caad0b",
+      "fusion_sha256": "003f1207f84619ee53328d38b28dedf6eb989c653a129aeb31bcf7a424829af3",
+      "logical_macs_per_invocation": 589824,
+      "native_record": "visual_wake_words_v1-workload-004-best.tsim.log",
+      "native_record_sha256": "fd9870452b6d37d8935f72f44e3e16529a4f5b55b32ee7eedbc25c38d9bc8ea3",
+      "occurrence": 4,
+      "result_json": "visual_wake_words_v1-workload-004-best.json",
+      "symbol": "tvmgen_mlperf_vww_vta_main_4",
+      "tsim_config_index": 947,
+      "tsim_cycles": 17386,
+      "workload_index": 4,
+      "workload_sha256": "9a59ad5f9b3e78ba75c0eaa92e9bbd97acea2db428c041e17b659df91db4fa10"
+    },
+    {
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              3
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              6
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              4
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              4
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            2
+          ],
+          [
+            "h_nthread",
+            "ot",
+            1
+          ]
+        ],
+        "index": 494
+      },
+      "config_sha256": "f635be2e3342f086b529204b3fd3c111f1fb52749f93cf6bdab8f6776b563205",
+      "fusion_sha256": "064570f7a4f2a0647f0f6c3b6bbbc3f257cc4c1b4db8e1ebba2efc1c2dc53c80",
+      "logical_macs_per_invocation": 294912,
+      "native_record": "visual_wake_words_v1-workload-005-best.tsim.log",
+      "native_record_sha256": "997af0795d5b90e77b8c990d2b4a3036837fc8266c035f72f5cf9dc69f39ad53",
+      "occurrence": 5,
+      "result_json": "visual_wake_words_v1-workload-005-best.json",
+      "symbol": "tvmgen_mlperf_vww_vta_main_5",
+      "tsim_config_index": 494,
+      "tsim_cycles": 8976,
+      "workload_index": 5,
+      "workload_sha256": "9938a07448f326ce8b3c1c56b15d71a89dc4c674e29ce5d2d4b0a8b2db72bf0e"
+    },
+    {
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              6
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              2
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              8
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              4
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            2
+          ],
+          [
+            "h_nthread",
+            "ot",
+            1
+          ]
+        ],
+        "index": 615
+      },
+      "config_sha256": "b81fcaff039f53d251fa0a9564c5d4f9d69746eb2070d23e5c539dd4855510cb",
+      "fusion_sha256": "557bb56b612c12630375eaaf1645444938e2c06855716cc2ebe1d81ef8c2d712",
+      "logical_macs_per_invocation": 589824,
+      "native_record": "visual_wake_words_v1-workload-006-best.tsim.log",
+      "native_record_sha256": "8b4666a34b0d1651f938bf824915eeb161d46cacf1913021db7b46e3b5a6a95e",
+      "occurrence": 6,
+      "result_json": "visual_wake_words_v1-workload-006-best.json",
+      "symbol": "tvmgen_mlperf_vww_vta_main_6",
+      "tsim_config_index": 615,
+      "tsim_cycles": 15462,
+      "workload_index": 6,
+      "workload_sha256": "8527cc7ecfe59e2a9d21a6f273dd825c7c3d48908875ca577af6f703aa7dc1b7"
+    },
+    {
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              2
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              6
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              2
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              8
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            2
+          ],
+          [
+            "h_nthread",
+            "ot",
+            1
+          ]
+        ],
+        "index": 669
+      },
+      "config_sha256": "823509f465ceb03a585495e0d86d453c6a12909cbda1afc9b9f96df36ec55d9e",
+      "fusion_sha256": "ff4596cba758136307bd9c1be165efaac7fe7e829c89d25c31af2ae2b849cb65",
+      "logical_macs_per_invocation": 589824,
+      "native_record": "visual_wake_words_v1-workload-007-best.tsim.log",
+      "native_record_sha256": "6e420b70cd945de6ff54036d59bdd39bb91222679c0b6da49e9eedd2a33b92b6",
+      "occurrence": 7,
+      "result_json": "visual_wake_words_v1-workload-007-best.json",
+      "symbol": "tvmgen_mlperf_vww_vta_main_7",
+      "tsim_config_index": 669,
+      "tsim_cycles": 13408,
+      "workload_index": 7,
+      "workload_sha256": "e3b03f5b93c764fc873b6070a8bd5525480a47b7154bbae81bab4bf27b79fca7"
+    },
+    {
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              3
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              6
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              8
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              4
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            1
+          ],
+          [
+            "h_nthread",
+            "ot",
+            2
+          ]
+        ],
+        "index": 1022
+      },
+      "config_sha256": "8764ef8795b0a3c464990a21a235e92f8f015c84c1b99596ed4c053ed43f9286",
+      "fusion_sha256": "50be3eca43434dd55f51c5fe3d2d76bd8c1809ed25d1bea7c7bad8e05e7c76b5",
+      "logical_macs_per_invocation": 589824,
+      "native_record": "visual_wake_words_v1-workload-008-best.tsim.log",
+      "native_record_sha256": "56fd22b4ead9d3b6e2e85462012b22d6406e59ebf3362e03de97f0b1054f38da",
+      "occurrence": 8,
+      "result_json": "visual_wake_words_v1-workload-008-best.json",
+      "symbol": "tvmgen_mlperf_vww_vta_main_8",
+      "tsim_config_index": 1022,
+      "tsim_cycles": 14389,
+      "workload_index": 8,
+      "workload_sha256": "6fd68fd47297a7d07d408af1b4284befd08a73e5a81d43af0c89e91c970d00c3"
+    },
+    {
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              3
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              6
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              4
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            1
+          ],
+          [
+            "h_nthread",
+            "ot",
+            2
+          ]
+        ],
+        "index": 974
+      },
+      "config_sha256": "5e5e7c1539c17f85489dd16a9655811ebf6d4ce417bae30d38fcb81b3a912cba",
+      "fusion_sha256": "4cd4687c8f9abe6e9f7596997221bde94bcc32c523ed3a35b0e19851a13ba94c",
+      "logical_macs_per_invocation": 589824,
+      "native_record": "visual_wake_words_v1-workload-009-best.tsim.log",
+      "native_record_sha256": "3dca29b6f1f6f480a46dc7292ee620cb241d3ef35ffef2f9898fc7d26da430a6",
+      "occurrence": 9,
+      "result_json": "visual_wake_words_v1-workload-009-best.json",
+      "symbol": "tvmgen_mlperf_vww_vta_main_9",
+      "tsim_config_index": 974,
+      "tsim_cycles": 15737,
+      "workload_index": 9,
+      "workload_sha256": "06fb10e2a5b708984c85c22dc0ff0e662034467048c30bc6cadc322cc24ab592"
+    },
+    {
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              2
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              6
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              8
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            2
+          ],
+          [
+            "h_nthread",
+            "ot",
+            1
+          ]
+        ],
+        "index": 653
+      },
+      "config_sha256": "370c50e9aab2f8354c628154d70f0567dc2ba11ecb76646d2ec943baf52a9004",
+      "fusion_sha256": "59c0cc47251e5c26943c9826e7d09e30bc812b09a544a9a00300b640fe87b8ab",
+      "logical_macs_per_invocation": 589824,
+      "native_record": "visual_wake_words_v1-workload-010-best.tsim.log",
+      "native_record_sha256": "29dd3cf3277b0460cc701f5d4591811b5a6cd964994b841c6fdc1c1a4f563067",
+      "occurrence": 10,
+      "result_json": "visual_wake_words_v1-workload-010-best.json",
+      "symbol": "tvmgen_mlperf_vww_vta_main_10",
+      "tsim_config_index": 653,
+      "tsim_cycles": 15214,
+      "workload_index": 10,
+      "workload_sha256": "b4b667a50e4349db409f21f7009326134c177321ea908e82f83b46ce39ce1297"
+    },
+    {
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              3
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              3
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              4
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              8
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            2
+          ],
+          [
+            "h_nthread",
+            "ot",
+            1
+          ]
+        ],
+        "index": 191
+      },
+      "config_sha256": "ab33f3db617cdcdaf5e3f7a0530f9dbe9d29e155dc9252422058a6350eb3e4e5",
+      "fusion_sha256": "b8f7d1657b88aad9b11f900cd2d2379d98acc2663ab506c2f50f01a3290a9be3",
+      "logical_macs_per_invocation": 294912,
+      "native_record": "visual_wake_words_v1-workload-011-best.tsim.log",
+      "native_record_sha256": "cd2216738d4571f3b141ee224f746a822f7d91c8c28f5a365f3d64ecf7823484",
+      "occurrence": 11,
+      "result_json": "visual_wake_words_v1-workload-011-best.json",
+      "symbol": "tvmgen_mlperf_vww_vta_main_11",
+      "tsim_config_index": 191,
+      "tsim_cycles": 7829,
+      "workload_index": 11,
+      "workload_sha256": "496896ce62b5dae4f83ffdc27347952f4a8b6bd87c54f0930ee4d785ba560425"
+    },
+    {
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              3
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              3
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              8
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              16
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            1
+          ],
+          [
+            "h_nthread",
+            "ot",
+            1
+          ]
+        ],
+        "index": 111
+      },
+      "config_sha256": "eede9d2195ccf5bcc1a958aaeb472bef08eb80b7925ffb30ed2a6878fbcee19f",
+      "fusion_sha256": "a0ece8d50c0f41d8e90d13a638887e22d74570df3b45d950b19b8494ecc71601",
+      "logical_macs_per_invocation": 589824,
+      "native_record": "visual_wake_words_v1-workload-012-best.tsim.log",
+      "native_record_sha256": "39c13a79572eceb4b81f285dd4a8813f7baad48fccfdd2b5ead809ac1631ac5b",
+      "occurrence": 12,
+      "result_json": "visual_wake_words_v1-workload-012-best.json",
+      "symbol": "tvmgen_mlperf_vww_vta_main_12",
+      "tsim_config_index": 111,
+      "tsim_cycles": 20498,
+      "workload_index": 12,
+      "workload_sha256": "c9970ecfc336835040914403225f282c6dfd0bca1fa4cb1d6627436234bd3188"
+    }
+  ],
+  "failures": [],
+  "geometry_path": "/Users/xdl/Projects/codex-tvm-vta/vta/config/vta_64mac.json",
+  "geometry_sha256": "23b338eacdf5747610d90fd17296e3d0d4236ce416191b7c1cfc597cd67991fa",
+  "measurement_protocol": {
+    "counted_invocations": 1,
+    "name": "tsim_single_call",
+    "version": 1,
+    "warmup_excluded": true
+  },
+  "model": "visual_wake_words_v1",
+  "model_id": "visual_wake_words_v1",
+  "model_sha256": "115bbc094d2119561320a21f01b6500a18bea8cc8589282ab007097bec8af38c",
+  "phase": "selected",
+  "schema_version": 1,
+  "selected_workload_indices": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "status": "complete",
+  "workload_count": 13
+}
