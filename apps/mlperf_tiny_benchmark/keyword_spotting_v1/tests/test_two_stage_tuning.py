@@ -1,0 +1,55 @@
+"""KWS V1 complete-fusion tuning adapter checks."""
+
+import importlib.util
+import sys
+from pathlib import Path
+
+import pytest
+
+
+APP_ROOT = Path(__file__).resolve().parents[1]
+ENTRY = APP_ROOT / "tune" / "tune.py"
+
+
+def _load_entry():
+    spec = importlib.util.spec_from_file_location("kws_v1_two_stage_entry", ENTRY)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_adapter_extracts_each_deployed_kws_fusion_with_complete_arithmetic():
+    entry = _load_entry()
+
+    prepared, identities, tasks = entry.legacy.prepare_v1_workloads()
+
+    assert len(prepared.routing.symbols) == 4
+    assert len(identities) == len(tasks) == 4
+    assert [identity.symbol for identity in identities] == list(prepared.routing.symbols)
+    assert [identity.occurrence for identity in identities] == list(range(4))
+    assert entry.legacy.shared.MODEL_PIPELINES["keyword_spotting_v1"][0] == "keyword_spotting_v1"
+    assert len({identity.sha256 for identity in identities}) == 4
+    assert all(task.name == "mlperf_tiny_fused_conv2d.vta" for task in tasks)
+    lowered = entry.legacy.fused.lower_with_fused_config(
+        prepared, identities[0], tasks[0].config_space.get(0)
+    )
+    assert lowered.schedule is not None
+
+
+def test_manifest_parser_rejects_foreign_model(tmp_path):
+    entry = _load_entry()
+    manifest = tmp_path / "foreign.json"
+    manifest.write_text('{"schema_version": 1, "model": "image_classification_v1"}')
+
+    with pytest.raises(ValueError, match="mismatched best manifest"):
+        entry._replay_manifest(manifest)
+
+
+def test_seed_and_full_search_modes_are_explicit():
+    entry = _load_entry()
+
+    with pytest.raises(SystemExit, match="full search requires --alignment-report"):
+        entry.main(["--all"])
+    with pytest.raises(SystemExit, match="--seed requires --all"):
+        entry.main(["--seed", "--workload-index", "0"])

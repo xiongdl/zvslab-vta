@@ -86,6 +86,26 @@ successful single run reports twelve comparisons; each FSIM matrix entry must
 have positive GEMM, weight-load, and output-store counters, while each TSIM
 entry must have a positive integer `cycle_count`.
 
+## Complete-fusion two-stage tuning
+
+`tune.py` extracts each routed KWS Conv fusion from the prepared graph,
+including its per-channel bias, right shift, clipping, and cast. Occurrences
+remain separate even when they share a workload. Seed artifacts and durable
+search state are written under `tune/` and `build/two_stage_tuning/`.
+
+Run the seed search and deployment in separate processes using the same
+absolute geometry file. Full search requires a passing seed deployment report;
+`--resume-manifest` resumes its matching durable run and `--replay-manifest`
+validates standalone exported artifacts.
+
+```bash
+MODEL=keyword_spotting_v1
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL" \
+  ./.envs/tvm-vta-env/bin/python \
+  "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/tune.py" --seed --all
+```
+
 ## AutoTVM schedule tuning
 
 The shared tuner extracts supported VTA convolution/dense task families from
