@@ -1,0 +1,95 @@
+{
+  "bounded": false,
+  "completion_label": "FULL_SEARCH",
+  "entries": [
+    {
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              28
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              5
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            1
+          ],
+          [
+            "h_nthread",
+            "ot",
+            1
+          ]
+        ],
+        "index": 11
+      },
+      "config_sha256": "1f081caa54961d3774030e13472067faeb1d2729051b0f204463f0a87aa3d0e7",
+      "fusion_sha256": "b4a24e8f663c2780ecc22530b39e16e3c16718c27536b0fc376ff4eeba5807e9",
+      "logical_macs_per_invocation": 143360,
+      "native_record": "streaming_wakeword_v1-workload-000-best.tsim.log",
+      "native_record_sha256": "84a3449d272673f365575a03250a90c58e276a3b4f64ffc32b564c1b2a00beed",
+      "occurrence": 0,
+      "result_json": "streaming_wakeword_v1-workload-000-best.json",
+      "symbol": "tvmgen_mlperf_streaming_wakeword_vta_main_0",
+      "tsim_config_index": 11,
+      "tsim_cycles": 9871,
+      "workload_index": 0,
+      "workload_sha256": "bcdc188e37bcdb020b83ccc3527227e30ce842411040ed89bae9013720c8a755"
+    }
+  ],
+  "failures": [],
+  "geometry_path": "/Users/xdl/Projects/codex-tvm-vta/vta/config/vta_64mac.json",
+  "geometry_sha256": "23b338eacdf5747610d90fd17296e3d0d4236ce416191b7c1cfc597cd67991fa",
+  "measurement_protocol": {
+    "counted_invocations": 1,
+    "name": "tsim_single_call",
+    "version": 1,
+    "warmup_excluded": true
+  },
+  "model": "streaming_wakeword_v1",
+  "model_id": "streaming_wakeword_v1",
+  "model_sha256": "3af8550895ba7d5c584277102b5075c52dcfa63ba9d2b2240f37c4e6abd5dd2b",
+  "phase": "selected",
+  "schema_version": 1,
+  "selected_workload_indices": [
+    0
+  ],
+  "status": "complete",
+  "workload_count": 1
+}
