@@ -246,3 +246,10 @@ conda/pkg
 *.tokens
 *.interp
 tvm/
+
+# Keep the approved AD V1 seed-gate artifacts reviewable and reproducible.
+!apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/seed/20261001T162746.148776Z/
+!apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/seed/20261001T162746.148776Z/*.json
+!apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/seed/20261001T162746.148776Z/*.tsim.log
+!apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/deployment-seed.json
+!apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/deployment-seed-*-failure.json

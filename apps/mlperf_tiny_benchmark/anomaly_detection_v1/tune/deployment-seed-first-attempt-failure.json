@@ -1,0 +1,10 @@
+{
+  "artifact_kind": "vta_deployment_failure_v1",
+  "details": {},
+  "error": "ValueError: selected config differs from its native record at occurrence 0",
+  "model_id": "anomaly_detection_v1",
+  "phase": "seed",
+  "schema_version": 1,
+  "stage": "deployment",
+  "status": "failed"
+}

@@ -1,0 +1,10 @@
+{
+  "artifact_kind": "vta_deployment_failure_v1",
+  "details": {},
+  "error": "TypeError: SimulatorSession.read_stats() got an unexpected keyword argument 'simulator'",
+  "model_id": "anomaly_detection_v1",
+  "phase": "seed",
+  "schema_version": 1,
+  "stage": "deployment",
+  "status": "failed"
+}

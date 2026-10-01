@@ -84,3 +84,22 @@ def test_config_identity_normalizes_native_tuples_to_json_arrays():
     assert deployment._canonical_config({"entity": (("tile", "sp", (1, 2)),)}) == deployment._canonical_config(
         {"entity": [["tile", "sp", [1, 2]]]}
     )
+
+
+def test_shared_profiler_session_adapter_reads_ad_runtime_counters():
+    deployment = _load_deployment()
+    calls = []
+    runtime_session = type("RuntimeSession", (), {
+        "clear_and_validate": lambda self, simulator: calls.append(("clear", simulator)),
+        "read_stats": lambda self, status: status(),
+        "validate_activity": lambda self, stats: calls.append(("validate", stats)),
+    })()
+    adapter = deployment._EvidenceProfileSession(runtime_session)
+    simulator = type("Simulator", (), {"stats": lambda self: {"cycle_count": 5}})()
+
+    adapter.clear_and_validate(simulator)
+    stats = adapter.read_stats(simulator)
+    adapter.validate_activity(stats)
+
+    assert stats == {"cycle_count": 5}
+    assert calls == [("clear", simulator), ("validate", stats)]

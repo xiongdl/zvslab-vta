@@ -203,6 +203,22 @@ def _selected_lowering(tvm, vta, autotvm, compiler, config_by_symbol):
         tvm.register_func(name, previous, override=True)
 
 
+class _EvidenceProfileSession:
+    """Adapt AD runtime's status-callback API to the shared profile helper."""
+
+    def __init__(self, runtime_session):
+        self.runtime_session = runtime_session
+
+    def clear_and_validate(self, simulator):
+        return self.runtime_session.clear_and_validate(simulator)
+
+    def read_stats(self, simulator):
+        return self.runtime_session.read_stats(simulator.stats)
+
+    def validate_activity(self, stats):
+        return self.runtime_session.validate_activity(stats)
+
+
 def execute_deployment(manifest_path, output_path, build_dir):
     import hashlib
     import tvm
@@ -341,7 +357,8 @@ def execute_deployment(manifest_path, output_path, build_dir):
                                                          separators=(",", ":")).encode()).hexdigest(),
         })
     profiled = profile_graph_resident_nodes(
-        mixed.graph_json, expected_occurrences, debug_graph, simulator_session, simulator
+        mixed.graph_json, expected_occurrences, debug_graph,
+        _EvidenceProfileSession(simulator_session), simulator
     )
     rows = []
     for identity, entry, task, node in zip(identities, entries, tasks, profiled):
