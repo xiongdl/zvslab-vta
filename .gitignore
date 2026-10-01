@@ -178,6 +178,10 @@ perf
 !apps/mlperf_tiny_benchmark/image_classification_v1/tune/optimal/c4-full/*.tsim.log
 !apps/mlperf_tiny_benchmark/image_classification_v1/tune/deployment-c4-full.json
 !apps/mlperf_tiny_benchmark/image_classification_v1/tune/mac-utilization-c4-full.json
+# Keep the approved IC V2 full-search outputs reviewable and reproducible.
+!apps/mlperf_tiny_benchmark/image_classification_v2/tune/optimal/20261001T035246.904010Z/
+!apps/mlperf_tiny_benchmark/image_classification_v2/tune/optimal/20261001T035246.904010Z/*.json
+!apps/mlperf_tiny_benchmark/image_classification_v2/tune/optimal/20261001T035246.904010Z/*.tsim.log
 *.params
 *.onnx
 *.h5
