@@ -106,6 +106,20 @@ PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:
   "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/tune.py" --seed --all
 ```
 
+Apply the exported seed manifest in a fresh TSIM process. The deployment uses
+the first committed WAV sample, the existing MFCC preprocessing, and exact
+HOST output comparison. It reports one sample, selected per-occurrence cycles,
+and ordinary/debug full-model counter agreement.
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/keyword_spotting_v1" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/deployment.py \
+  --best-manifest vta/apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/seed/<run-id>/best-manifest.json \
+  --output vta/apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/deployment-seed.json
+```
+
 ## AutoTVM schedule tuning
 
 The shared tuner extracts supported VTA convolution/dense task families from
