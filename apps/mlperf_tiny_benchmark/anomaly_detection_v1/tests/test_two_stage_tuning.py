@@ -29,6 +29,10 @@ def test_adapter_extracts_all_deployed_ad_v1_fusions():
     assert [identity.symbol for identity in identities] == list(prepared.routing.symbols)
     assert entry.legacy.shared.MODEL_PIPELINES["anomaly_detection_v1"][0] == "anomaly_detection_v1"
     assert len({identity.sha256 for identity in identities}) == 9
+    lowered = entry.legacy.fused.lower_with_fused_config(
+        prepared, identities[0], tasks[0].config_space.get(0)
+    )
+    assert lowered.schedule is not None
 
 
 def test_manifest_parser_rejects_foreign_model(tmp_path):

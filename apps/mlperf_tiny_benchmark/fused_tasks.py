@@ -264,3 +264,37 @@ def create_task(identity, target):
 def conv_schedule_key(identity):
     """Return the Conv key emitted when Relay lowers this identity for VTA."""
     return ("conv2d_packed.vta", *identity.conv_workload[1:])
+
+
+def lower_with_fused_config(prepared, identity, config):
+    """Lower the actual prepared fusion while dispatching its Conv key to config."""
+    import vta
+
+    function = next(
+        (
+            prepared.mixed_module[global_var]
+            for global_var in prepared.mixed_module.get_global_vars()
+            if prepared.mixed_module[global_var].attrs
+            and "Compiler" in prepared.mixed_module[global_var].attrs
+            and prepared.mixed_module[global_var].attrs["Compiler"] == "vta"
+            and prepared.mixed_module[global_var].attrs.get_str("global_symbol") == identity.symbol
+        ),
+        None,
+    )
+    if function is None:
+        raise ValueError(f"fusion symbol {identity.symbol!r} is absent from the prepared model")
+    context = autotvm.task.ApplyConfig(config)
+    compiler = tvm.relay.backend.te_compiler.get()
+    compiler.clear()
+    try:
+        with context:
+            scheduled = vta.relay.transform._lower_to_scheduled_te(function)
+    finally:
+        compiler.clear()
+    expected_key = conv_schedule_key(identity)
+    if context.workload != expected_key:
+        raise ValueError(
+            "real fusion lowering used a different Conv schedule key: "
+            f"expected {expected_key!r}, got {context.workload!r}"
+        )
+    return scheduled
