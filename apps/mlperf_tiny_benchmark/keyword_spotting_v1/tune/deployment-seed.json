@@ -1,0 +1,97 @@
+{
+  "artifact_kind": "vta_deployment_profile_v1",
+  "backend": "tsim",
+  "completion_label": "SEED_ALIGNMENT",
+  "full_model": {
+    "baseline_cycles": 2354444,
+    "debug_profile_full_model_cycles": 460015,
+    "invocation_count": 1,
+    "ordinary_full_model_single_sample_cycles": 460015,
+    "tuned_cycles": 460015
+  },
+  "geometry": {
+    "path": "/Users/xdl/Projects/codex-tvm-vta/vta/config/vta_64mac.json",
+    "peak_macs_per_cycle": 64,
+    "sha256": "23b338eacdf5747610d90fd17296e3d0d4236ce416191b7c1cfc597cd67991fa"
+  },
+  "measurement_protocol": {
+    "full_model_counted_invocations": 1,
+    "name": "tsim_single_call",
+    "operator_counted_invocations": 1,
+    "version": 1,
+    "warmup_excluded": true
+  },
+  "model": "keyword_spotting_v1",
+  "model_id": "keyword_spotting_v1",
+  "model_sha256": "aeea436800704fce17b17292e4412630ad856e9d777c044c64ef748a880bd0ae",
+  "occurrence_base": 0,
+  "occurrences": [
+    {
+      "autotvm_cycles": 211054,
+      "config_sha256": "def01d6c6266a84fdfcdc9d09982d860aef8edbe5d3fffb92de3b58fbfd792e0",
+      "counted_invocations": 1,
+      "deployment_cycles": 208364,
+      "fusion_sha256": "4a80621fb0b5ed53f285be7fa58a7867d49624715becabd3d0e0dce5cb4f95a5",
+      "logical_macs_per_invocation": 512000,
+      "occurrence": 0,
+      "passed": true,
+      "relative_cycle_difference": 0.012745553270726923,
+      "symbol": "tvmgen_mlperf_kws_vta_main_0",
+      "workload_sha256": "0cf732a3218304416359a0014abbd8600b2c7af7afe7e48a0e37d36c0d4276c4"
+    },
+    {
+      "autotvm_cycles": 138023,
+      "config_sha256": "8157a7fd925e88fe33ef65fa40ab9d5e75e6f64f81d4b64293cbeeb1270be50e",
+      "counted_invocations": 1,
+      "deployment_cycles": 138025,
+      "fusion_sha256": "c8e6d508009eb4cd674d4c4456665374b5d9c1520821eac4734fe78eb29640d8",
+      "logical_macs_per_invocation": 512000,
+      "occurrence": 1,
+      "passed": true,
+      "relative_cycle_difference": 1.4490338566760612e-05,
+      "symbol": "tvmgen_mlperf_kws_vta_main_1",
+      "workload_sha256": "ddc3d52462ad9ab5fdc708be0cfa476bb844c7af8c9c193277a42ed384a61d0c"
+    },
+    {
+      "autotvm_cycles": 61175,
+      "config_sha256": "f2930f8bb22896787b6105b8600be9c22cb7183b0c6938fd69f82e6a404bec33",
+      "counted_invocations": 1,
+      "deployment_cycles": 61180,
+      "fusion_sha256": "aaf995e77671e493e2e63f71a73fbdb16c6e8933ed2a6402aa8482a7a41633b7",
+      "logical_macs_per_invocation": 512000,
+      "occurrence": 2,
+      "passed": true,
+      "relative_cycle_difference": 8.173273395995096e-05,
+      "symbol": "tvmgen_mlperf_kws_vta_main_2",
+      "workload_sha256": "abffeb8f030c33571933828f272cc54fb36904b5da7d1a2d2afcab55cc20807b"
+    },
+    {
+      "autotvm_cycles": 52445,
+      "config_sha256": "06d3377d69f137a46dcedb25f414201657799052edcb0dc525435d7fc57f2ff4",
+      "counted_invocations": 1,
+      "deployment_cycles": 52446,
+      "fusion_sha256": "861044880eed8a2e6ef65a874429f012aefe98e02cdadc9027a030ab39db22c7",
+      "logical_macs_per_invocation": 512000,
+      "occurrence": 3,
+      "passed": true,
+      "relative_cycle_difference": 1.9067594622938316e-05,
+      "symbol": "tvmgen_mlperf_kws_vta_main_3",
+      "workload_sha256": "c1c3a3ee06c8dfb92e57f9e5444559b42ee81e732da559cf61bb76ef10d2d2e5"
+    }
+  ],
+  "phase": "seed",
+  "sample": {
+    "sample_id": "down-00176480_nohash_0.wav",
+    "sha256": "68d8077e68d9c2c02a9eb744061e934f514fc523aa90ee63fd56bfec0227e65d"
+  },
+  "sample_count": 1,
+  "schema_version": 1,
+  "scope": {
+    "full_model_cycles": "uninstrumented_complete_deployment",
+    "host_operations": "excluded_from_vta_mac_totals",
+    "sample_preprocessing": "existing KWS V1 WAV-to-MFCC preprocessing"
+  },
+  "selected_manifest": "/Users/xdl/Projects/codex-tvm-vta/vta/apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/seed/20261001T191431.265469Z/best-manifest.json",
+  "selected_manifest_sha256": "873735cacae62e7b393211689b6a7e2cac5784e03cc5b7f3042790cd21dc9cdd",
+  "status": "passed"
+}

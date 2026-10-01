@@ -1,0 +1,275 @@
+{
+  "artifact_kind": "self_contained_native_best_v1",
+  "best_native_record": "keyword_spotting_v1-workload-000-best.tsim.log",
+  "best_native_record_sha256": "a0362c66fadee0f99047e69208ae9d8860cc6d50d70ef75b3f3a49a26587de60",
+  "bounded": false,
+  "conv_config": {
+    "code_hash": null,
+    "entity": [
+      [
+        "tile_b",
+        "sp",
+        [
+          -1,
+          1
+        ]
+      ],
+      [
+        "tile_h",
+        "sp",
+        [
+          -1,
+          1
+        ]
+      ],
+      [
+        "tile_w",
+        "sp",
+        [
+          -1,
+          1
+        ]
+      ],
+      [
+        "tile_ci",
+        "sp",
+        [
+          -1,
+          8
+        ]
+      ],
+      [
+        "tile_co",
+        "sp",
+        [
+          -1,
+          1
+        ]
+      ],
+      [
+        "oc_nthread",
+        "ot",
+        1
+      ],
+      [
+        "h_nthread",
+        "ot",
+        1
+      ]
+    ],
+    "index": 18
+  },
+  "conv_schedule_key": [
+    "conv2d_packed.vta",
+    [
+      "TENSOR",
+      [
+        1,
+        8,
+        25,
+        5,
+        1,
+        8
+      ],
+      "int8"
+    ],
+    [
+      "TENSOR",
+      [
+        8,
+        8,
+        1,
+        1,
+        8,
+        8
+      ],
+      "int8"
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      1,
+      1
+    ],
+    "NCHW1n8c",
+    "int32"
+  ],
+  "fsim_failures": [
+    {
+      "config_index": 162,
+      "error": "('Traceback (most recent call last):\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 565, in __call__\\n    func, arg_info = _build_func_common(measure_input, self.runtime, **kwargs)\\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 491, in _build_func_common\\n    func = vta.build(s, args, target_host=task.target_host)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/build_module.py\", line 168, in build\\n    return tvm.build(*args, **kwargs)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 227, in build\\n    input_mod = lower(inputs, args, name=name, binds=binds)\\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 134, in lower\\n    return ffi.lower_schedule(inp, args, name, binds, simple_mode)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/_ctypes/packed_func.py\", line 239, in __call__\\n    raise_last_ffi_error()\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/base.py\", line 481, in raise_last_ffi_error\\n    raise py_err\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 716, in _inject_copy\\n    x_size, y_size, x_stride, offset = _get_2d_pattern(\\n                                       ^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 544, in _get_2d_pattern\\n    shape, strides = _fold_buffer_dim(buf, scope, elem_block)\\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 503, in _fold_buffer_dim\\n    raise RuntimeError(\\nRuntimeError: scope local.acc_buffer need to have block=8, shape=[32]\\n', ('Traceback (most recent call last):\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 565, in __call__\\n    func, arg_info = _build_func_common(measure_input, self.runtime, **kwargs)\\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 491, in _build_func_common\\n    func = vta.build(s, args, target_host=task.target_host)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/build_module.py\", line 168, in build\\n    return tvm.build(*args, **kwargs)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 227, in build\\n    input_mod = lower(inputs, args, name=name, binds=binds)\\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 134, in lower\\n    return ffi.lower_schedule(inp, args, name, binds, simple_mode)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/_ctypes/packed_func.py\", line 239, in __call__\\n    raise_last_ffi_error()\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/base.py\", line 481, in raise_last_ffi_error\\n    raise py_err\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 716, in _inject_copy\\n    x_size, y_size, x_stride, offset = _get_2d_pattern(\\n                                       ^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 544, in _get_2d_pattern\\n    shape, strides = _fold_buffer_dim(buf, scope, elem_block)\\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 503, in _fold_buffer_dim\\n    raise RuntimeError(\\nRuntimeError: scope local.acc_buffer need to have block=8, shape=[32]\\n', RuntimeError('scope local.acc_buffer need to have block=8, shape=[32]')))"
+    },
+    {
+      "config_index": 81,
+      "error": "('Traceback (most recent call last):\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 565, in __call__\\n    func, arg_info = _build_func_common(measure_input, self.runtime, **kwargs)\\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 491, in _build_func_common\\n    func = vta.build(s, args, target_host=task.target_host)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/build_module.py\", line 168, in build\\n    return tvm.build(*args, **kwargs)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 227, in build\\n    input_mod = lower(inputs, args, name=name, binds=binds)\\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 134, in lower\\n    return ffi.lower_schedule(inp, args, name, binds, simple_mode)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/_ctypes/packed_func.py\", line 239, in __call__\\n    raise_last_ffi_error()\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/base.py\", line 481, in raise_last_ffi_error\\n    raise py_err\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 716, in _inject_copy\\n    x_size, y_size, x_stride, offset = _get_2d_pattern(\\n                                       ^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 544, in _get_2d_pattern\\n    shape, strides = _fold_buffer_dim(buf, scope, elem_block)\\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 503, in _fold_buffer_dim\\n    raise RuntimeError(\\nRuntimeError: scope local.acc_buffer need to have block=8, shape=[64]\\n', ('Traceback (most recent call last):\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 565, in __call__\\n    func, arg_info = _build_func_common(measure_input, self.runtime, **kwargs)\\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 491, in _build_func_common\\n    func = vta.build(s, args, target_host=task.target_host)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/build_module.py\", line 168, in build\\n    return tvm.build(*args, **kwargs)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 227, in build\\n    input_mod = lower(inputs, args, name=name, binds=binds)\\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 134, in lower\\n    return ffi.lower_schedule(inp, args, name, binds, simple_mode)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/_ctypes/packed_func.py\", line 239, in __call__\\n    raise_last_ffi_error()\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/base.py\", line 481, in raise_last_ffi_error\\n    raise py_err\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 716, in _inject_copy\\n    x_size, y_size, x_stride, offset = _get_2d_pattern(\\n                                       ^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 544, in _get_2d_pattern\\n    shape, strides = _fold_buffer_dim(buf, scope, elem_block)\\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 503, in _fold_buffer_dim\\n    raise RuntimeError(\\nRuntimeError: scope local.acc_buffer need to have block=8, shape=[64]\\n', RuntimeError('scope local.acc_buffer need to have block=8, shape=[64]')))"
+    },
+    {
+      "config_index": 174,
+      "error": "('Traceback (most recent call last):\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 565, in __call__\\n    func, arg_info = _build_func_common(measure_input, self.runtime, **kwargs)\\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 491, in _build_func_common\\n    func = vta.build(s, args, target_host=task.target_host)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/build_module.py\", line 168, in build\\n    return tvm.build(*args, **kwargs)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 227, in build\\n    input_mod = lower(inputs, args, name=name, binds=binds)\\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 134, in lower\\n    return ffi.lower_schedule(inp, args, name, binds, simple_mode)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/_ctypes/packed_func.py\", line 239, in __call__\\n    raise_last_ffi_error()\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/base.py\", line 481, in raise_last_ffi_error\\n    raise py_err\\ntvm.error.InternalError: Traceback (most recent call last):\\n  [bt] (8) 9   libtvm.dylib                        0x000000010f95d154 tvm::runtime::ObjectPtr<tvm::runtime::Object> tvm::runtime::Array<tvm::tir::Stmt, void>::MapHelper<tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&), tvm::tir::Stmt>(tvm::runtime::ObjectPtr<tvm::runtime::Object>, tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&)) + 276\\n  [bt] (7) 8   libtvm.dylib                        0x000000010f955340 tvm::tir::StmtMutator::VisitStmt_(tvm::tir::AllocateNode const*) + 180\\n  [bt] (6) 7   libtvm.dylib                        0x000000010f95758c tvm::tir::StmtMutator::VisitStmt_(tvm::tir::SeqStmtNode const*) + 96\\n  [bt] (5) 6   libtvm.dylib                        0x000000010f95ce24 void tvm::runtime::Array<tvm::tir::Stmt, void>::MutateByApply<tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&), void>(tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&)) + 60\\n  [bt] (4) 5   libtvm.dylib                        0x000000010f95d154 tvm::runtime::ObjectPtr<tvm::runtime::Object> tvm::runtime::Array<tvm::tir::Stmt, void>::MapHelper<tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&), tvm::tir::Stmt>(tvm::runtime::ObjectPtr<tvm::runtime::Object>, tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&)) + 276\\n  [bt] (3) 4   libtvm.dylib                        0x000000010fcb16e4 tvm::tir::CopyIntrinInjector::VisitStmt_(tvm::tir::AttrStmtNode const*) + 512\\n  [bt] (2) 3   libtvm.dylib                        0x000000010e8a2600 __clang_call_terminate + 0\\n  [bt] (1) 2   libtvm.dylib                        0x000000010e8a6074 tvm::runtime::detail::LogFatal::Entry::Finalize() + 0\\n  [bt] (0) 1   libtvm.dylib                        0x000000010e8a6138 tvm::runtime::detail::LogFatal::Entry::Finalize() + 196\\n    if T.likely(cthread < 1):\\n        placeholder_local_wgt_buffer = T.Buffer((1024,), \"int8\", scope=\"local.wgt_buffer\")\\n        placeholder = T.Buffer((4096,), \"int8\")\\n        k_o_outer = T.int32()\\n        placeholder_local_wgt_buffer[ax0 * 128 + ax1 * 64 + ax4 * 8 + ax5] = placeholder[cthread * 4096 + ax0 * 512 + k_o_outer * 128 + ax1 * 64 + ax4 * 8 + ax5]\\n    cthread = T.int32()\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/src/tir/transforms/inject_copy_intrin.cc\", line 49\\nInternalError: Check failed: (MatchCopyPattern(op->body, &ret, &error_info)) is false: Cannot match copy pattern. The error is the body is not a \\'BufferStoreNode\\' The body is for ax0, ax1, ax4, ax5 in T.grid(8, 2, 8, 8):\\n', ('Traceback (most recent call last):\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 565, in __call__\\n    func, arg_info = _build_func_common(measure_input, self.runtime, **kwargs)\\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 491, in _build_func_common\\n    func = vta.build(s, args, target_host=task.target_host)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/build_module.py\", line 168, in build\\n    return tvm.build(*args, **kwargs)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 227, in build\\n    input_mod = lower(inputs, args, name=name, binds=binds)\\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 134, in lower\\n    return ffi.lower_schedule(inp, args, name, binds, simple_mode)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/_ctypes/packed_func.py\", line 239, in __call__\\n    raise_last_ffi_error()\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/base.py\", line 481, in raise_last_ffi_error\\n    raise py_err\\ntvm.error.InternalError: Traceback (most recent call last):\\n  [bt] (8) 9   libtvm.dylib                        0x000000010f95d154 tvm::runtime::ObjectPtr<tvm::runtime::Object> tvm::runtime::Array<tvm::tir::Stmt, void>::MapHelper<tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&), tvm::tir::Stmt>(tvm::runtime::ObjectPtr<tvm::runtime::Object>, tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&)) + 276\\n  [bt] (7) 8   libtvm.dylib                        0x000000010f955340 tvm::tir::StmtMutator::VisitStmt_(tvm::tir::AllocateNode const*) + 180\\n  [bt] (6) 7   libtvm.dylib                        0x000000010f95758c tvm::tir::StmtMutator::VisitStmt_(tvm::tir::SeqStmtNode const*) + 96\\n  [bt] (5) 6   libtvm.dylib                        0x000000010f95ce24 void tvm::runtime::Array<tvm::tir::Stmt, void>::MutateByApply<tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&), void>(tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&)) + 60\\n  [bt] (4) 5   libtvm.dylib                        0x000000010f95d154 tvm::runtime::ObjectPtr<tvm::runtime::Object> tvm::runtime::Array<tvm::tir::Stmt, void>::MapHelper<tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&), tvm::tir::Stmt>(tvm::runtime::ObjectPtr<tvm::runtime::Object>, tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&)) + 276\\n  [bt] (3) 4   libtvm.dylib                        0x000000010fcb16e4 tvm::tir::CopyIntrinInjector::VisitStmt_(tvm::tir::AttrStmtNode const*) + 512\\n  [bt] (2) 3   libtvm.dylib                        0x000000010e8a2600 __clang_call_terminate + 0\\n  [bt] (1) 2   libtvm.dylib                        0x000000010e8a6074 tvm::runtime::detail::LogFatal::Entry::Finalize() + 0\\n  [bt] (0) 1   libtvm.dylib                        0x000000010e8a6138 tvm::runtime::detail::LogFatal::Entry::Finalize() + 196\\n    if T.likely(cthread < 1):\\n        placeholder_local_wgt_buffer = T.Buffer((1024,), \"int8\", scope=\"local.wgt_buffer\")\\n        placeholder = T.Buffer((4096,), \"int8\")\\n        k_o_outer = T.int32()\\n        placeholder_local_wgt_buffer[ax0 * 128 + ax1 * 64 + ax4 * 8 + ax5] = placeholder[cthread * 4096 + ax0 * 512 + k_o_outer * 128 + ax1 * 64 + ax4 * 8 + ax5]\\n    cthread = T.int32()\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/src/tir/transforms/inject_copy_intrin.cc\", line 49\\nInternalError: Check failed: (MatchCopyPattern(op->body, &ret, &error_info)) is false: Cannot match copy pattern. The error is the body is not a \\'BufferStoreNode\\' The body is for ax0, ax1, ax4, ax5 in T.grid(8, 2, 8, 8):\\n', InternalError('Traceback (most recent call last):\\n  [bt] (8) 9   libtvm.dylib                        0x000000010f95d154 tvm::runtime::ObjectPtr<tvm::runtime::Object> tvm::runtime::Array<tvm::tir::Stmt, void>::MapHelper<tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&), tvm::tir::Stmt>(tvm::runtime::ObjectPtr<tvm::runtime::Object>, tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&)) + 276\\n  [bt] (7) 8   libtvm.dylib                        0x000000010f955340 tvm::tir::StmtMutator::VisitStmt_(tvm::tir::AllocateNode const*) + 180\\n  [bt] (6) 7   libtvm.dylib                        0x000000010f95758c tvm::tir::StmtMutator::VisitStmt_(tvm::tir::SeqStmtNode const*) + 96\\n  [bt] (5) 6   libtvm.dylib                        0x000000010f95ce24 void tvm::runtime::Array<tvm::tir::Stmt, void>::MutateByApply<tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&), void>(tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&)) + 60\\n  [bt] (4) 5   libtvm.dylib                        0x000000010f95d154 tvm::runtime::ObjectPtr<tvm::runtime::Object> tvm::runtime::Array<tvm::tir::Stmt, void>::MapHelper<tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&), tvm::tir::Stmt>(tvm::runtime::ObjectPtr<tvm::runtime::Object>, tvm::tir::StmtMutator::Internal::Mutate(tvm::tir::StmtMutator*, tvm::runtime::Array<tvm::tir::Stmt, void> const&)::\\'lambda\\'(tvm::tir::Stmt const&)) + 276\\n  [bt] (3) 4   libtvm.dylib                        0x000000010fcb16e4 tvm::tir::CopyIntrinInjector::VisitStmt_(tvm::tir::AttrStmtNode const*) + 512\\n  [bt] (2) 3   libtvm.dylib                        0x000000010e8a2600 __clang_call_terminate + 0\\n  [bt] (1) 2   libtvm.dylib                        0x000000010e8a6074 tvm::runtime::detail::LogFatal::Entry::Finalize() + 0\\n  [bt] (0) 1   libtvm.dylib                        0x000000010e8a6138 tvm::runtime::detail::LogFatal::Entry::Finalize() + 196\\n    if T.likely(cthread < 1):\\n        placeholder_local_wgt_buffer = T.Buffer((1024,), \"int8\", scope=\"local.wgt_buffer\")\\n        placeholder = T.Buffer((4096,), \"int8\")\\n        k_o_outer = T.int32()\\n        placeholder_local_wgt_buffer[ax0 * 128 + ax1 * 64 + ax4 * 8 + ax5] = placeholder[cthread * 4096 + ax0 * 512 + k_o_outer * 128 + ax1 * 64 + ax4 * 8 + ax5]\\n    cthread = T.int32()\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/src/tir/transforms/inject_copy_intrin.cc\", line 49\\nInternalError: Check failed: (MatchCopyPattern(op->body, &ret, &error_info)) is false: Cannot match copy pattern. The error is the body is not a \\'BufferStoreNode\\' The body is for ax0, ax1, ax4, ax5 in T.grid(8, 2, 8, 8):')))"
+    },
+    {
+      "config_index": 155,
+      "error": "('Traceback (most recent call last):\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 565, in __call__\\n    func, arg_info = _build_func_common(measure_input, self.runtime, **kwargs)\\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 491, in _build_func_common\\n    func = vta.build(s, args, target_host=task.target_host)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/build_module.py\", line 168, in build\\n    return tvm.build(*args, **kwargs)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 227, in build\\n    input_mod = lower(inputs, args, name=name, binds=binds)\\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 134, in lower\\n    return ffi.lower_schedule(inp, args, name, binds, simple_mode)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/_ctypes/packed_func.py\", line 239, in __call__\\n    raise_last_ffi_error()\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/base.py\", line 481, in raise_last_ffi_error\\n    raise py_err\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 716, in _inject_copy\\n    x_size, y_size, x_stride, offset = _get_2d_pattern(\\n                                       ^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 544, in _get_2d_pattern\\n    shape, strides = _fold_buffer_dim(buf, scope, elem_block)\\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 503, in _fold_buffer_dim\\n    raise RuntimeError(\\nRuntimeError: scope local.acc_buffer need to have block=8, shape=[32]\\n', ('Traceback (most recent call last):\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 565, in __call__\\n    func, arg_info = _build_func_common(measure_input, self.runtime, **kwargs)\\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/autotvm/measure/measure_methods.py\", line 491, in _build_func_common\\n    func = vta.build(s, args, target_host=task.target_host)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/build_module.py\", line 168, in build\\n    return tvm.build(*args, **kwargs)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 227, in build\\n    input_mod = lower(inputs, args, name=name, binds=binds)\\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/driver/build_module.py\", line 134, in lower\\n    return ffi.lower_schedule(inp, args, name, binds, simple_mode)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/_ctypes/packed_func.py\", line 239, in __call__\\n    raise_last_ffi_error()\\n  File \"/Users/xdl/Projects/codex-tvm-vta/tvm/python/tvm/_ffi/base.py\", line 481, in raise_last_ffi_error\\n    raise py_err\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 716, in _inject_copy\\n    x_size, y_size, x_stride, offset = _get_2d_pattern(\\n                                       ^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 544, in _get_2d_pattern\\n    shape, strides = _fold_buffer_dim(buf, scope, elem_block)\\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/Users/xdl/Projects/codex-tvm-vta/vta/python/vta/transform.py\", line 503, in _fold_buffer_dim\\n    raise RuntimeError(\\nRuntimeError: scope local.acc_buffer need to have block=8, shape=[32]\\n', RuntimeError('scope local.acc_buffer need to have block=8, shape=[32]')))"
+    }
+  ],
+  "fsim_stop_reason": "successful_schedule_quota",
+  "fsim_success_count": 1,
+  "fsim_trials": 5,
+  "fusion_identity": {
+    "bias_axis": 3,
+    "bias_dtype": "int32",
+    "bias_shape": [
+      64
+    ],
+    "bias_values": [
+      2950,
+      -2130,
+      1027,
+      1861,
+      2719,
+      2779,
+      -2665,
+      3118,
+      -175,
+      1338,
+      1490,
+      1725,
+      2797,
+      360,
+      3689,
+      1831,
+      1594,
+      160,
+      4501,
+      1117,
+      1891,
+      3329,
+      2112,
+      -1767,
+      2176,
+      1895,
+      3524,
+      -2024,
+      525,
+      -121,
+      1295,
+      -166,
+      1487,
+      45,
+      564,
+      2513,
+      2661,
+      1152,
+      1251,
+      -3308,
+      1557,
+      -1394,
+      2867,
+      430,
+      1235,
+      1860,
+      1961,
+      -866,
+      1891,
+      1279,
+      2721,
+      3924,
+      1879,
+      -515,
+      618,
+      316,
+      1145,
+      2838,
+      2195,
+      1386,
+      581,
+      -2077,
+      -113,
+      -71
+    ],
+    "clip_max": 127,
+    "clip_min": -128,
+    "conv_workload": [
+      "mlperf_tiny_fused_conv2d.vta",
+      [
+        "TENSOR",
+        [
+          1,
+          8,
+          25,
+          5,
+          1,
+          8
+        ],
+        "int8"
+      ],
+      [
+        "TENSOR",
+        [
+          8,
+          8,
+          1,
+          1,
+          8,
+          8
+        ],
+        "int8"
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      "NCHW1n8c",
+      "int32"
+    ],
+    "occurrence": 0,
+    "output_dtype": "int8",
+    "shift": 8,
+    "symbol": "tvmgen_mlperf_kws_vta_main_0"
+  },
+  "fusion_sha256": "4a80621fb0b5ed53f285be7fa58a7867d49624715becabd3d0e0dce5cb4f95a5",
+  "geometry_path": "/Users/xdl/Projects/codex-tvm-vta/vta/config/vta_64mac.json",
+  "geometry_sha256": "23b338eacdf5747610d90fd17296e3d0d4236ce416191b7c1cfc597cd67991fa",
+  "mac_count": 512000,
+  "measurement_protocol": {
+    "counted_invocations": 1,
+    "name": "tsim_single_call",
+    "version": 1,
+    "warmup_excluded": true
+  },
+  "measurement_scope": "isolated_complete_vta_conv_fusion",
+  "model": "keyword_spotting_v1",
+  "model_sha256": "aeea436800704fce17b17292e4412630ad856e9d777c044c64ef748a880bd0ae",
+  "occurrence": 0,
+  "real_conv_lowering": true,
+  "rejected_unlowerable_tsim_candidates": [],
+  "schema_version": 1,
+  "symbol": "tvmgen_mlperf_kws_vta_main_0",
+  "template": "mlperf_tiny_fused_conv2d.vta",
+  "tsim_best_observed_cycles": 211054,
+  "tsim_candidate_count": 1,
+  "tsim_config_index": 18,
+  "tsim_cycles": 211054,
+  "tsim_failures": [],
+  "valid_config_space_size": 384,
+  "workload_index": 0,
+  "workload_sha256": "0cf732a3218304416359a0014abbd8600b2c7af7afe7e48a0e37d36c0d4276c4"
+}

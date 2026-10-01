@@ -189,6 +189,11 @@ perf
 !apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/optimal/20261001T174411.872234Z/*.tsim.log
 !apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/deployment-full.json
 !apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/mac-utilization-full.json
+# Keep the approved KWS V1 C4 seed and deployment evidence reviewable.
+!apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/seed/20261001T191431.265469Z/
+!apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/seed/20261001T191431.265469Z/*.json
+!apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/seed/20261001T191431.265469Z/*.tsim.log
+!apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/deployment-seed.json
 *.params
 *.onnx
 *.h5
