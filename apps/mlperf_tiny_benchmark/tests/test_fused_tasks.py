@@ -102,3 +102,11 @@ def test_actual_tensor_bias_task_instantiates_complete_template():
 
     assert schedule is not None
     assert len(tensors) == 4  # result, data, kernel, and actual vector bias input
+
+
+def test_blocked_nchw_vector_bias_indexes_channel_outer_and_inner_lanes():
+    index = fused_tasks._physical_bias_index(
+        "NCHW1n8c", 3, (0, 3, 0, 4, 0, 7), (1, 8, 25, 5, 1, 8), 64
+    )
+
+    assert index == 31

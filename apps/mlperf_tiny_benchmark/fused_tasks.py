@@ -22,6 +22,18 @@ def _as_tuple(value):
     return tuple(_as_tuple(item) if isinstance(item, list) else item for item in value)
 
 
+def _physical_bias_index(layout, logical_axis, indices, output_shape, bias_size):
+    """Map a Relay bias axis onto the blocked VTA tensor axes."""
+    shape = tuple(int(dimension) for dimension in output_shape)
+    if (
+        layout.startswith("NCHW")
+        and len(shape) == 6
+        and bias_size == shape[1] * shape[5]
+    ):
+        return indices[1] * shape[5] + indices[5]
+    return indices[int(logical_axis)]
+
+
 @dataclass(frozen=True)
 class FusedOperatorIdentity:
     """Complete, deterministic identity for one deployed VTA Conv occurrence."""
@@ -227,10 +239,11 @@ def fused_conv2d_packed(data, kernel, strides, padding, dilation, layout, out_dt
     if bias_dtype != "__none__":
         if bias_shape and bias_shape != (-1,):
             bias = te.placeholder(bias_shape, dtype=bias_dtype, name="bias")
-            axis = int(bias_axis)
             value = te.compute(
                 value.shape,
-                lambda *i: value[i] + bias[i[axis]],
+                lambda *i: value[i] + bias[
+                    _physical_bias_index(layout, bias_axis, i, value.shape, bias_shape[0])
+                ],
                 name="fused_bias",
                 tag=topi.tag.ELEMWISE,
             )
