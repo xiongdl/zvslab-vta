@@ -28,7 +28,7 @@ import numpy as np
 import tvm
 import vta
 from vta.backend import normalize_backend
-from tvm import relay
+from tvm import autotvm, relay
 from tvm.contrib import graph_executor
 from tvm.relay.backend import te_compiler
 
@@ -348,12 +348,15 @@ def build_host_artifacts(
     simulator="fsim",
     autotvm_log=None,
     autotvm_sidecar=None,
+    selected_config_log=None,
 ):
     """Build, export, and reload both standard host libraries without simulator loading."""
     _validate_host_codegen(host_codegen)
     _simulator_session(simulator).validate_environment()
     if (autotvm_log is None) != (autotvm_sidecar is None):
         raise ValueError("AutoTVM replay requires both --autotvm-log and --autotvm-sidecar")
+    if selected_config_log is not None and autotvm_log is not None:
+        raise ValueError("selected native records cannot be combined with legacy AutoTVM replay")
     if prepared.reference_module is not prepared.quantized_module:
         raise RuntimeError("pure LLVM build must use the exact shared quantized module object")
 
@@ -368,11 +371,14 @@ def build_host_artifacts(
     history_context = (
         _history_best(autotvm_log, autotvm_sidecar, prepared, simulator)
         if autotvm_log is not None
+        else autotvm.apply_history_best(str(selected_config_log))
+        if selected_config_log is not None
         else nullcontext()
     )
     with history_context:
-        compiler = te_compiler.get() if autotvm_log is not None else None
-        if autotvm_log is not None:
+        replay_enabled = autotvm_log is not None or selected_config_log is not None
+        compiler = te_compiler.get() if replay_enabled else None
+        if replay_enabled:
             # TECompiler cache keys omit AutoTVM history-best dispatch state.
             compiler.clear()
         try:

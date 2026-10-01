@@ -173,3 +173,32 @@ PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:
   vta/apps/mlperf_tiny_benchmark/image_classification_v2/tune/tune.py \
   --replay-manifest vta/apps/mlperf_tiny_benchmark/image_classification_v2/tune/optimal/<run-id>/best-manifest.json
 ```
+
+## Selected-schedule deployment profile
+
+`tune/deployment.py` validates the complete V2 best manifest, builds and
+reloads untuned and selected mixed Graph Executor bundles, and compares both
+against the quantized HOST reference on all ten committed samples. It profiles
+each selected VTA graph node on its graph-resident tensors and applies the
+strict integer gate `10 * abs(deployment_cycles - autotvm_cycles) <
+autotvm_cycles`; equality at 10 percent fails. Before node profiling it checks
+that debug and ordinary full-run TSIM counters agree for the same input and
+selected graph. Output JSON is published only after every output and all eight
+cycle pairs pass. Build bundles and the combined dispatch log are written
+under `build/selected_deployment/`; the report defaults to `tune/deployment.json`
+and a failed run writes `tune/deployment.failure.json`.
+
+Prerequisites are the project Python environment, model and samples, matching
+absolute `vta_64mac.json`, and built TVM/VTA TSIM libraries. Use a complete
+full-search manifest for final acceptance; a complete-coverage bounded
+manifest is suitable for integration verification and remains labeled
+`BOUNDED_SMOKE_INCOMPLETE` in the output.
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/image_classification_v2" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/image_classification_v2/tune/deployment.py \
+  --best-manifest vta/apps/mlperf_tiny_benchmark/image_classification_v2/tune/optimal/<run-id>/best-manifest.json \
+  --output vta/apps/mlperf_tiny_benchmark/image_classification_v2/tune/deployment.json
+```
