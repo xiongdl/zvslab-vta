@@ -1,0 +1,627 @@
+{
+  "baseline_full_model_cycles": [
+    21226413
+  ],
+  "debug_full_run_stats": {
+    "cycle_count": 1360351
+  },
+  "debug_ordinary_counters_agree": true,
+  "geometry_path": "/Users/xdl/Projects/codex-tvm-vta/vta/config/vta_64mac.json",
+  "geometry_sha256": "23b338eacdf5747610d90fd17296e3d0d4236ce416191b7c1cfc597cd67991fa",
+  "manifest_completion_label": "FULL_SEARCH",
+  "manifest_sha256": "6cf6d536fe62794020676be4e5e8cd2facd0165134abd245a6959d9b6522cdc0",
+  "measurement_protocol": {
+    "counted_invocations": 1,
+    "name": "tsim_single_call",
+    "version": 1,
+    "warmup_excluded": true
+  },
+  "model": "image_classification_v2",
+  "model_sha256": "fb17ae9c1b6d0e5bd97f0f35024f207556261d7310b249716c87cc0628214b0e",
+  "occurrences": [
+    {
+      "autotvm_cycles": 267819,
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              4
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              16
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            1
+          ],
+          [
+            "h_nthread",
+            "ot",
+            2
+          ]
+        ],
+        "index": 314
+      },
+      "config_index": 314,
+      "config_sha256": "2bccb8f7f8851d7c15e94c5c8637e037407f3a771b9d834392f809c95c082f19",
+      "deployment_cycles": 267819,
+      "difference_denominator": 267819,
+      "difference_numerator": 0,
+      "difference_percent": 0.0,
+      "fusion_sha256": "9a4b8182481990d589afa13a0f5eddc06eb5b3c36f7fc4d1281c95b81515211b",
+      "graph_func_name": "tvmgen_mlperf_resnet_large_vta_main_0",
+      "graph_node": "tvmgen_mlperf_resnet_large_vta_main_0",
+      "native_record_sha256": "d04b8d3f95cd52423787f4ccc1ef1a8d385b44871f4a0cf6f7b27e002a5d4174",
+      "occurrence": 0,
+      "passed": true,
+      "result_json": "image_classification_v2-workload-000-best.json",
+      "symbol": "tvmgen_mlperf_resnet_large_vta_main_0",
+      "workload_index": 0
+    },
+    {
+      "autotvm_cycles": 267565,
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              8
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              8
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            1
+          ],
+          [
+            "h_nthread",
+            "ot",
+            2
+          ]
+        ],
+        "index": 309
+      },
+      "config_index": 309,
+      "config_sha256": "b33a26845054c304990c382c9c6007a36ce6bf8f551c2d29940a2e0f7b8bcbd9",
+      "deployment_cycles": 267565,
+      "difference_denominator": 267565,
+      "difference_numerator": 0,
+      "difference_percent": 0.0,
+      "fusion_sha256": "df44bb16f14909f39f7301a9fc9b60a85ae7faed7ad58e49752bbeae89190370",
+      "graph_func_name": "tvmgen_mlperf_resnet_large_vta_main_1",
+      "graph_node": "tvmgen_mlperf_resnet_large_vta_main_1",
+      "native_record_sha256": "3dc6bcd48d0cbb7e1642fa71124414f1a4a9ae0bbcf2fd80e49376c4b46c19ac",
+      "occurrence": 1,
+      "passed": true,
+      "result_json": "image_classification_v2-workload-001-best.json",
+      "symbol": "tvmgen_mlperf_resnet_large_vta_main_1",
+      "workload_index": 1
+    },
+    {
+      "autotvm_cycles": 38273,
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              2
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              16
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              10
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            1
+          ],
+          [
+            "h_nthread",
+            "ot",
+            1
+          ]
+        ],
+        "index": 171
+      },
+      "config_index": 171,
+      "config_sha256": "cf09bdccbbe30b43be62a4406dd63cc8fc3298d4833304219b61f2c9e84ae544",
+      "deployment_cycles": 38274,
+      "difference_denominator": 38273,
+      "difference_numerator": 1,
+      "difference_percent": 0.0026128079847412013,
+      "fusion_sha256": "c1a565e23dfd53b03d6f59f209f003a4925034ad4cc377a57d3cd56cf7d3c121",
+      "graph_func_name": "tvmgen_mlperf_resnet_large_vta_main_2",
+      "graph_node": "tvmgen_mlperf_resnet_large_vta_main_2",
+      "native_record_sha256": "878a8c861eb0562bf12c840e5d6ba248ebe39e0d5d729ff49e3be0c786e551df",
+      "occurrence": 2,
+      "passed": true,
+      "result_json": "image_classification_v2-workload-002-best.json",
+      "symbol": "tvmgen_mlperf_resnet_large_vta_main_2",
+      "workload_index": 2
+    },
+    {
+      "autotvm_cycles": 136801,
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              2
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              16
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              2
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            1
+          ],
+          [
+            "h_nthread",
+            "ot",
+            2
+          ]
+        ],
+        "index": 471
+      },
+      "config_index": 471,
+      "config_sha256": "1a71ca0fb194fec793cd4e90e194a2102ba46daeed924c08cc1b2f996b266036",
+      "deployment_cycles": 136801,
+      "difference_denominator": 136801,
+      "difference_numerator": 0,
+      "difference_percent": 0.0,
+      "fusion_sha256": "545af2fffc404fe26b9e8035bde93f8fca8fb65523081ad3c717e1e2eb239cf3",
+      "graph_func_name": "tvmgen_mlperf_resnet_large_vta_main_3",
+      "graph_node": "tvmgen_mlperf_resnet_large_vta_main_3",
+      "native_record_sha256": "5b127d7eae5a895fad964909f37ade538104bd9ceb11adf9b484f9ea0c5be5d9",
+      "occurrence": 3,
+      "passed": true,
+      "result_json": "image_classification_v2-workload-003-best.json",
+      "symbol": "tvmgen_mlperf_resnet_large_vta_main_3",
+      "workload_index": 3
+    },
+    {
+      "autotvm_cycles": 250389,
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              8
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              8
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            2
+          ],
+          [
+            "h_nthread",
+            "ot",
+            1
+          ]
+        ],
+        "index": 418
+      },
+      "config_index": 418,
+      "config_sha256": "ca7a22e61be9341dc677604957b90da6e13fe3acf18d34bb8c20e72dc4ce2501",
+      "deployment_cycles": 250389,
+      "difference_denominator": 250389,
+      "difference_numerator": 0,
+      "difference_percent": 0.0,
+      "fusion_sha256": "b64149fd4322d8b6b50550569b854cefe3912967c8556d1c9d9e503d235abf47",
+      "graph_func_name": "tvmgen_mlperf_resnet_large_vta_main_4",
+      "graph_node": "tvmgen_mlperf_resnet_large_vta_main_4",
+      "native_record_sha256": "6d90c4939b0c044f36593def56e4f2931619adbc81a8e39fc6cb5befb995f4fd",
+      "occurrence": 4,
+      "passed": true,
+      "result_json": "image_classification_v2-workload-004-best.json",
+      "symbol": "tvmgen_mlperf_resnet_large_vta_main_4",
+      "workload_index": 4
+    },
+    {
+      "autotvm_cycles": 30634,
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              4
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              8
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              10
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            1
+          ],
+          [
+            "h_nthread",
+            "ot",
+            1
+          ]
+        ],
+        "index": 270
+      },
+      "config_index": 270,
+      "config_sha256": "78ed9c0c3e3952f0e7b4b590589cb5019f4e19b1c9939deca36827e4c0b8858e",
+      "deployment_cycles": 30641,
+      "difference_denominator": 30634,
+      "difference_numerator": 7,
+      "difference_percent": 0.02285042762943135,
+      "fusion_sha256": "c4862119bc2bc182935265e90cfef165a385705d64fb06949dc55cc9f6e25b3f",
+      "graph_func_name": "tvmgen_mlperf_resnet_large_vta_main_5",
+      "graph_node": "tvmgen_mlperf_resnet_large_vta_main_5",
+      "native_record_sha256": "b5be784dd1a9718ed98dbe06daec93eb136b76864ec0c81e04be26efe0f93cdf",
+      "occurrence": 5,
+      "passed": true,
+      "result_json": "image_classification_v2-workload-005-best.json",
+      "symbol": "tvmgen_mlperf_resnet_large_vta_main_5",
+      "workload_index": 5
+    },
+    {
+      "autotvm_cycles": 126893,
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              2
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              8
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              5
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            2
+          ],
+          [
+            "h_nthread",
+            "ot",
+            1
+          ]
+        ],
+        "index": 589
+      },
+      "config_index": 589,
+      "config_sha256": "37ba2ca8e254f8f83cf288fa62e08093192c00b313bff1badc92a53c542aa00c",
+      "deployment_cycles": 126893,
+      "difference_denominator": 126893,
+      "difference_numerator": 0,
+      "difference_percent": 0.0,
+      "fusion_sha256": "859a6e664bfb2d0543f0f96a7249c9dc622c0514b17753048d17a88ad57ccc83",
+      "graph_func_name": "tvmgen_mlperf_resnet_large_vta_main_6",
+      "graph_node": "tvmgen_mlperf_resnet_large_vta_main_6",
+      "native_record_sha256": "790d8094b9b68caaec6f46fc859fe29d28f5082f8700c4a241bd82c93ee53552",
+      "occurrence": 6,
+      "passed": true,
+      "result_json": "image_classification_v2-workload-006-best.json",
+      "symbol": "tvmgen_mlperf_resnet_large_vta_main_6",
+      "workload_index": 6
+    },
+    {
+      "autotvm_cycles": 241969,
+      "config": {
+        "code_hash": null,
+        "entity": [
+          [
+            "tile_b",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_h",
+            "sp",
+            [
+              -1,
+              8
+            ]
+          ],
+          [
+            "tile_w",
+            "sp",
+            [
+              -1,
+              8
+            ]
+          ],
+          [
+            "tile_ci",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "tile_co",
+            "sp",
+            [
+              -1,
+              1
+            ]
+          ],
+          [
+            "oc_nthread",
+            "ot",
+            2
+          ],
+          [
+            "h_nthread",
+            "ot",
+            1
+          ]
+        ],
+        "index": 591
+      },
+      "config_index": 591,
+      "config_sha256": "be4061206a8f5db2cbcda48eedd8e4178ef43f33777f8061df608038704c3351",
+      "deployment_cycles": 241969,
+      "difference_denominator": 241969,
+      "difference_numerator": 0,
+      "difference_percent": 0.0,
+      "fusion_sha256": "c8c1ca4de451b0aea205dacf41bc604a1f067006758b55615657488411da018d",
+      "graph_func_name": "tvmgen_mlperf_resnet_large_vta_main_7",
+      "graph_node": "tvmgen_mlperf_resnet_large_vta_main_7",
+      "native_record_sha256": "30d19adb747b110bcd6bac09420b1078dd8628919486e96eb188294f998f5fc7",
+      "occurrence": 7,
+      "passed": true,
+      "result_json": "image_classification_v2-workload-007-best.json",
+      "symbol": "tvmgen_mlperf_resnet_large_vta_main_7",
+      "workload_index": 7
+    }
+  ],
+  "ordinary_full_run_stats": {
+    "cycle_count": 1360351
+  },
+  "outputs_passed": 10,
+  "performance_sample": "00-airplane.png",
+  "performance_sample_count": 1,
+  "sample_count": 10,
+  "schema_version": 1,
+  "status": "passed",
+  "tuned_full_model_cycles": [
+    1360351
+  ]
+}

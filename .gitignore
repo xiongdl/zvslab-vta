@@ -182,6 +182,7 @@ perf
 !apps/mlperf_tiny_benchmark/image_classification_v2/tune/optimal/20261001T035246.904010Z/
 !apps/mlperf_tiny_benchmark/image_classification_v2/tune/optimal/20261001T035246.904010Z/*.json
 !apps/mlperf_tiny_benchmark/image_classification_v2/tune/optimal/20261001T035246.904010Z/*.tsim.log
+!apps/mlperf_tiny_benchmark/image_classification_v2/tune/deployment-full.json
 *.params
 *.onnx
 *.h5

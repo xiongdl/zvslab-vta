@@ -188,7 +188,11 @@ def test_selected_lowering_applies_each_configuration_to_its_vta_symbol(
             applied.append(current["config"])
             current["config"] = None
 
-    monkeypatch.setattr(runtime.autotvm.task, "ApplyConfig", ApplyConfig)
+    monkeypatch.setattr(
+        runtime,
+        "_autotvm_api",
+        lambda: SimpleNamespace(task=SimpleNamespace(ApplyConfig=ApplyConfig)),
+    )
     compiler = SimpleNamespace(clear=lambda: None)
     previous = lambda _module: "previous"
     callbacks = {"callback": previous}
