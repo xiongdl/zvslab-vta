@@ -1,6 +1,7 @@
 """Tests for the validated per-layer VTA MAC utilization core."""
 
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -10,12 +11,23 @@ import pytest
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "mac_utilization.py"
+DEPLOYMENT_REPORT_SCRIPT = Path(__file__).resolve().parents[4] / "scripts" / "mac_utilization.py"
 
 
 @pytest.fixture(scope="module")
 def utilization():
     spec = importlib.util.spec_from_file_location("mlperf_tiny_mac_utilization", SCRIPT_PATH)
     module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_deployment_report_calculator():
+    spec = importlib.util.spec_from_file_location(
+        "mlperf_tiny_deployment_report_calculator", DEPLOYMENT_REPORT_SCRIPT
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -356,3 +368,97 @@ def test_duplicate_task_extraction_restores_task_extract_environment(utilization
         )
     assert FakeTaskExtractEnv.current is existing
     assert FakeTaskExtractEnv.__dict__["get"] is prior_get
+
+
+
+
+def test_versioned_deployment_report_accepts_inclusive_ten_percent_and_zero_based_occurrence(
+    tmp_path
+):
+    utilization = _load_deployment_report_calculator()
+    geometry = tmp_path / "geometry.json"
+    geometry.write_text('{"LOG_BATCH": 0, "LOG_BLOCK": 3}\n', encoding="utf-8")
+    geometry_hash = hashlib.sha256(geometry.read_bytes()).hexdigest()
+    model_hash, fusion_hash, workload_hash = "a" * 64, "b" * 64, "c" * 64
+    config = {"tile_h": 1}
+    record = tmp_path / "best.log"
+    record.write_text("native record\n", encoding="utf-8")
+    result = {
+        "schema_version": 1,
+        "model_sha256": model_hash,
+        "workload_index": 0,
+        "occurrence": 0,
+        "symbol": "vta_symbol_0",
+        "fusion_sha256": fusion_hash,
+        "workload_sha256": workload_hash,
+        "tsim_cycles": 100,
+        "conv_config": config,
+        "mac_count": 100,
+        "best_native_record": record.name,
+        "best_native_record_sha256": hashlib.sha256(record.read_bytes()).hexdigest(),
+    }
+    result_path = tmp_path / "result.json"
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    manifest = {
+        "schema_version": 1,
+        "model_sha256": model_hash,
+        "geometry_sha256": geometry_hash,
+        "measurement_protocol": {
+            "name": "tsim_single_call", "version": 1, "warmup_excluded": True,
+        },
+        "workload_count": 1,
+        "entries": [{
+            "occurrence": 0,
+            "workload_index": 0,
+            "symbol": "vta_symbol_0",
+            "fusion_sha256": fusion_hash,
+            "tsim_cycles": 100,
+            "result_json": result_path.name,
+        }],
+    }
+    manifest_path = tmp_path / "best-manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    config_hash = hashlib.sha256(
+        json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    report = {
+        "schema_version": 1,
+        "artifact_kind": "vta_deployment_profile_v1",
+        "model_id": "remaining_model",
+        "model_sha256": model_hash,
+        "backend": "tsim",
+        "geometry": {
+            "path": str(geometry),
+            "sha256": geometry_hash,
+            "peak_macs_per_cycle": 64,
+        },
+        "measurement_protocol": {
+            "name": "tsim_single_call", "version": 1, "warmup_excluded": True,
+            "operator_counted_invocations": 1, "full_model_counted_invocations": 1,
+        },
+        "full_model": {"invocation_count": 1, "baseline_cycles": 500, "tuned_cycles": 500},
+        "scope": {
+            "full_model_cycles": "uninstrumented_complete_deployment",
+            "host_operations": "excluded_from_vta_mac_totals",
+        },
+        "selected_manifest": str(manifest_path),
+        "selected_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "occurrence_base": 0,
+        "occurrences": [{
+            "occurrence": 0,
+            "symbol": "vta_symbol_0",
+            "fusion_sha256": fusion_hash,
+            "workload_sha256": workload_hash,
+            "config_sha256": config_hash,
+            "logical_macs_per_invocation": 100,
+            "counted_invocations": 1,
+            "deployment_cycles": 110,
+            "autotvm_cycles": 100,
+            "relative_cycle_difference": 0.1,
+        }],
+    }
+
+    calculated = utilization.calculate_deployment_report(report)
+
+    assert calculated["occurrences"][0]["occurrence"] == 0
+    assert calculated["occurrences"][0]["relative_cycle_difference"] == 0.1
