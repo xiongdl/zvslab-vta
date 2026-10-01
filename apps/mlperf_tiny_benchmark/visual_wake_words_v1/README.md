@@ -92,7 +92,7 @@ PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   --simulator tsim --host-codegen all
 ```
 
-Successful output reports twelve deterministic VTA regions, ten bounded output
+Successful output reports thirteen deterministic VTA regions, ten bounded output
 comparisons per host, and positive simulator counters. FSIM validates GEMM,
 weight-load, and output-store counters; TSIM validates its supported
 `cycle_count` counter only; FSIM-only counters are not required for TSIM.
@@ -144,3 +144,23 @@ logs, sidecars, and replay bundles are stored below ignored `build/` paths.
 Reported TSIM `cycle_count` is simulated accelerator work, not FPGA latency or
 an MLPerf result. The existing CPU/VTA routing and ten-sample correctness
 contract remain in force for tuned replay.
+
+## Complete-fusion two-stage tuning
+
+The model-local adapter extracts each of the thirteen VTA-routed Conv fusions
+from the prepared mixed graph, including the model's exact bias, shift, clip,
+and cast arithmetic. Depthwise Conv, pooling, dense, reshape, and softmax
+operators stay on the existing host path. Every VTA occurrence keeps its own
+symbol and workload identity. Run the one-success seed phase first; the full
+search requires a passing one-sample seed deployment report.
+
+```bash
+MODEL=visual_wake_words_v1
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL" \
+  ./.envs/tvm-vta-env/bin/python \
+  "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/tune.py" --seed --all --trial-batch 1
+```
+
+The seed manifest and selected deployment report are stored below `tune/`;
+FSIM/TSIM state and temporary builds are stored below `build/`.
