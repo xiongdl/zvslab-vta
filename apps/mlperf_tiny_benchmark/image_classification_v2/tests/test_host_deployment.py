@@ -146,6 +146,11 @@ def test_build_exports_and_reloads_two_standard_dsos_without_loading_fsim(
     monkeypatch.setattr(deployment_runtime.vta, "build_config", fake_build_config)
     monkeypatch.setattr(deployment_runtime, "_mixed_target", lambda: mixed_target)
     monkeypatch.setattr(deployment_runtime, "_load_fsim", forbidden_fsim_load)
+    monkeypatch.setattr(
+        deployment_runtime,
+        "_autotvm_api",
+        lambda: pytest.fail("HOST/FSIM builds without tuning must not load AutoTVM"),
+    )
 
     artifacts = deployment_runtime.build_host_artifacts(prepared, tmp_path)
 
@@ -608,15 +613,19 @@ def test_application_sources_use_only_the_approved_host_flow():
         "fvp",
     ]:
         assert forbidden not in lowered
-    assert "import autotvm" not in lowered
-    assert "from tvm import autotvm" not in lowered
-
     runtime_tree = ast.parse(sources["runtime.py"])
     top_level_imports = [
         node.module
         for node in runtime_tree.body
         if isinstance(node, ast.ImportFrom) and node.module is not None
     ]
+    assert "tvm.autotvm" not in top_level_imports
+    assert all(
+        alias.name != "autotvm"
+        for node in runtime_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == "tvm"
+        for alias in node.names
+    )
     assert "vta.testing" not in top_level_imports
     assert "relay.build" in combined
     assert ".export_library" in combined

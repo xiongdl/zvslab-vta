@@ -18,6 +18,7 @@
 """Build, reload, and execute the fixed MLPerf Tiny HOST deployment."""
 
 import json
+import importlib
 import importlib.util
 import sys
 from contextlib import contextmanager, nullcontext
@@ -28,7 +29,7 @@ import numpy as np
 import tvm
 import vta
 from vta.backend import normalize_backend
-from tvm import autotvm, relay
+from tvm import relay
 from tvm.contrib import graph_executor
 from tvm.relay.backend import te_compiler
 
@@ -341,6 +342,11 @@ def _history_best(log_path, sidecar_path, prepared, simulator):
     )
 
 
+def _autotvm_api():
+    """Load AutoTVM only for an explicit schedule replay request."""
+    return importlib.import_module("tvm.autotvm")
+
+
 def _lower_selected_relay_module(module, config_by_symbol, compiler):
     """Lower each VTA function under its selected occurrence configuration."""
     transform = vta.relay.transform
@@ -367,7 +373,7 @@ def _lower_selected_relay_module(module, config_by_symbol, compiler):
     for global_var, function in global_functions:
         symbol = function.attrs.get_str("global_symbol")
         compiler.clear()
-        with autotvm.task.ApplyConfig(config_by_symbol[symbol]):
+        with _autotvm_api().task.ApplyConfig(config_by_symbol[symbol]):
             primfunc = transform.lower_vta_function(function, compiler_config)
         outlined.update_func(global_var, primfunc)
         compiler.clear()
@@ -430,7 +436,7 @@ def build_host_artifacts(
     history_context = (
         _history_best(autotvm_log, autotvm_sidecar, prepared, simulator)
         if autotvm_log is not None
-        else autotvm.apply_history_best(str(selected_config_log))
+        else _autotvm_api().apply_history_best(str(selected_config_log))
         if selected_config_log is not None
         else nullcontext()
     )
