@@ -240,11 +240,12 @@ def execute_deployment(manifest_path, output_path, build_dir):
     reference_factory = tvm.relay.build(prepared.reference_module, target="llvm")
     compiler = te_compiler.get()
     compiler.clear()
+    device_plan = runtime._mixed_build_plan(prepared.mixed_module, "llvm")
     try:
         with _selected_lowering(tvm, vta, autotvm, compiler, config_by_symbol):
             with vta.build_config():
                 mixed_factory = tvm.relay.build(
-                    prepared.mixed_module, target=runtime._mixed_target("llvm")
+                    device_plan.module, target=device_plan.targets
                 )
     finally:
         compiler.clear()
@@ -269,7 +270,7 @@ def execute_deployment(manifest_path, output_path, build_dir):
 
     simulator_session = runtime._simulator_session("tsim").validate_environment()
     simulator = simulator_session.load()
-    device = tvm.ext_dev(0)
+    device = (tvm.cpu(0), tvm.ext_dev(0))
 
     def make_graph(bundle, debug=False):
         creator = debug_executor.create if debug else graph_executor.create
@@ -297,7 +298,8 @@ def execute_deployment(manifest_path, output_path, build_dir):
     # Baseline is built without selected dispatch, then compared with the tuned graph.
     compiler.clear()
     with vta.build_config():
-        baseline_factory = tvm.relay.build(prepared.mixed_module, target=runtime._mixed_target("llvm"))
+        baseline_plan = runtime._mixed_build_plan(prepared.mixed_module, "llvm")
+        baseline_factory = tvm.relay.build(baseline_plan.module, target=baseline_plan.targets)
     baseline_bundle = export_graph_bundle(
         baseline_factory, build_dir / "baseline", "mixed", artifact_name="kws-v1-baseline",
         artifact_role="mixed", model_sha256=prepared.imported.model_sha256,
