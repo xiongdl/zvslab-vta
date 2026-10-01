@@ -200,3 +200,20 @@ PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:
   "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/tune.py" \
   --replay-manifest <self-contained-best-manifest.json>
 ```
+
+Apply the seed manifest in a separate TSIM process. Deployment runs the first
+committed sample through the existing one-second PCM-to-log-mel preprocessing,
+checks exact HOST output, profiles the routed Conv node, and records one model
+invocation with no carried recurrent state. Ordinary and debug TSIM counters
+must agree, and the node cycle count must be within 10% of its AutoTVM TSIM
+measurement.
+
+```bash
+MODEL=streaming_wakeword_v1
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL" \
+  ./.envs/tvm-vta-env/bin/python \
+  "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/deployment.py" \
+  --best-manifest "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/seed/<run-id>/best-manifest.json" \
+  --output "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/deployment-seed.json"
+```
