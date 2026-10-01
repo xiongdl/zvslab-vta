@@ -22,6 +22,7 @@ from vta.relay import plan_devices_for_vta
 
 from graph_artifacts import export_graph_bundle, validate_output_root
 from model_pipeline import (
+    CLIP_FRAMES,
     INPUT_DTYPE,
     INPUT_NAME,
     INPUT_SHAPE,

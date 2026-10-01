@@ -197,6 +197,10 @@ def test_runtime_assets_are_repository_owned_and_do_not_reference_envs():
         for path in APP_ROOT.rglob("*")
         if path.is_file()
         and path.suffix.lower() not in {".md", ".wav", ".tflite"}
+        and not (
+            (APP_ROOT / "tune").resolve() in path.resolve().parents
+            and path.suffix.lower() != ".py"
+        )
         and not {"tests", "build", "__pycache__"}.intersection(
             path.relative_to(APP_ROOT).parts
         )

@@ -270,3 +270,8 @@ tvm/
 !apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/seed/20261001T162746.148776Z/*.tsim.log
 !apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/deployment-seed.json
 !apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/deployment-seed-*-failure.json
+# Keep the approved Streaming Wakeword C6 seed and deployment evidence reviewable.
+!apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/seed/20261001T204808.167658Z/
+!apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/seed/20261001T204808.167658Z/*.json
+!apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/seed/20261001T204808.167658Z/*.tsim.log
+!apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/deployment-seed.json

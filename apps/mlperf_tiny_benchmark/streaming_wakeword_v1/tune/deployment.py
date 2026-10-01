@@ -29,7 +29,7 @@ def _import_runtime():
         sys.path.insert(0, app_path)
     for name in ("runtime", "model_pipeline", "graph_artifacts"):
         sys.modules.pop(name, None)
-    return _load_module("ad_v1_deployment_runtime", APP_ROOT / "runtime.py")
+    return _load_module("streaming_wakeword_deployment_runtime", APP_ROOT / "runtime.py")
 
 
 def _load_fused_tasks():
@@ -44,7 +44,7 @@ def _load_fused_tasks():
 
 
 def _load_legacy():
-    return _load_module("ad_v1_deployment_legacy", APP_ROOT / "tune.py")
+    return _load_module("streaming_wakeword_deployment_legacy", APP_ROOT / "tune.py")
 
 
 def _canonical_config(config):
