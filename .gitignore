@@ -187,6 +187,8 @@ perf
 !apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/optimal/20261001T174411.872234Z/
 !apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/optimal/20261001T174411.872234Z/*.json
 !apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/optimal/20261001T174411.872234Z/*.tsim.log
+!apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/deployment-full.json
+!apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/mac-utilization-full.json
 *.params
 *.onnx
 *.h5

@@ -213,10 +213,12 @@ def validate_occurrence_rows(rows, expected):
 def build_deployment_report(*, phase, model_id, model_sha256, geometry_path,
                             sample, selected_manifest_path, full_model,
                             occurrences, expected_occurrences, peak_macs_per_cycle,
-                            completion_label="SEED_ALIGNMENT"):
+                            completion_label=None):
     """Build a calculator-compatible report after all one-sample gates pass."""
     if phase not in ("seed", "selected"):
         raise ValueError("deployment phase must be seed or selected")
+    if completion_label is None:
+        completion_label = "SEED_ALIGNMENT" if phase == "seed" else "OPTIMAL_DEPLOYMENT"
     if not isinstance(model_id, str) or not model_id:
         raise ValueError("deployment model_id is required")
     for label, value in (("model_sha256", model_sha256), ("sample.sha256", sample.get("sha256"))):

@@ -199,6 +199,7 @@ def test_build_report_has_calculator_compatible_zero_based_occurrence(tmp_path):
         peak_macs_per_cycle=64,
     )
     assert report["phase"] == "selected"
+    assert report["completion_label"] == "OPTIMAL_DEPLOYMENT"
     assert report["sample_count"] == 1
     assert report["occurrence_base"] == 0
     assert report["occurrences"][0]["logical_macs_per_invocation"] == 100
