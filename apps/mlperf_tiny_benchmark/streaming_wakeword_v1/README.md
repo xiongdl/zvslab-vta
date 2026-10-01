@@ -157,3 +157,46 @@ configuration, log hash, and task coverage before history-best compilation.
 Tuning changes only the compiled schedule: streaming state, chunk boundaries,
 and the existing three-sample output checks remain in the runtime path. TSIM
 reports simulator `cycle_count`.
+
+
+## Complete-fusion two-stage tuning
+
+The model-local adapter extracts every routed VTA Conv occurrence from the
+prepared Streaming Wakeword graph, including bias, shift, clipping, and cast.
+Host-routed dense and softmax work stays in the model pipeline. Each occurrence
+retains its own model, symbol, fusion, and workload identity. Seed artifacts and
+durable FSIM/TSIM state are kept under `tune/` and `build/two_stage_tuning/`.
+
+Start with one successful FSIM schedule, then measure the schedule on AutoTVM
+TSIM. Run the real deployment gate against its exported manifest before any
+full search.
+
+```bash
+MODEL=streaming_wakeword_v1
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL" \
+  ./.envs/tvm-vta-env/bin/python \
+  "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/tune.py" --seed --all --trial-batch 1
+```
+
+The seed export names its run directory. After its one-sample TSIM deployment
+passes the inclusive 10% cycle gate and ordinary/debug counters agree, start
+full search with the passing report. Full search defaults to batches of 100
+trials and a target of 20 successful schedules; resume and replay operate on
+model-bound manifests.
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL" \
+  ./.envs/tvm-vta-env/bin/python \
+  "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/tune.py" --all \
+  --alignment-report "$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL/tune/deployment-seed.json"
+
+./.envs/tvm-vta-env/bin/python \
+  "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/tune.py" \
+  --resume-manifest <prior-manifest.json>
+
+./.envs/tvm-vta-env/bin/python \
+  "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/tune.py" \
+  --replay-manifest <self-contained-best-manifest.json>
+```
