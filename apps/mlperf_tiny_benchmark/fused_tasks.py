@@ -56,7 +56,7 @@ class FusedOperatorIdentity:
     def task_args(self):
         return (
             *self.conv_workload[1:],
-            self.bias_shape,
+            self.bias_shape if self.bias_shape else (-1,),
             self.bias_dtype or "__none__",
             self.bias_axis if self.bias_axis is not None else -1,
             self.bias_values[0] if self.bias_shape == () else 0,
@@ -225,7 +225,7 @@ def fused_conv2d_packed(data, kernel, strides, padding, dilation, layout, out_dt
     )
     value = conv
     if bias_dtype != "__none__":
-        if bias_shape:
+        if bias_shape and bias_shape != (-1,):
             bias = te.placeholder(bias_shape, dtype=bias_dtype, name="bias")
             axis = int(bias_axis)
             value = te.compute(
@@ -247,7 +247,7 @@ def fused_conv2d_packed(data, kernel, strides, padding, dilation, layout, out_dt
                        name="fused_cast", tag=topi.tag.ELEMWISE)
     schedule = schedule_conv2d_packed.__wrapped__(cfg, [value])
     inputs = [value, data, kernel]
-    if bias_dtype != "__none__" and bias_shape:
+    if bias_dtype != "__none__" and bias_shape and bias_shape != (-1,):
         inputs.append(bias)
     return schedule, inputs
 

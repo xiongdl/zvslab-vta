@@ -181,3 +181,33 @@ PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   --autotvm-log <anomaly_detection_v1-tsim.log> \
   --autotvm-sidecar <anomaly_detection_v1-tsim.json>
 ```
+
+## Complete-fusion two-stage tuning
+
+The AD V1 two-stage adapter prepares this model's own quantized mixed graph,
+extracts all nine deployed VTA fusion occurrences, and preserves the existing
+HOST/VTA partition and audio preprocessing. A seed run searches one successful
+FSIM schedule per occurrence and measures each on TSIM. A full run requires a
+passing seed deployment alignment report and defaults to batches of 100
+configurations until each occurrence has 20 successful schedules or its valid
+space is exhausted. `--workload-index` supports one-occurrence execution;
+`--resume-manifest`, `--replay-manifest`, and `--artifact-dir` support resume
+and standalone validation.
+
+Run from the repository root with the project Python environment and the same
+absolute geometry file for both backend processes:
+
+```bash
+MODEL=anomaly_detection_v1
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL"
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim PYTHONPATH="$PYTHONPATH" \
+  ./.envs/tvm-vta-env/bin/python "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/tune.py" --seed
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim PYTHONPATH="$PYTHONPATH" \
+  ./.envs/tvm-vta-env/bin/python "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/tune.py" --all --alignment-report <seed-deployment.json>
+```
+
+The adapter uses 60-second FSIM and 120-second TSIM candidate timeouts. Search
+state and intermediate logs go below the model's ignored
+`build/two_stage_tuning/`; self-contained native records and manifests are
+written below `tune/optimal/` by default. Seed artifacts use a separate
+`--artifact-dir` and remain distinct from full-search evidence.
