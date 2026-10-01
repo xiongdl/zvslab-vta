@@ -164,3 +164,22 @@ PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:
 
 The seed manifest and selected deployment report are stored below `tune/`;
 FSIM/TSIM state and temporary builds are stored below `build/`.
+
+Apply the seed schedule to one image using the existing HOST reference and
+manifest-label checks. This deployment report is the required alignment gate
+for the later full search:
+
+```bash
+MODEL=visual_wake_words_v1
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL" \
+  ./.envs/tvm-vta-env/bin/python \
+  "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/deployment.py" \
+  --best-manifest "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/seed/<run-id>/best-manifest.json" \
+  --output "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/deployment-seed.json"
+```
+
+The report includes all thirteen occurrence cycle pairs, exact image identity,
+the complete-model baseline/tuned TSIM counts, and the one-image stateless
+execution policy. Full search accepts this report only when HOST correctness,
+ordinary/debug counter agreement, and every inclusive 10% cycle gate pass.
