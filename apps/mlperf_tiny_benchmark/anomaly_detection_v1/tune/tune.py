@@ -556,7 +556,7 @@ def _export_best_artifacts(run_dir, run_manifest, prepared, identities, tasks, a
     manifest = {
         "schema_version": 1,
         "status": "complete" if not failures and len(entries) == len(run_manifest["selected_workload_indices"]) else "incomplete",
-        "phase": run_manifest.get("phase", "full"),
+        "phase": "seed" if run_manifest.get("phase") == "seed" else "selected",
         "model": "anomaly_detection_v1",
         "model_id": "anomaly_detection_v1",
         "model_sha256": model_sha,

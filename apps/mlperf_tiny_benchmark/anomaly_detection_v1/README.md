@@ -211,3 +211,20 @@ state and intermediate logs go below the model's ignored
 `build/two_stage_tuning/`; self-contained native records and manifests are
 written below `tune/optimal/` by default. Seed artifacts use a separate
 `--artifact-dir` and remain distinct from full-search evidence.
+
+Deploy the seed or selected manifest once on TSIM with the model's existing
+first committed normal sample and the first deterministic representative
+feature window. The adapter checks the existing reconstruction-score tolerance,
+requires ordinary/debug full-run counters to agree, measures each graph-resident
+VTA node once, and writes per-occurrence TSIM cycles with the inclusive 10%
+comparison. It records the sample filename, file hash, window index, and total
+window count in the deployment JSON.
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/anomaly_detection_v1" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/deployment.py \
+  --best-manifest <seed-best-manifest.json> \
+  --output vta/apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/deployment-seed.json
+```
