@@ -76,3 +76,11 @@ def test_configs_remain_bound_to_each_symbol_and_occurrence():
     entries[1]["symbol"] = "ad_vta_0"
     with pytest.raises(ValueError, match="identity mismatch"):
         deployment.config_entries_by_symbol(identities, entries)
+
+
+def test_config_identity_normalizes_native_tuples_to_json_arrays():
+    deployment = _load_deployment()
+
+    assert deployment._canonical_config({"entity": (("tile", "sp", (1, 2)),)}) == deployment._canonical_config(
+        {"entity": [["tile", "sp", [1, 2]]]}
+    )

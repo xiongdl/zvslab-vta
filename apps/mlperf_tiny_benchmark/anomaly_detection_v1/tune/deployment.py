@@ -47,6 +47,10 @@ def _load_legacy():
     return _load_module("ad_v1_deployment_legacy", APP_ROOT / "tune.py")
 
 
+def _canonical_config(config):
+    return json.dumps(config, sort_keys=True, separators=(",", ":"))
+
+
 def compare_cycles(deployment_cycles, autotvm_cycles):
     from deployment_evidence import cycles_within_ten_percent
 
@@ -153,7 +157,7 @@ def validate_seed_manifest(path, prepared, identities):
         result = replay["result"]
         if result.get("model") != "anomaly_detection_v1" or result.get("fusion_sha256") != identity.sha256:
             raise ValueError(f"selected native record identity mismatch at occurrence {identity.occurrence}")
-        if replay["config"].to_json_dict() != entry.get("config"):
+        if _canonical_config(replay["config"].to_json_dict()) != _canonical_config(entry.get("config")):
             raise ValueError(f"selected config differs from its native record at occurrence {identity.occurrence}")
     validate_selected_configs(manifest, expected, phase=manifest.get("phase", "seed"))
     return manifest, [indexed[index] for index in range(len(identities))], tasks
@@ -223,7 +227,7 @@ def execute_deployment(manifest_path, output_path, build_dir):
     for identity, entry in zip(identities, entries):
         replay = tuner.replay_result(Path(manifest_path).resolve().parent / entry["result_json"],
                                      expected_workload_index=identity.occurrence)
-        if replay["config"].to_json_dict() != config_by_symbol[identity.symbol]:
+        if _canonical_config(replay["config"].to_json_dict()) != _canonical_config(config_by_symbol[identity.symbol]):
             raise ValueError(f"selected native config mismatch at occurrence {identity.occurrence}")
         config_by_symbol[identity.symbol] = replay["config"]
         record_by_occurrence[identity.occurrence] = replay["result"]
