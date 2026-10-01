@@ -1,7 +1,7 @@
 {
   "artifact_kind": "self_contained_native_best_v1",
   "best_native_record": "image_classification_v1-workload-005-best.tsim.log",
-  "best_native_record_sha256": "f4a4b35499f6b2d30b3015574971eb6293d41799c34a714bbaccc50d652f3cef",
+  "best_native_record_sha256": "e6b8f9e5efb4b0abe291e58f7e86102c2b41894c674615a7cb06fc97810f5a06",
   "bounded": false,
   "conv_config": {
     "code_hash": null,
@@ -19,7 +19,7 @@
         "sp",
         [
           -1,
-          8
+          2
         ]
       ],
       [
@@ -49,7 +49,7 @@
       [
         "oc_nthread",
         "ot",
-        1
+        2
       ],
       [
         "h_nthread",
@@ -57,7 +57,7 @@
         1
       ]
     ],
-    "index": 111
+    "index": 301
   },
   "conv_schedule_key": [
     "conv2d_packed.vta",
@@ -824,8 +824,8 @@
   "template": "ic_v1_fused_conv2d.vta",
   "tsim_best_observed_cycles": 7097,
   "tsim_candidate_count": 39,
-  "tsim_config_index": 111,
-  "tsim_cycles": 7980,
+  "tsim_config_index": 301,
+  "tsim_cycles": 7097,
   "tsim_failures": [],
   "valid_config_space_size": 768,
   "workload_index": 5,

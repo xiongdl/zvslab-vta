@@ -151,11 +151,10 @@ def _pack_weight(weight, shape, kernel_layout, config):
 def _pack_output_constant(constant, output_layout, config):
     values = constant.data.numpy()
     if values.ndim == 0:
-        values = np.broadcast_to(
-            values,
-            (1, 1, 1, config.batch, config.block_out),
-        )
-        return relay.const(values.copy(), dtype=constant.data.dtype)
+        # Keep scalar constants scalar. VTA's ALU can encode scalar arithmetic
+        # as an immediate; expanding it to a packed tensor forces an otherwise
+        # unnecessary DRAM-to-accumulator DMA during deployment.
+        return constant
 
     channel_vector = values.ndim == 1
     if values.ndim == 1:

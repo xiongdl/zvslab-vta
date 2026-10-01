@@ -338,10 +338,9 @@ def test_legalize_vta_function_packs_optional_constant_for_broadcast(bias_kind):
 
 
 @pytest.mark.parametrize(("data_layout", "kernel_layout"), SUPPORTED_LAYOUTS)
-def test_legalize_vta_function_broadcasts_scalar_output_constant_exactly(
+def test_legalize_vta_function_preserves_scalar_output_constant_exactly(
     data_layout, kernel_layout
 ):
-    env = vta.get_env()
     external = _partitioned_function(
         "scalar_add",
         data_layout=data_layout,
@@ -352,13 +351,7 @@ def test_legalize_vta_function_broadcasts_scalar_output_constant_exactly(
     packed_constant = packed_add.args[1]
 
     assert isinstance(packed_constant, relay.Constant)
-    assert tuple(int(dim) for dim in packed_constant.checked_type.shape) == (
-        1,
-        1,
-        1,
-        env.BATCH,
-        env.BLOCK_OUT,
-    )
+    assert tuple(int(dim) for dim in packed_constant.checked_type.shape) == ()
     np.testing.assert_array_equal(packed_constant.data.numpy(), 64)
 
     input_shape = tuple(int(dim) for dim in external.params[0].checked_type.shape)

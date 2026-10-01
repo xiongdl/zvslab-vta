@@ -94,6 +94,25 @@ def test_identity_roundtrips_and_distinguishes_postprocessing(fused, prepared):
     assert changed.conv_workload == identity.conv_workload
 
 
+def test_vta_scalar_bias_stays_an_alu_immediate(prepared):
+    import vta
+
+    legalized = vta.relay.transform.legalize_vta_function(_outlined_vta_functions(prepared)[0])
+    scalar_biases = []
+
+    def visit(node):
+        if isinstance(node, relay.Call) and isinstance(node.op, tvm.ir.Op) and node.op.name == "add":
+            scalar_biases.extend(
+                arg for arg in node.args
+                if isinstance(arg, relay.Constant) and arg.data.shape == ()
+            )
+
+    relay.analysis.post_order_visit(legalized.body, visit)
+
+    assert scalar_biases
+    assert all(int(constant.data.numpy()) == 64 for constant in scalar_biases)
+
+
 def test_real_fusion_reference_covers_negative_and_saturated_results(prepared, fused):
     function = _outlined_vta_functions(prepared)[0]
     identity = fused.extract_fused_identities(prepared)[0]

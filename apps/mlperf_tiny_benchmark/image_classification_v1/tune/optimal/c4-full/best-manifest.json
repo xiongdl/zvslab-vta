@@ -16,23 +16,23 @@
     {
       "fusion_sha256": "3d9433cae34641e69515daa6801f9fd9ca1ee908fae963bc272156ea17c65bca",
       "native_record": "image_classification_v1-workload-001-best.tsim.log",
-      "native_record_sha256": "41fe672849907ca53d7ea3aa69a06d4275cace28cf15c8434768b397ea348c0b",
+      "native_record_sha256": "289f0a58d90f23c51a72b3d5de18a9189729ea0aff2037e72aff4055c01d99f4",
       "occurrence": 1,
       "result_json": "image_classification_v1-workload-001-best.json",
       "symbol": "tvmgen_mlperf_resnet_vta_main_1",
-      "tsim_config_index": 105,
-      "tsim_cycles": 54144,
+      "tsim_config_index": 106,
+      "tsim_cycles": 53124,
       "workload_index": 1
     },
     {
       "fusion_sha256": "fcd01dc816a8a5b0f8ae6d651159365389ee3052622beb97bd7d56ef3a691793",
       "native_record": "image_classification_v1-workload-002-best.tsim.log",
-      "native_record_sha256": "79182870fe169dbaa4cef173ec86efe80c817e9d8254c3d329968c656fa56fa1",
+      "native_record_sha256": "3b9fa2495d8590f9c3d86964935916e92bcfd08742c50df84779d27d5fcb3500",
       "occurrence": 2,
       "result_json": "image_classification_v1-workload-002-best.json",
       "symbol": "tvmgen_mlperf_resnet_vta_main_2",
-      "tsim_config_index": 64,
-      "tsim_cycles": 14338,
+      "tsim_config_index": 209,
+      "tsim_cycles": 11507,
       "workload_index": 2
     },
     {
@@ -60,12 +60,12 @@
     {
       "fusion_sha256": "4cae78266972f7736e32f0dca6dd9a5eb353eff80c6627c39113dd3b399db940",
       "native_record": "image_classification_v1-workload-005-best.tsim.log",
-      "native_record_sha256": "f4a4b35499f6b2d30b3015574971eb6293d41799c34a714bbaccc50d652f3cef",
+      "native_record_sha256": "e6b8f9e5efb4b0abe291e58f7e86102c2b41894c674615a7cb06fc97810f5a06",
       "occurrence": 5,
       "result_json": "image_classification_v1-workload-005-best.json",
       "symbol": "tvmgen_mlperf_resnet_vta_main_5",
-      "tsim_config_index": 111,
-      "tsim_cycles": 7980,
+      "tsim_config_index": 301,
+      "tsim_cycles": 7097,
       "workload_index": 5
     },
     {

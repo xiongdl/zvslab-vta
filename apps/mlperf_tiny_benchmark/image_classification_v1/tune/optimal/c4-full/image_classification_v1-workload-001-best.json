@@ -1,7 +1,7 @@
 {
   "artifact_kind": "self_contained_native_best_v1",
   "best_native_record": "image_classification_v1-workload-001-best.tsim.log",
-  "best_native_record_sha256": "41fe672849907ca53d7ea3aa69a06d4275cace28cf15c8434768b397ea348c0b",
+  "best_native_record_sha256": "289f0a58d90f23c51a72b3d5de18a9189729ea0aff2037e72aff4055c01d99f4",
   "bounded": false,
   "conv_config": {
     "code_hash": null,
@@ -19,7 +19,7 @@
         "sp",
         [
           -1,
-          8
+          16
         ]
       ],
       [
@@ -57,7 +57,7 @@
         1
       ]
     ],
-    "index": 105
+    "index": 106
   },
   "conv_schedule_key": [
     "conv2d_packed.vta",
@@ -890,19 +890,14 @@
   "model_sha256": "b5c0046d6e0328b4956afd6baa29555a29b1f1c65bdd45aaed75b7cd484d9f79",
   "occurrence": 1,
   "real_conv_lowering": true,
-  "rejected_unlowerable_tsim_candidates": [
-    {
-      "config_index": 106,
-      "reason": "InternalError: Check failed: total_bits <= info->max_num_bits (262400 vs. 262144) : Allocation exceed bound of memory tag local.acc_buffer"
-    }
-  ],
+  "rejected_unlowerable_tsim_candidates": [],
   "schema_version": 1,
   "symbol": "tvmgen_mlperf_resnet_vta_main_1",
   "template": "ic_v1_fused_conv2d.vta",
   "tsim_best_observed_cycles": 53124,
   "tsim_candidate_count": 21,
-  "tsim_config_index": 105,
-  "tsim_cycles": 54144,
+  "tsim_config_index": 106,
+  "tsim_cycles": 53124,
   "tsim_failures": [],
   "valid_config_space_size": 576,
   "workload_index": 1,
