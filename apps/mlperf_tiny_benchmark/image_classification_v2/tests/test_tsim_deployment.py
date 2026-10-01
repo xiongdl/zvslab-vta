@@ -136,6 +136,84 @@ def test_tsim_root_and_public_matrix_alias(deployment_runtime):
     assert deployment_runtime.FsimMatrixResult is deployment_runtime.SimulationMatrixResult
 
 
+def test_selected_lowering_applies_each_configuration_to_its_vta_symbol(
+    deployment_runtime, monkeypatch,
+):
+    """The selected occurrence map must reach the real per-symbol lowering hook."""
+    runtime = deployment_runtime
+    selected = {"vta_0": object(), "vta_1": object()}
+    applied = []
+    current = {"config": None}
+
+    class Function:
+        def __init__(self, symbol):
+            self.attrs = SimpleNamespace(get_str=lambda _key: symbol)
+            self.handle = SimpleNamespace(value=symbol)
+
+    class GlobalVar:
+        def __init__(self, symbol):
+            self.name_hint = symbol
+
+    class Outlined:
+        def __init__(self):
+            self.functions = [(GlobalVar(symbol), Function(symbol)) for symbol in selected]
+            self.updated = {}
+
+        def update_func(self, global_var, primfunc):
+            self.updated[global_var.name_hint] = primfunc
+
+    outlined = Outlined()
+    transform = SimpleNamespace(
+        VTACompilerConfig=SimpleNamespace(from_env=lambda _env: object()),
+        _collect_vta_relay_functions=lambda _module: [function for _, function in outlined.functions],
+        _validate_vta_function=lambda *_args: None,
+        OutlineCompilerFunctionsWithExistingGlobalSymbols=lambda _target: lambda _module: outlined,
+        _global_vta_relay_functions=lambda _module: outlined.functions,
+        lower_vta_function=lambda function, _config: (
+            current["config"], function.attrs.get_str("global_symbol")
+        ),
+    )
+    monkeypatch.setattr(runtime.vta, "get_env", lambda: object())
+    monkeypatch.setattr(runtime.vta.relay, "transform", transform)
+    monkeypatch.setattr(runtime.relay, "transform", transform)
+
+    class ApplyConfig:
+        def __init__(self, config):
+            self.config = config
+
+        def __enter__(self):
+            current["config"] = self.config
+
+        def __exit__(self, *_args):
+            applied.append(current["config"])
+            current["config"] = None
+
+    monkeypatch.setattr(runtime.autotvm.task, "ApplyConfig", ApplyConfig)
+    compiler = SimpleNamespace(clear=lambda: None)
+    previous = lambda _module: "previous"
+    callbacks = {"callback": previous}
+    monkeypatch.setattr(
+        runtime.tvm,
+        "get_global_func",
+        lambda _name, allow_missing=False: callbacks["callback"],
+    )
+    monkeypatch.setattr(
+        runtime.tvm,
+        "register_func",
+        lambda _name, callback, override=False: callbacks.__setitem__("callback", callback),
+    )
+
+    with runtime._selected_occurrence_lowering(compiler, selected):
+        lowered = callbacks["callback"](object())
+
+    assert lowered.updated == {
+        "vta_0": (selected["vta_0"], "vta_0"),
+        "vta_1": (selected["vta_1"], "vta_1"),
+    }
+    assert applied == [selected["vta_0"], selected["vta_1"]]
+    assert callbacks["callback"] is previous
+
+
 def test_tsim_matrix_builds_all_hosts_before_single_lazy_load(deployment_runtime, monkeypatch, tmp_path):
     prepared = SimpleNamespace(
         routing=SimpleNamespace(

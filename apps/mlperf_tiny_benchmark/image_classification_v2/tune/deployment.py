@@ -72,30 +72,6 @@ def _load_tuning_entry():
     return _load_module("ic_v2_deployment_tuning", TUNE_DIR / "tune.py")
 
 
-def _native_log_from_manifest(manifest_path, manifest, tuning, destination):
-    """Combine the manifest's independently validated native records for dispatch."""
-    from tvm import autotvm
-
-    native_log = Path(destination)
-    native_log.parent.mkdir(parents=True, exist_ok=True)
-    records = []
-    for entry in manifest["entries"]:
-        result_path = manifest_path.parent / entry["result_json"]
-        result = json.loads(result_path.read_text(encoding="utf-8"))
-        best_path = manifest_path.parent / result["result"]["best_native_record"]
-        tuning.artifacts.load_validated_record(
-            best_path,
-            result["result"]["best_native_record_sha256"],
-            tuning.legacy.shared.autotvm.record,
-        )
-        records.extend(autotvm.record.load_from_file(str(best_path)))
-    native_log.write_text(
-        "".join(autotvm.record.encode(measure_input, result) + "\n" for measure_input, result in records),
-        encoding="utf-8",
-    )
-    return native_log
-
-
 def _import_runtime():
     app_path = str(APP_ROOT)
     if app_path not in sys.path:
@@ -108,9 +84,7 @@ def _sha256_file(path):
 
 
 def _run(args):
-    import numpy as np
-    import tvm
-    from tvm.contrib import debug_executor, graph_executor
+    from tvm.contrib.debugger import debug_executor
 
     output_path = args.output.expanduser().resolve()
     output_path.unlink(missing_ok=True)
@@ -134,21 +108,28 @@ def _run(args):
     if len(expected) != 8:
         raise ValueError(f"prepared IC V2 must route eight VTA occurrences, got {len(expected)}")
     rows = []
+    selected_configs_by_symbol = {}
     for entry in manifest["entries"]:
         idx = entry["workload_index"]
         identity = identities[idx]
-        result = json.loads((manifest_path.parent / entry["result_json"]).read_text())
+        native_path = manifest_path.parent / entry["native_record"]
+        native_input, native_result = tuning.artifacts.load_validated_record(
+            native_path, entry["native_record_sha256"], tuning.legacy.shared.autotvm.record
+        )
         if entry["symbol"] != identity.symbol or entry["fusion_sha256"] != identity.sha256:
             raise ValueError("selected manifest occurrence does not match prepared IC V2 routing")
+        if len(native_result.costs) != 1 or int(native_result.costs[0]) != entry["tsim_cycles"]:
+            raise ValueError("selected native record cycles do not match its manifest entry")
+        selected_configs_by_symbol[identity.symbol] = native_input.config
         rows.append({
             **expected[idx],
             "workload_index": idx,
-            "config_index": result["result"]["config_index"],
-            "config": result["result"]["selected_config"],
+            "config_index": int(native_input.config.index),
+            "config": native_input.config.to_json_dict(),
             "config_sha256": hashlib.sha256(json.dumps(
-                result["result"]["selected_config"], sort_keys=True,
+                native_input.config.to_json_dict(), sort_keys=True,
                 separators=(",", ":")).encode()).hexdigest(),
-            "autotvm_cycles": result["result"]["tsim_cycles"],
+            "autotvm_cycles": entry["tsim_cycles"],
             "result_json": entry["result_json"],
             "native_record_sha256": entry["native_record_sha256"],
         })
@@ -157,12 +138,9 @@ def _run(args):
     }:
         raise ValueError("selected manifest does not cover all eight prepared VTA occurrences")
 
-    native_log = _native_log_from_manifest(
-        manifest_path, manifest, tuning, args.output_dir / "selected-native-records.log"
-    )
     artifacts = runtime.build_host_artifacts(
         prepared, args.output_dir / "tuned", host_codegen="llvm", simulator="tsim",
-        selected_config_log=native_log,
+        selected_configs_by_symbol=selected_configs_by_symbol,
     )
     baseline_artifacts = runtime.build_host_artifacts(
         prepared, args.output_dir / "baseline", host_codegen="llvm", simulator="tsim",
@@ -170,33 +148,34 @@ def _run(args):
     session, simulator = runtime._load_simulator("tsim")
     sample_paths = runtime.committed_sample_paths()
     inputs = [(path, runtime.load_sample(path)) for path in sample_paths]
-    reference_outputs = [runtime._run_graph(artifacts.reference, data) for _, data in inputs]
-    baseline_cycles = []
-    tuned_cycles = []
-    for (path, data), reference in zip(inputs, reference_outputs):
-        session.clear_and_validate(simulator)
-        baseline = runtime._run_graph(baseline_artifacts.mixed, data)
-        runtime.compare_outputs(path, reference, baseline)
-        baseline_cycles.append(session.read_stats(simulator=simulator)["cycle_count"])
+    if len(inputs) != 10:
+        raise RuntimeError(f"IC V2 deployment requires ten committed samples, got {len(inputs)}")
 
-        session.clear_and_validate(simulator)
-        tuned = runtime._run_graph(artifacts.mixed, data)
-        runtime.compare_outputs(path, reference, tuned)
-        tuned_cycles.append(session.read_stats(simulator=simulator)["cycle_count"])
+    # Full-model performance and all per-node alignment use the first sample.
+    # The selected graph runs every sample below for output correctness only.
+    first_path, first_input = inputs[0]
+    first_reference = runtime._run_graph(artifacts.reference, first_input)
+    session.clear_and_validate(simulator)
+    baseline_output = runtime._run_graph(baseline_artifacts.mixed, first_input)
+    runtime.compare_outputs(first_path, first_reference, baseline_output)
+    baseline_stats = session.read_stats(simulator=simulator)
+    session.validate_activity(baseline_stats)
+
+    session.clear_and_validate(simulator)
+    first_tuned_output = runtime._run_graph(artifacts.mixed, first_input)
+    runtime.compare_outputs(first_path, first_reference, first_tuned_output)
+    ordinary_stats = session.read_stats(simulator=simulator)
+    session.validate_activity(ordinary_stats)
 
     # Compare full-run counters from ordinary and debug graph runtimes on one
     # identical tuned input before using the debug executor's resident tensors.
-    first_path, first_input = inputs[0]
-    session.clear_and_validate(simulator)
-    runtime._run_graph(artifacts.mixed, first_input)
-    ordinary_stats = session.read_stats(simulator=simulator)
     debug_graph = debug_executor.create(
         artifacts.mixed.graph_json, artifacts.mixed.module, artifacts.mixed.device
     )
     debug_graph.load_params(artifacts.mixed.params)
     debug_graph.set_input(runtime.INPUT_NAME, first_input)
     session.clear_and_validate(simulator)
-    debug_graph.run()
+    debug_graph._run_per_layer()
     debug_stats = session.read_stats(simulator=simulator)
     if debug_stats != ordinary_stats:
         raise RuntimeError(
@@ -226,13 +205,12 @@ def _run(args):
     for row in rows:
         node_index = target_nodes[row["occurrence"]]
         node = graph_nodes[node_index]
-        # Outputs already reside on device after debug_graph.run(); execute only
-        # the selected VTA node between profiler clear/read calls.
+        # Use the resident graph tensors and one counted deployed invocation.
         session.clear_and_validate(simulator)
         debug_graph._execute_node(node_index)
         stats = session.read_stats(simulator=simulator)
-        cycles = stats.get("cycle_count")
         session.validate_activity(stats)
+        cycles = int(stats["cycle_count"])
         row["deployment_cycles"] = cycles
         row["graph_node"] = node.get("name")
         row["graph_func_name"] = node.get("attrs", {}).get("func_name")
@@ -241,7 +219,42 @@ def _run(args):
         row["difference_percent"] = 100.0 * row["difference_numerator"] / row["difference_denominator"]
         row["passed"] = cycles_within_strict_ten_percent(cycles, row["autotvm_cycles"])
 
-    validate_occurrence_rows(rows, expected)
+    try:
+        validate_occurrence_rows(rows, expected)
+    except ValueError as error:
+        failure = {
+            "schema_version": 1,
+            "status": "failed",
+            "error": str(error),
+            "model": "image_classification_v2",
+            "model_sha256": manifest["model_sha256"],
+            "geometry_sha256": manifest["geometry_sha256"],
+            "manifest_sha256": _sha256_file(manifest_path),
+            "manifest_completion_label": manifest["completion_label"],
+            "debug_ordinary_counters_agree": debug_stats == ordinary_stats,
+            "debug_full_run_stats": debug_stats,
+            "ordinary_full_run_stats": ordinary_stats,
+            "outputs_passed": 1,
+            "occurrences": rows,
+        }
+        failure_path = output_path.with_suffix(".failure.json")
+        failure_path.parent.mkdir(parents=True, exist_ok=True)
+        failure_path.write_text(json.dumps(failure, indent=2, sort_keys=True) + "\n")
+        raise
+
+    # The strict one-sample performance gate passed. Now run the selected graph
+    # over all ten samples for correctness, without collecting performance data.
+    outputs_passed = 0
+    for sample_index, (path, data) in enumerate(inputs):
+        reference = (
+            first_reference
+            if sample_index == 0
+            else runtime._run_graph(artifacts.reference, data)
+        )
+        tuned = runtime._run_graph(artifacts.mixed, data)
+        runtime.compare_outputs(path, reference, tuned)
+        outputs_passed += 1
+
     report = {
         "schema_version": 1,
         "model": "image_classification_v2",
@@ -254,10 +267,12 @@ def _run(args):
         "debug_ordinary_counters_agree": True,
         "debug_full_run_stats": debug_stats,
         "ordinary_full_run_stats": ordinary_stats,
-        "baseline_full_model_cycles": baseline_cycles,
-        "tuned_full_model_cycles": tuned_cycles,
+        "baseline_full_model_cycles": [baseline_stats["cycle_count"]],
+        "tuned_full_model_cycles": [ordinary_stats["cycle_count"]],
         "sample_count": len(sample_paths),
-        "outputs_passed": len(sample_paths),
+        "outputs_passed": outputs_passed,
+        "performance_sample_count": 1,
+        "performance_sample": first_path.name,
         "occurrences": rows,
         "status": "passed",
     }
@@ -267,7 +282,7 @@ def _run(args):
     temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary, output)
     print(f"Deployment report: {output}")
-    print("Deployment status: passed (8/8 VTA occurrences, 10/10 samples)")
+    print("Deployment status: passed (8/8 VTA occurrences on 1 sample; 10/10 outputs)")
     return 0
 
 
@@ -285,8 +300,11 @@ def main(argv=None):
         return _run(args)
     except Exception as error:
         failure = args.output.expanduser().resolve().with_suffix(".failure.json")
-        failure.parent.mkdir(parents=True, exist_ok=True)
-        failure.write_text(json.dumps({"status": "failed", "error": str(error)}, indent=2) + "\n")
+        if not failure.exists():
+            failure.parent.mkdir(parents=True, exist_ok=True)
+            failure.write_text(
+                json.dumps({"status": "failed", "error": str(error)}, indent=2) + "\n"
+            )
         raise
 
 

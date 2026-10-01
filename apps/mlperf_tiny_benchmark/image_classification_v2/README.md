@@ -176,16 +176,18 @@ PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:
 
 ## Selected-schedule deployment profile
 
-`tune/deployment.py` validates the complete V2 best manifest, builds and
-reloads untuned and selected mixed Graph Executor bundles, and compares both
-against the quantized HOST reference on all ten committed samples. It profiles
-each selected VTA graph node on its graph-resident tensors and applies the
-strict integer gate `10 * abs(deployment_cycles - autotvm_cycles) <
-autotvm_cycles`; equality at 10 percent fails. Before node profiling it checks
-that debug and ordinary full-run TSIM counters agree for the same input and
-selected graph. Output JSON is published only after every output and all eight
-cycle pairs pass. Build bundles and the combined dispatch log are written
-under `build/selected_deployment/`; the report defaults to `tune/deployment.json`
+`tune/deployment.py` validates the complete V2 best manifest, applies each
+selected configuration to its corresponding VTA symbol while lowering, and
+builds and reloads untuned and selected mixed Graph Executor bundles. It uses
+the first committed sample for baseline and selected full-model cycles, debug
+versus ordinary counter agreement, and all eight graph-resident VTA node cycle
+comparisons. Each node uses one counted invocation after clearing warmup. The
+strict integer gate is `10 * abs(deployment_cycles - autotvm_cycles) <
+autotvm_cycles`; equality at 10 percent fails. After the one-sample performance
+gate passes, the selected graph runs all ten committed samples for output
+correctness only. Output JSON is published only after all ten outputs and all
+eight cycle pairs pass. Build bundles are written under
+`build/selected_deployment/`; the report defaults to `tune/deployment.json`
 and a failed run writes `tune/deployment.failure.json`.
 
 Prerequisites are the project Python environment, model and samples, matching

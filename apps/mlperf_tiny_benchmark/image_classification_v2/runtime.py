@@ -20,7 +20,7 @@
 import json
 import importlib.util
 import sys
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -341,6 +341,57 @@ def _history_best(log_path, sidecar_path, prepared, simulator):
     )
 
 
+def _lower_selected_relay_module(module, config_by_symbol, compiler):
+    """Lower each VTA function under its selected occurrence configuration."""
+    transform = vta.relay.transform
+    compiler_config = transform.VTACompilerConfig.from_env(vta.get_env())
+    functions = transform._collect_vta_relay_functions(module)
+    for function in functions:
+        transform._validate_vta_function(function, compiler_config)
+    if not functions:
+        raise ValueError("prepared module has no VTA functions to lower")
+
+    outlined = relay.transform.OutlineCompilerFunctionsWithExistingGlobalSymbols("vta")(module)
+    global_functions = transform._global_vta_relay_functions(outlined)
+    global_handles = {function.handle.value for _, function in global_functions}
+    nested = [
+        function for function in transform._collect_vta_relay_functions(outlined)
+        if function.handle.value not in global_handles
+    ]
+    if nested:
+        raise ValueError("all nested Compiler='vta' functions must be directly outlineable")
+    symbols = {function.attrs.get_str("global_symbol") for _, function in global_functions}
+    if symbols != set(config_by_symbol):
+        raise ValueError("selected schedules do not cover the outlined VTA function symbols")
+
+    for global_var, function in global_functions:
+        symbol = function.attrs.get_str("global_symbol")
+        compiler.clear()
+        with autotvm.task.ApplyConfig(config_by_symbol[symbol]):
+            primfunc = transform.lower_vta_function(function, compiler_config)
+        outlined.update_func(global_var, primfunc)
+        compiler.clear()
+    return outlined
+
+
+@contextmanager
+def _selected_occurrence_lowering(compiler, selected_by_symbol):
+    """Install VTA's normal Relay-to-TIR hook with occurrence-scoped configs."""
+    name = "vta.relay._relay_to_tir"
+    previous = tvm.get_global_func(name, allow_missing=True)
+    if previous is None:
+        raise RuntimeError("VTA Relay-to-TIR callback is unavailable")
+
+    def lower(module):
+        return _lower_selected_relay_module(module, selected_by_symbol, compiler)
+
+    tvm.register_func(name, lower, override=True)
+    try:
+        yield
+    finally:
+        tvm.register_func(name, previous, override=True)
+
+
 def build_host_artifacts(
     prepared,
     output_dir,
@@ -349,6 +400,7 @@ def build_host_artifacts(
     autotvm_log=None,
     autotvm_sidecar=None,
     selected_config_log=None,
+    selected_configs_by_symbol=None,
 ):
     """Build, export, and reload both standard host libraries without simulator loading."""
     _validate_host_codegen(host_codegen)
@@ -357,8 +409,15 @@ def build_host_artifacts(
         raise ValueError("AutoTVM replay requires both --autotvm-log and --autotvm-sidecar")
     if selected_config_log is not None and autotvm_log is not None:
         raise ValueError("selected native records cannot be combined with legacy AutoTVM replay")
+    if selected_configs_by_symbol is not None and (
+        selected_config_log is not None or autotvm_log is not None
+    ):
+        raise ValueError("occurrence-selected configs cannot be combined with history-best replay")
     if prepared.reference_module is not prepared.quantized_module:
         raise RuntimeError("pure LLVM build must use the exact shared quantized module object")
+    if selected_configs_by_symbol is not None:
+        if set(selected_configs_by_symbol) != set(prepared.routing.symbols):
+            raise ValueError("selected schedules must cover every prepared VTA symbol exactly")
 
     output_dir = Path(output_dir)
     if host_codegen == "llvm":
@@ -376,28 +435,38 @@ def build_host_artifacts(
         else nullcontext()
     )
     with history_context:
-        replay_enabled = autotvm_log is not None or selected_config_log is not None
+        replay_enabled = (
+            autotvm_log is not None
+            or selected_config_log is not None
+            or selected_configs_by_symbol is not None
+        )
         compiler = te_compiler.get() if replay_enabled else None
         if replay_enabled:
-            # TECompiler cache keys omit AutoTVM history-best dispatch state.
+            # TECompiler cache keys omit AutoTVM dispatch state.
             compiler.clear()
+        lowering_context = (
+            _selected_occurrence_lowering(compiler, selected_configs_by_symbol)
+            if selected_configs_by_symbol is not None
+            else nullcontext()
+        )
         try:
-            if host_codegen == "c":
-                with vta.build_config(config={"tir.disable_vectorize": True}):
-                    mixed_factory = relay.build(
-                        prepared.mixed_module,
-                        target=_mixed_target(
-                            *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
-                        ),
-                    )
-            else:
-                with vta.build_config():
-                    mixed_factory = relay.build(
-                        prepared.mixed_module,
-                        target=_mixed_target(
-                            *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
-                        ),
-                    )
+            with lowering_context:
+                if host_codegen == "c":
+                    with vta.build_config(config={"tir.disable_vectorize": True}):
+                        mixed_factory = relay.build(
+                            prepared.mixed_module,
+                            target=_mixed_target(
+                                *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
+                            ),
+                        )
+                else:
+                    with vta.build_config():
+                        mixed_factory = relay.build(
+                            prepared.mixed_module,
+                            target=_mixed_target(
+                                *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
+                            ),
+                        )
         finally:
             if compiler is not None:
                 compiler.clear()
