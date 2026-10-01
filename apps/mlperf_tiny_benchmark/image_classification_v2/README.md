@@ -127,3 +127,49 @@ PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   --autotvm-log <image_classification_v2-tsim.log> \
   --autotvm-sidecar <image_classification_v2-tsim.json>
 ```
+
+## Complete VTA fusion tuning
+
+The V2-local `tune/tune.py` extracts the eight actual prepared VTA Conv
+occurrences. Each task identity includes the V2 symbol and occurrence plus the
+Conv shapes, layouts, dtypes, bias, right shift, clip and cast. The default
+`--all` search tests distinct configurations in 100-trial FSIM batches until
+each occurrence has 20 successful schedules or its valid configuration space
+is exhausted. It measures every FSIM success with TSIM in a separate process,
+using the single-call cycle protocol and 60-second FSIM/120-second TSIM
+candidate timeouts. The selected record is the minimum positive TSIM cycle
+candidate that also lowers for the real prepared fusion.
+
+Prerequisites are the project Python environment, the V2 model artifact,
+`vta_64mac.json`, and built FSIM and TSIM simulator libraries. The controller
+starts in an explicit FSIM environment and selects the matching backend for
+each isolated worker:
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/image_classification_v2" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/image_classification_v2/tune/tune.py --all
+```
+
+Use `--workload-index N` for one occurrence, or `--max-workloads N`,
+`--trial-batch N`, or `--min-successful N` for bounded work. Runs with any
+bounded selection or non-default search limits are labeled
+`BOUNDED_SMOKE_INCOMPLETE`. `--fsim-timeout` and `--tsim-timeout` override
+per-candidate limits. Intermediate native logs, failures, and resumable state
+are written under the ignored `build/two_stage_tuning/<run-id>/`; exported
+best JSON and native records go to `tune/optimal/<run-id>/`. The manifest
+records model, geometry, fusion and workload identities, cycle protocol,
+record hashes, selected configuration, candidate failures, and completion
+status. Use `--resume-manifest PATH` only with the same model, geometry,
+occurrences and search options. Replay validates the standalone export and
+lowers the selected configuration without depending on intermediate build
+files:
+
+```bash
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/image_classification_v2" \
+  ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/image_classification_v2/tune/tune.py \
+  --replay-manifest vta/apps/mlperf_tiny_benchmark/image_classification_v2/tune/optimal/<run-id>/best-manifest.json
+```
