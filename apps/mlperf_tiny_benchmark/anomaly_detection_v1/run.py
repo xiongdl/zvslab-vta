@@ -54,8 +54,15 @@ def _parser():
             f"or {runtime.TSIM_WINDOW_BUDGET_ENV}"
         ),
     )
-    parser.add_argument("--autotvm-log", type=Path, help="native AutoTVM log for tuned replay")
-    parser.add_argument("--autotvm-sidecar", type=Path, help="matching JSON sidecar")
+    parser.add_argument(
+        "--schedule", type=str, default=None,
+        help="actual-deployment schedule snapshot (.log plus same-stem .json); omitted or none uses defaults",
+    )
+    parser.add_argument("--deployment-report", type=Path)
+    parser.add_argument(
+        "--validate-schedule-evidence", action="store_true",
+        help="on TSIM, require complete measured coverage and per-layer cycle alignment",
+    )
     return parser
 
 
@@ -90,6 +97,12 @@ def _write_or_print(payload, output_json):
     print(text, end="")
 
 
+def _print_coverage(artifacts):
+    for occurrence, symbol, selected in getattr(artifacts, "schedule_coverage", ()):
+        kind = "snapshot" if selected else "default"
+        print(f"occurrence {occurrence} ({symbol}): {kind} schedule", file=sys.stderr)
+
+
 def main(argv=None):
     args = _parser().parse_args(argv)
     mode = args.mode
@@ -99,11 +112,11 @@ def main(argv=None):
             return 2
         mode = args.simulator
 
-    if (args.autotvm_log is None) != (args.autotvm_sidecar is None):
-        print("--autotvm-log and --autotvm-sidecar must be provided together", file=sys.stderr)
+    if args.validate_schedule_evidence and args.deployment_report is None:
+        print("--validate-schedule-evidence requires --deployment-report", file=sys.stderr)
         return 2
-    if args.autotvm_log is not None and (mode not in ("fsim", "tsim") or args.host_codegen == "all"):
-        print("AutoTVM replay requires one FSIM/TSIM backend and one host codegen", file=sys.stderr)
+    if args.deployment_report is not None and args.host_codegen == "all":
+        print("--deployment-report requires one host codegen, not --host-codegen all", file=sys.stderr)
         return 2
 
     try:
@@ -112,29 +125,35 @@ def main(argv=None):
                 raise ValueError("--host-codegen all requires --mode fsim or tsim")
             if args.tsim_window_budget is None:
                 prepared, artifacts, executions = runtime.deploy_matrix(
-                    args.build_dir, mode, args.manifest
+                    args.build_dir, mode, args.manifest, schedule=args.schedule
                 )
             else:
                 prepared, artifacts, executions = runtime.deploy_matrix(
                     args.build_dir, mode, args.manifest,
                     tsim_window_budget=args.tsim_window_budget,
+                    schedule=args.schedule,
                 )
             payloads = []
             for current_artifacts, execution in zip(artifacts, executions):
+                _print_coverage(current_artifacts)
                 result = runtime.DeploymentResult(prepared, current_artifacts, execution)
                 payloads.append(_json_result(result))
             payload = {"mode": mode, "host_codegen": "all", "runs": payloads}
         else:
-            if args.tsim_window_budget is None:
-                result = runtime.deploy(args.build_dir, args.host_codegen, mode, args.manifest)
-            else:
-                result = runtime.deploy(
-                    args.build_dir, args.host_codegen, mode, args.manifest,
-                    tsim_window_budget=args.tsim_window_budget,
-                    autotvm_log=args.autotvm_log,
-                    autotvm_sidecar=args.autotvm_sidecar,
-                )
+            result = runtime.deploy(
+                args.build_dir, args.host_codegen, mode, args.manifest,
+                tsim_window_budget=args.tsim_window_budget,
+                schedule=args.schedule,
+            )
             payload = _json_result(result)
+            _print_coverage(result.artifacts)
+            if args.deployment_report is not None:
+                report = runtime.write_deployment_report(
+                    result, args.deployment_report, schedule=args.schedule,
+                    validate_schedule_evidence=args.validate_schedule_evidence,
+                )
+                payload["deployment_report"] = str(args.deployment_report.resolve())
+                payload["deployment_report_status"] = report["status"]
         _write_or_print(payload, args.output_json)
         return 0
     except Exception as error:

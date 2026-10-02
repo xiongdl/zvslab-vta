@@ -1,100 +1,86 @@
-"""Focused one-sample AD V1 selected-deployment contract tests."""
+"""Focused AD V1 schedule and deployment-evidence contracts."""
 
 import importlib.util
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 
-DEPLOYMENT = Path(__file__).resolve().parents[1] / "tune" / "deployment.py"
+APP_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _load_deployment():
-    spec = importlib.util.spec_from_file_location("ad_v1_deployment", DEPLOYMENT)
+def _load_runtime():
+    spec = importlib.util.spec_from_file_location("ad_v1_profile_runtime", APP_ROOT / "runtime.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    sys.path.insert(0, str(APP_ROOT))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
     return module
 
 
-def test_cycle_gate_is_inclusive_at_exactly_ten_percent():
-    deployment = _load_deployment()
+def test_ad_cycle_gate_keeps_inclusive_ten_percent_boundary():
+    runtime = _load_runtime()
 
-    assert deployment.compare_cycles(110, 100)["passed"] is True
-    assert deployment.compare_cycles(90, 100)["passed"] is True
-    with pytest.raises(ValueError, match="exceeds 10%"):
-        deployment.compare_cycles(111, 100)
-
-
-def test_manifest_rejects_foreign_model_before_dispatch(tmp_path):
-    deployment = _load_deployment()
-    path = tmp_path / "foreign.json"
-    path.write_text('{"schema_version": 1, "model": "keyword_spotting_v1"}')
-
-    with pytest.raises(ValueError, match="mismatched selected-schedule manifest"):
-        deployment.validate_seed_manifest(path, object(), [])
+    assert runtime.cycles_within_ten_percent(110, 100) is True
+    assert runtime.cycles_within_ten_percent(90, 100) is True
+    assert runtime.cycles_within_ten_percent(111, 100) is False
+    with pytest.raises(ValueError, match="positive integer"):
+        runtime.cycles_within_ten_percent(True, 100)
 
 
 def test_sample_selection_preserves_first_representative_window():
-    deployment = _load_deployment()
-    import numpy as np
-
+    runtime = _load_runtime()
     features = np.arange(5 * 640, dtype=np.float32).reshape(5, 640)
-    selected, info = deployment.select_representative_window(features)
+
+    selected, sampled, scope = runtime._select_tsim_windows(features, 1)
 
     assert selected.shape == (1, 640)
-    assert selected[0, 0] == features[0, 0]
-    assert info == {"window_index": 0, "total_windows": 5, "executed_windows": 1, "sampled": True}
+    assert np.array_equal(selected[0], features[0])
+    assert sampled is True
+    assert scope == "representative_windows"
 
 
-def test_configs_remain_bound_to_each_symbol_and_occurrence():
-    deployment = _load_deployment()
-    import hashlib
-    import json
+def test_schedule_measurement_requires_tsim_single_call_cycles():
+    runtime = _load_runtime()
     from types import SimpleNamespace
 
-    identities = [
-        SimpleNamespace(occurrence=0, symbol="ad_vta_0", sha256="a" * 64),
-        SimpleNamespace(occurrence=1, symbol="ad_vta_1", sha256="b" * 64),
-    ]
-    entries = []
-    for identity, config in zip(identities, ({"index": 1}, {"index": 1})):
-        entries.append({
-            "occurrence": identity.occurrence,
-            "symbol": identity.symbol,
-            "fusion_sha256": identity.sha256,
-            "config": config,
-            "config_sha256": hashlib.sha256(
-                json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest(),
-        })
-
-    mapped = deployment.config_entries_by_symbol(identities, entries)
-
-    assert mapped == {"ad_vta_0": {"index": 1}, "ad_vta_1": {"index": 1}}
-    entries[1]["symbol"] = "ad_vta_0"
-    with pytest.raises(ValueError, match="identity mismatch"):
-        deployment.config_entries_by_symbol(identities, entries)
-
-
-def test_config_identity_normalizes_native_tuples_to_json_arrays():
-    deployment = _load_deployment()
-
-    assert deployment._canonical_config({"entity": (("tile", "sp", (1, 2)),)}) == deployment._canonical_config(
-        {"entity": [["tile", "sp", [1, 2]]]}
+    layer = SimpleNamespace(
+        occurrence=3,
+        config_spaces=(
+            ("add.vta", (), "target", range(1)),
+            ("conv2d_packed.vta", (), "target", range(2)),
+        ),
     )
+    selected = SimpleNamespace(
+        configs=(None, object()),
+        measurement={
+            "backend": "tsim",
+            "protocol": "tsim_single_call_v1",
+            "units": "cycles",
+            "results": [{"costs": [17]}],
+        },
+    )
+    assert runtime._schedule_measurement_cycles(selected, layer) == 17
+
+    selected.measurement["protocol"] = "legacy"
+    with pytest.raises(ValueError, match="one-call TSIM"):
+        runtime._schedule_measurement_cycles(selected, layer)
 
 
-def test_shared_profiler_session_adapter_reads_ad_runtime_counters():
-    deployment = _load_deployment()
+def test_profiler_adapter_preserves_ad_session_contract():
+    runtime = _load_runtime()
     calls = []
     runtime_session = type("RuntimeSession", (), {
         "clear_and_validate": lambda self, simulator: calls.append(("clear", simulator)),
         "read_stats": lambda self, status: status(),
         "validate_activity": lambda self, stats: calls.append(("validate", stats)),
     })()
-    adapter = deployment._EvidenceProfileSession(runtime_session)
+    adapter = runtime._EvidenceProfileSession(runtime_session)
     simulator = type("Simulator", (), {"stats": lambda self: {"cycle_count": 5}})()
 
     adapter.clear_and_validate(simulator)

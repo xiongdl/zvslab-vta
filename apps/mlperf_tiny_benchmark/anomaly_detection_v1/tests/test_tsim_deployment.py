@@ -176,9 +176,12 @@ def test_tsim_cli_accepts_all_host_codegen(runtime_module):
     finally:
         sys.path.pop(0)
 
-    args = run_module._parser().parse_args(["--simulator", "tsim", "--host-codegen", "all"])
+    args = run_module._parser().parse_args([
+        "--simulator", "tsim", "--host-codegen", "all", "--schedule", "candidate.log"
+    ])
     assert args.simulator == "tsim"
     assert args.host_codegen == "all"
+    assert args.schedule == "candidate.log"
     assert run_module._parser().parse_args(["--tsim-window-budget", "3"]).tsim_window_budget == 3
     with pytest.raises(SystemExit):
         run_module._parser().parse_args(["--tsim-window-budget", "0"])
@@ -198,12 +201,49 @@ def test_tsim_cli_dispatches_matrix(runtime_module, monkeypatch, capsys):
     monkeypatch.setattr(
         run_module.runtime,
         "deploy_matrix",
-        lambda *args: calls.append(args) or (SimpleNamespace(), (), ()),
+        lambda *args, **kwargs: calls.append((args, kwargs)) or (SimpleNamespace(), (), ()),
     )
 
     assert run_module.main(["--simulator", "tsim", "--host-codegen", "all"]) == 0
-    assert calls and calls[0][1] == "tsim"
+    assert calls and calls[0][0][1] == "tsim"
+    assert calls[0][1]["schedule"] is None
     assert "reserved" not in capsys.readouterr().err
+
+
+def test_cli_passes_one_schedule_and_report_to_runtime(monkeypatch, capsys, tmp_path):
+    run_spec = importlib.util.spec_from_file_location(
+        "mlperf_anomaly_run_schedule_dispatch", APP_ROOT / "run.py"
+    )
+    run_module = importlib.util.module_from_spec(run_spec)
+    sys.modules[run_spec.name] = run_module
+    sys.path.insert(0, str(APP_ROOT))
+    try:
+        run_spec.loader.exec_module(run_module)
+    finally:
+        sys.path.pop(0)
+
+    calls = []
+    result = SimpleNamespace(artifacts=SimpleNamespace(schedule_coverage=(
+        (0, "ad_vta_0", True),
+    )))
+    monkeypatch.setattr(run_module, "_json_result", lambda _: {"status": "ok"})
+    monkeypatch.setattr(
+        run_module.runtime, "deploy",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or result,
+    )
+    monkeypatch.setattr(
+        run_module.runtime, "write_deployment_report",
+        lambda *args, **kwargs: calls.append(("report", kwargs)) or {"status": "passed"},
+    )
+    report = tmp_path / "report.json"
+
+    assert run_module.main([
+        "--simulator", "fsim", "--schedule", "candidate.log",
+        "--deployment-report", str(report),
+    ]) == 0
+    assert calls[0][1]["schedule"] == "candidate.log"
+    assert calls[1][1]["validate_schedule_evidence"] is False
+    assert "occurrence 0 (ad_vta_0): snapshot schedule" in capsys.readouterr().err
 
 
 @pytest.mark.skipif(
