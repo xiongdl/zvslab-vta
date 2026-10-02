@@ -459,16 +459,21 @@ def test_cli_has_only_the_operational_output_directory_option(
     run_module = _load_module(RUN_PATH, "mlperf_vww_run")
     calls = []
 
-    def fake_deploy(output_dir):
-        calls.append(Path(output_dir))
+    def fake_deploy(output_dir, **kwargs):
+        calls.append((Path(output_dir), kwargs))
         return SimpleNamespace(
-            execution=SimpleNamespace(comparisons=(0, 0, 0, 0, 0, 1, 1, 1, 1, 1), profiler_stats={})
+            execution=SimpleNamespace(comparisons=(), profiler_stats={}),
+            artifacts=SimpleNamespace(
+                schedule_coverage=(),
+                reference=SimpleNamespace(artifact_dir=tmp_path / "reference"),
+                mixed=SimpleNamespace(artifact_dir=tmp_path / "mixed"),
+            ),
         )
 
     monkeypatch.setattr(run_module, "deploy", fake_deploy)
 
     assert run_module.main(["--output-dir", str(tmp_path)]) == 0
-    assert calls == [tmp_path]
+    assert calls == [(tmp_path, {"host_codegen": "llvm", "simulator": "fsim", "schedule": None})]
     with pytest.raises(SystemExit):
         run_module.main(["--target", "c"])
 
@@ -518,25 +523,20 @@ def test_cli_exposes_llvm_c_and_all_matrix_modes(deployment_runtime, monkeypatch
     assert run_module._parser().parse_args([]).host_codegen == "llvm"
     assert run_module._parser().parse_args(["--host-codegen", "c"]).host_codegen == "c"
     assert run_module._parser().parse_args(["--host-codegen", "all"]).host_codegen == "all"
-    parsed = run_module._parser().parse_args(
-        ["--autotvm-log", "tuned.log", "--autotvm-sidecar", "tuned.json"]
-    )
-    assert parsed.autotvm_log == Path("tuned.log")
-    assert parsed.autotvm_sidecar == Path("tuned.json")
+    parsed = run_module._parser().parse_args(["--schedule", "tuned.log"])
+    assert parsed.schedule == "tuned.log"
+    with pytest.raises(SystemExit):
+        run_module._parser().parse_args(["--autotvm-log", "tuned.log"])
 
 
-def test_cli_requires_a_complete_autotvm_pair_and_rejects_matrix_replay(
+def test_cli_rejects_schedule_replay_in_host_matrix_mode(
     deployment_runtime, monkeypatch, tmp_path
 ):
     monkeypatch.setitem(sys.modules, "runtime", deployment_runtime)
     run_module = _load_module(RUN_PATH, "mlperf_vww_run_autotvm_contract")
-    with pytest.raises(SystemExit, match="must be provided together"):
+    with pytest.raises(SystemExit):
         run_module.main(["--autotvm-log", "tuned.log"])
-    with pytest.raises(SystemExit, match="one --host-codegen"):
-        run_module.main([
-            "--host-codegen", "all", "--autotvm-log", "tuned.log",
-            "--autotvm-sidecar", "tuned.json",
-        ])
+    assert run_module.main(["--host-codegen", "all", "--schedule", "tuned.log"]) == 2
 
 
 def test_application_sources_use_only_the_approved_host_flow():
@@ -564,11 +564,11 @@ def test_application_sources_use_only_the_approved_host_flow():
 
     runtime_source = sources["runtime.py"]
     run_source = sources["run.py"]
-    assert 'model_id=MODEL_ID' in runtime_source
-    assert 'tuner.history_best(' in runtime_source
-    assert 'autotvm_log' in runtime_source and 'autotvm_sidecar' in runtime_source
-    assert '"--autotvm-log"' in run_source and '"--autotvm-sidecar"' in run_source
-    assert "must be provided together" in run_source
+    assert 'capture_deployment_compute(' in runtime_source
+    assert 'load_schedule_snapshot(' in runtime_source
+    assert 'lower_selected_deployment(' in runtime_source
+    assert '"--schedule"' in run_source
+    assert '"--deployment-report"' in run_source
 
     runtime_tree = ast.parse(sources["runtime.py"])
     top_level_imports = [

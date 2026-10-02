@@ -1,89 +1,87 @@
-"""VWW selected-config deployment profile checks."""
+"""VWW unified runtime schedule and deployment evidence checks."""
 
 import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-import numpy as np
 import pytest
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
-DEPLOYMENT = APP_ROOT / "tune" / "deployment.py"
 
 
-def _load_deployment():
-    spec = importlib.util.spec_from_file_location("vww_v1_deployment_profile", DEPLOYMENT)
+def _load_runtime():
+    spec = importlib.util.spec_from_file_location("vww_unified_runtime_profile", APP_ROOT / "runtime.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    sys.path.insert(0, str(APP_ROOT))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
     return module
 
 
 def test_cycle_gate_uses_inclusive_ten_percent():
-    deployment = _load_deployment()
+    runtime = _load_runtime()
 
-    assert deployment.compare_cycles(110, 100)["passed"] is True
-    assert deployment.compare_cycles(90, 100)["passed"] is True
-    with pytest.raises(ValueError, match="exceeds 10%"):
-        deployment.compare_cycles(111, 100)
-    with pytest.raises(ValueError, match="exceeds 10%"):
-        deployment.compare_cycles(89, 100)
-
-
-def test_deployment_uses_one_manifest_image_and_existing_preprocessing():
-    deployment = _load_deployment()
-    sample_path = APP_ROOT / "samples" / "00-non-person-000000000009.jpg"
-    runtime = SimpleNamespace(
-        committed_sample_paths=lambda: (sample_path, sample_path.with_name("01-non-person-000000000025.jpg")),
-        committed_sample_labels=lambda: (0, 0),
-        load_sample=lambda path: np.zeros((1, 96, 96, 3), dtype=np.float32),
-        INPUT_SHAPE=(1, 96, 96, 3),
-        INPUT_DTYPE="float32",
-    )
-
-    sample, input_data, evidence = deployment.select_deployment_sample(runtime)
-
-    assert sample.path == sample_path
-    assert sample.label == 0
-    assert input_data.shape == runtime.INPUT_SHAPE
-    assert input_data.dtype == np.dtype(runtime.INPUT_DTYPE)
-    assert evidence["sample_count"] == evidence["image_count"] == 1
-    assert evidence["model_invocations"] == 1
-    assert evidence["state_policy"] == "stateless_single_image"
+    assert runtime.cycles_within_ten_percent(110, 100) is True
+    assert runtime.cycles_within_ten_percent(90, 100) is True
+    assert runtime.cycles_within_ten_percent(111, 100) is False
+    assert runtime.cycles_within_ten_percent(89, 100) is False
+    with pytest.raises(ValueError, match="positive integer"):
+        runtime.cycles_within_ten_percent(True, 100)
 
 
-def test_config_entries_are_bound_to_every_occurrence():
-    deployment = _load_deployment()
-    identities = (SimpleNamespace(occurrence=0, symbol="vta_0", sha256="fusion0"),)
-    import hashlib
-    import json
-    config = {"tile": 4}
-    digest = hashlib.sha256(json.dumps(config, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    entries = [{"occurrence": 0, "symbol": "vta_0", "fusion_sha256": "fusion0",
-                "config": config, "config_sha256": digest}]
+def test_runtime_reports_each_occurrence_snapshot_or_default():
+    runtime = _load_runtime()
+    artifacts = SimpleNamespace(schedule_coverage=(
+        (0, "vta_a", True), (1, "vta_b", False),
+    ))
 
-    assert deployment.config_entries_by_symbol(identities, entries) == {"vta_0": config}
-    entries[0]["symbol"] = "foreign"
-    with pytest.raises(ValueError, match="identity mismatch"):
-        deployment.config_entries_by_symbol(identities, entries)
+    assert runtime.schedule_coverage_rows(artifacts) == [
+        {"occurrence": 0, "symbol": "vta_a", "selected": True},
+        {"occurrence": 1, "symbol": "vta_b", "selected": False},
+    ]
 
 
-def test_deployment_cli_requires_a_manifest_and_report_path():
-    deployment = _load_deployment()
+def test_schedule_evidence_requires_measured_complete_coverage():
+    runtime = _load_runtime()
+    layers = (SimpleNamespace(occurrence=0), SimpleNamespace(occurrence=1))
+    deployment = SimpleNamespace(layers=layers)
+    selected = {
+        0: SimpleNamespace(measured=True),
+        1: SimpleNamespace(measured=True),
+    }
+    runtime._validate_schedule_evidence(deployment, SimpleNamespace(selected=selected))
 
+    with pytest.raises(ValueError, match="complete occurrence coverage"):
+        runtime._validate_schedule_evidence(deployment, SimpleNamespace(selected={0: selected[0]}))
+    selected[1] = SimpleNamespace(measured=False)
+    with pytest.raises(ValueError, match="measured config"):
+        runtime._validate_schedule_evidence(deployment, SimpleNamespace(selected=selected))
+
+
+def test_run_cli_has_one_schedule_and_report_evidence_interface():
+    spec = importlib.util.spec_from_file_location("vww_unified_run_cli", APP_ROOT / "run.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    sys.path.insert(0, str(APP_ROOT))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    args = module._parser().parse_args([
+        "--schedule", "none", "--deployment-report", "report.json",
+        "--validate-schedule-evidence",
+    ])
+    assert args.schedule == "none"
+    assert args.deployment_report == Path("report.json")
+    assert args.validate_schedule_evidence is True
     with pytest.raises(SystemExit):
-        deployment.main([])
+        module._parser().parse_args(["--autotvm-log", "old.log"])
 
 
-def test_real_runtime_contract_and_manifest_preprocessing_are_visible_to_adapter():
-    deployment = _load_deployment()
-    runtime = deployment._import_runtime()
-
-    sample, input_data, evidence = deployment.select_deployment_sample(runtime)
-
-    assert sample.filename == "00-non-person-000000000009.jpg"
-    assert input_data.shape == (1, 96, 96, 3)
-    assert input_data.dtype == np.dtype("float32")
-    assert evidence["sample_count"] == 1
+def test_runtime_module_does_not_depend_on_second_deployment_command():
+    assert not (APP_ROOT / "tune" / "deployment.py").exists()
