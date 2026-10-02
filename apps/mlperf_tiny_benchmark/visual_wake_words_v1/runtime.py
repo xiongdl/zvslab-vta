@@ -37,7 +37,7 @@ from common.deployment_compute import capture_deployment_compute
 from common.schedule import load_schedule_snapshot
 
 from graph_artifacts import export_graph_bundle
-from model_pipeline import MODEL_SHA256, load_sample, prepare_model
+from model_pipeline import INPUT_DTYPE, INPUT_SHAPE, MODEL_SHA256, load_sample, prepare_model
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -777,15 +777,25 @@ def write_deployment_report(result, report_path, *, schedule=None,
                             validate_schedule_evidence=False):
     """Write ten HOST-checked outputs and optional graph-resident TSIM evidence."""
     schedule_path = None if schedule is None or str(schedule).lower() == "none" else Path(schedule)
+    deployment = capture_deployment_compute(
+        result.prepared.mixed_module, MODEL_ID,
+        getattr(getattr(result.prepared, "imported", None), "model_sha256", MODEL_SHA256),
+    )
+    from common.schedule import _geometry_identity
+
     config_identities = dict(result.artifacts.schedule_config_identities)
     report = {
         "schema_version": 1,
         "artifact_kind": "vta_deployment_profile_v1",
         "model": MODEL_ID,
         "model_sha256": getattr(getattr(result.prepared, "imported", None), "model_sha256", MODEL_SHA256),
+        "geometry_sha256": _geometry_identity(deployment),
         "simulator": result.artifacts.simulator,
         "host_codegen": result.artifacts.host_codegen,
         "schedule": str(schedule_path.resolve()) if schedule_path else None,
+        "schedule_log_sha256": (
+            hashlib.sha256(schedule_path.read_bytes()).hexdigest() if schedule_path else None
+        ),
         "schedule_coverage": schedule_coverage_rows(result.artifacts),
         "selected_config_identities": [
             {"occurrence": occurrence, "sha256": config_identities[occurrence]}
@@ -806,9 +816,6 @@ def write_deployment_report(result, report_path, *, schedule=None,
             raise ValueError("schedule evidence validation requires --simulator tsim")
         if schedule_path is None:
             raise ValueError("schedule evidence validation requires a measured schedule snapshot")
-        deployment = capture_deployment_compute(
-            result.prepared.mixed_module, MODEL_ID, report["model_sha256"]
-        )
         snapshot = load_schedule_snapshot(schedule_path, deployment)
         _validate_schedule_evidence(deployment, snapshot)
         if (len(result.execution.comparisons) != len(committed_sample_paths())
