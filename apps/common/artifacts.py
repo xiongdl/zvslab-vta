@@ -57,11 +57,25 @@ class Artifact:
 class Inventory:
     items: tuple[Artifact, ...]
     unknown_paths: tuple[Path, ...]
+    tracked_paths: tuple[Path, ...]
     errors: tuple[str, ...]
 
     @property
     def total_bytes(self) -> int:
         return sum(item.size_bytes for item in self.items)
+
+
+@dataclass(frozen=True)
+class CleanupResult:
+    planned: tuple[Artifact, ...]
+    removed: tuple[Artifact, ...]
+    unknown_paths: tuple[Path, ...]
+    tracked_paths: tuple[Path, ...]
+    errors: tuple[str, ...]
+
+    @property
+    def total_bytes(self) -> int:
+        return sum(item.size_bytes for item in self.planned)
 
 
 def _is_tracked(path: Path, tracked_paths: set[Path]) -> bool:
@@ -85,17 +99,25 @@ def _known_cache_file(relative: Path) -> bool:
     return "source" in parts and Path(name).suffix in _SOURCE_SUFFIXES
 
 
-def _known_tuning_file(relative: Path, model: str) -> bool:
+def _known_tuning_file(relative: Path) -> bool:
     parts = relative.parts
     name = relative.name
     if len(parts) >= 2 and parts[0] == "actual_compute_tuning":
         run_root = parts[1]
         if run_root == "seed" or _RUN_ID.fullmatch(run_root):
             return (
-                name in {"manifest.json", "resume-manifest.json", "seed.json", "seed.log", "best.json", "best.log"}
+                name
+                in {
+                    "manifest.json",
+                    "resume-manifest.json",
+                    "seed.json",
+                    "seed.log",
+                    "best.json",
+                    "best.log",
+                }
                 or bool(_OCCURRENCE_LEDGER.fullmatch(name))
                 or bool(_WORKLOAD_RECORD.fullmatch(name))
-                or name.startswith("candidate-") and name.endswith((".json", ".log"))
+                or (name.startswith("candidate-") and name.endswith((".json", ".log")))
             )
     if len(parts) >= 2 and parts[0] == "two_stage_tuning" and _RUN_ID.fullmatch(parts[1]):
         return (
@@ -106,11 +128,14 @@ def _known_tuning_file(relative: Path, model: str) -> bool:
     return False
 
 
-def _walk_owned(root: Path, errors: list[str]) -> Iterable[Path]:
+def _walk_owned(root: Path, allowed_root: Path, errors: list[str]) -> Iterable[Path]:
     """Yield files without following symlinks; report all symlink entries."""
-    if root.is_symlink():
-        errors.append(f"symlinked owned root refused: {root}")
-        return
+    cursor = allowed_root
+    for part in root.relative_to(allowed_root).parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            errors.append(f"symlinked owned root refused: {cursor}")
+            return
     if not root.exists():
         return
     if not root.is_dir():
@@ -143,8 +168,8 @@ def inventory_artifacts(
 ) -> Inventory:
     """List known cache and tuning-run files under the benchmark build dirs.
 
-    ``benchmark_root`` is ``vta/apps/mlperf_tiny_benchmark``. If tracked paths
-    are not supplied, callers may pass the VTA repository's ``git ls-files``
+    ``benchmark_root`` is ``vta/apps/mlperf_tiny_benchmark``. Callers should
+    pass absolute tracked paths from the VTA repository's ``git ls-files``
     output so committed files are always excluded from cleanup candidates.
     """
     if model != "all" and model not in MODEL_IDS:
@@ -163,6 +188,7 @@ def inventory_artifacts(
     }
     items: list[Artifact] = []
     unknown: list[Path] = []
+    tracked_candidates: list[Path] = []
     errors: list[str] = []
 
     owned_roots: list[tuple[str, Path, str]] = [("shared", base / "build", "shared")]
@@ -171,11 +197,16 @@ def inventory_artifacts(
         owned_roots.append((model_id, base / model_id / "build", "model"))
 
     for owner, build_root, owner_kind in owned_roots:
-        for path in _walk_owned(build_root, errors):
+        for path in _walk_owned(build_root, base, errors):
             relative = path.relative_to(build_root)
             category = None
             if owner_kind == "shared":
-                if relative.parts and relative.parts[0] in {"autotvm", "autotvm-comparison"}:
+                if relative.parts and relative.parts[0] == "autotvm-comparison":
+                    if model != "all":
+                        continue
+                    if _known_cache_file(relative):
+                        category = "cache"
+                elif relative.parts and relative.parts[0] == "autotvm":
                     shared_model = next(
                         (model_id for model_id in MODEL_IDS if path.name.startswith(f"{model_id}-")),
                         None,
@@ -189,11 +220,16 @@ def inventory_artifacts(
             else:
                 if _known_cache_file(relative):
                     category = "cache"
-                elif _known_tuning_file(relative, owner):
+                elif _known_tuning_file(relative):
                     category = "tuning-runs"
             resolved = path.resolve(strict=False)
-            if category is None or category not in selected_categories or _is_tracked(resolved, tracked):
+            if category is None:
                 unknown.append(resolved)
+                continue
+            if category not in selected_categories:
+                continue
+            if _is_tracked(resolved, tracked):
+                tracked_candidates.append(resolved)
                 continue
             try:
                 size = path.stat(follow_symlinks=False).st_size
@@ -205,5 +241,61 @@ def inventory_artifacts(
     return Inventory(
         tuple(sorted(items, key=lambda item: (item.model, item.category, str(item.path)))),
         tuple(sorted(set(unknown))),
+        tuple(sorted(set(tracked_candidates))),
         tuple(errors),
     )
+
+
+def cleanup_artifacts(
+    benchmark_root: str | Path,
+    *,
+    model: str,
+    categories: Iterable[str],
+    tracked_paths: Iterable[str | Path],
+    dry_run: bool = False,
+) -> CleanupResult:
+    """Plan or remove known generated files, preserving unknown and tracked data."""
+    selected_categories = set(categories)
+    if not selected_categories:
+        raise ValueError("at least one explicit cleanup category is required")
+    tracked_paths = tuple(tracked_paths)
+    inventory = inventory_artifacts(
+        benchmark_root,
+        model=model,
+        categories=selected_categories,
+        tracked_paths=tracked_paths,
+    )
+    if dry_run or inventory.errors:
+        return CleanupResult(inventory.items, (), inventory.unknown_paths, inventory.tracked_paths, inventory.errors)
+
+    base = Path(benchmark_root).absolute()
+    if not base.exists():
+        return CleanupResult(inventory.items, (), inventory.unknown_paths, inventory.tracked_paths, ())
+    safe_base = base.resolve(strict=True)
+    tracked = {
+        (Path(path) if Path(path).is_absolute() else base / Path(path)).resolve(strict=False)
+        for path in tracked_paths
+    }
+    removed: list[Artifact] = []
+    errors: list[str] = []
+    for item in inventory.items:
+        path = item.path
+        try:
+            if path.is_symlink():
+                raise ValueError("target became a symlink")
+            resolved = path.resolve(strict=True)
+            relative = resolved.relative_to(safe_base)
+            if resolved in tracked:
+                raise ValueError("target is tracked by Git")
+            cursor = safe_base
+            for part in relative.parts[:-1]:
+                cursor = cursor / part
+                if cursor.is_symlink():
+                    raise ValueError(f"symlinked parent refused: {cursor}")
+            if not path.is_file():
+                raise ValueError("target is no longer a regular file")
+            path.unlink()
+            removed.append(item)
+        except (OSError, ValueError) as error:
+            errors.append(f"cannot remove {path}: {error}")
+    return CleanupResult(inventory.items, tuple(removed), inventory.unknown_paths, inventory.tracked_paths, tuple(errors))

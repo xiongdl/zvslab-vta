@@ -54,7 +54,7 @@ def test_inventory_scopes_model_and_preserves_unknown_and_tracked_files(tmp_path
     assert {item.path for item in result.items} == {selected.resolve(), shared_match.resolve()}
     assert other.resolve() not in {item.path for item in result.items}
     assert shared_other.resolve() not in {item.path for item in result.items}
-    assert tracked.resolve() in result.unknown_paths
+    assert tracked.resolve() in result.tracked_paths
     assert odd.resolve() in result.unknown_paths
 
 
