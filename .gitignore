@@ -172,34 +172,6 @@ cscope*
 perf
 .bash_history
 *.json
-# Keep the approved IC V1 full-search outputs reviewable and reproducible.
-!apps/mlperf_tiny_benchmark/image_classification_v1/tune/optimal/c4-full/
-!apps/mlperf_tiny_benchmark/image_classification_v1/tune/optimal/c4-full/*.json
-!apps/mlperf_tiny_benchmark/image_classification_v1/tune/optimal/c4-full/*.tsim.log
-!apps/mlperf_tiny_benchmark/image_classification_v1/tune/deployment-c4-full.json
-!apps/mlperf_tiny_benchmark/image_classification_v1/tune/mac-utilization-c4-full.json
-# Keep the approved IC V2 full-search outputs reviewable and reproducible.
-!apps/mlperf_tiny_benchmark/image_classification_v2/tune/optimal/20261001T035246.904010Z/
-!apps/mlperf_tiny_benchmark/image_classification_v2/tune/optimal/20261001T035246.904010Z/*.json
-!apps/mlperf_tiny_benchmark/image_classification_v2/tune/optimal/20261001T035246.904010Z/*.tsim.log
-!apps/mlperf_tiny_benchmark/image_classification_v2/tune/deployment-full.json
-# Keep the approved AD V1 C3 optimal search artifacts reviewable and reproducible.
-!apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/optimal/20261001T174411.872234Z/
-!apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/optimal/20261001T174411.872234Z/*.json
-!apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/optimal/20261001T174411.872234Z/*.tsim.log
-!apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/deployment-full.json
-!apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/mac-utilization-full.json
-# Keep the approved KWS V1 C4 seed and deployment evidence reviewable.
-!apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/seed/20261001T191431.265469Z/
-!apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/seed/20261001T191431.265469Z/*.json
-!apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/seed/20261001T191431.265469Z/*.tsim.log
-!apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/deployment-seed.json
-# Keep the approved KWS V1 C5 optimal-search artifacts reviewable and reproducible.
-!apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/optimal/20261001T192416.141960Z/
-!apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/optimal/20261001T192416.141960Z/*.json
-!apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/optimal/20261001T192416.141960Z/*.tsim.log
-!apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/deployment-full.json
-!apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/mac-utilization-full.json
 *.params
 *.onnx
 *.h5
@@ -263,33 +235,3 @@ conda/pkg
 *.tokens
 *.interp
 tvm/
-
-# Keep the approved AD V1 seed-gate artifacts reviewable and reproducible.
-!apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/seed/20261001T162746.148776Z/
-!apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/seed/20261001T162746.148776Z/*.json
-!apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/seed/20261001T162746.148776Z/*.tsim.log
-!apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/deployment-seed.json
-!apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/deployment-seed-*-failure.json
-# Keep the approved Streaming Wakeword C6 seed and deployment evidence reviewable.
-!apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/seed/20261001T204808.167658Z/
-!apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/seed/20261001T204808.167658Z/*.json
-!apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/seed/20261001T204808.167658Z/*.tsim.log
-!apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/deployment-seed.json
-# Keep the C7 Streaming Wakeword full-search winner reviewable and reproducible.
-!apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/optimal/20261001T205934.834798Z/
-!apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/optimal/20261001T205934.834798Z/*.json
-!apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/optimal/20261001T205934.834798Z/*.tsim.log
-!apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/deployment-full.json
-!apps/mlperf_tiny_benchmark/streaming_wakeword_v1/tune/mac-utilization-full.json
-# Keep the approved VWW V1 C8 seed and deployment gate reviewable.
-!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/seed/20261001T213545.307779Z/
-!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/seed/20261001T213545.307779Z/*.json
-!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/seed/20261001T213545.307779Z/*.tsim.log
-!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/deployment-seed.json
-# Keep the C9 VWW full-search winner reviewable and reproducible.
-!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/optimal/20261001T220401.514781Z/
-!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/optimal/20261001T220401.514781Z/*.json
-!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/optimal/20261001T220401.514781Z/*.tsim.log
-# Keep the C9 VWW selected-deployment evidence reviewable.
-!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/deployment-full.json
-!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/mac-utilization-full.json
