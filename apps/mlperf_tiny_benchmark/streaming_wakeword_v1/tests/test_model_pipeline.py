@@ -181,6 +181,26 @@ def test_real_model_partition_keeps_int8_io_and_vta_convolutions(model_pipeline)
     assert all(count > 0 for count in prepared.routing.convolutions_per_partition)
 
 
+def test_shared_schedule_compute_tracks_prepared_vta_occurrences(model_pipeline):
+    prepared = model_pipeline.prepare_model(MODEL_PATH)
+    from common.deployment_compute import capture_deployment_compute
+
+    deployment = capture_deployment_compute(
+        prepared.mixed_module, "streaming_wakeword_v1", prepared.imported.model_sha256
+    )
+
+    assert deployment.model_id == "streaming_wakeword_v1"
+    assert deployment.model_sha256 == MODEL_SHA256
+    assert [(layer.occurrence, layer.symbol) for layer in deployment.layers] == list(
+        enumerate(prepared.routing.symbols)
+    )
+    assert len(deployment.layers) == 1
+    layer = deployment.layers[0]
+    assert layer.compute_sha256 and len(layer.compute_sha256) == 64
+    assert any(template == "conv2d_packed.vta" for template, _, _, _ in layer.config_spaces)
+    assert layer.function.attrs.get_str("global_symbol") == layer.symbol
+
+
 def test_normalization_preserves_all_per_axis_fixed_point_nodes(model_pipeline):
     imported = model_pipeline.import_model(MODEL_PATH)
     canonical = model_pipeline.relay.qnn.transform.CanonicalizeOps()(imported.module)

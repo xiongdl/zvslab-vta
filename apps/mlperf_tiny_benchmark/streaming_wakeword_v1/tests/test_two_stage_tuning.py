@@ -121,9 +121,9 @@ def test_streaming_ww_seed_alignment_accepts_inclusive_ten_percent_boundary(tmp_
     identity = hashlib.sha256(
         json.dumps([{"tile": 1}], sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    layers = tuple(SimpleNamespace(occurrence=index, symbol=f"vta_{index}") for index in range(2))
+    layers = (SimpleNamespace(occurrence=0, symbol="vta_0"),)
     compute = SimpleNamespace(layers=layers)
-    snapshot = SimpleNamespace(selected={0: selected, 1: selected})
+    snapshot = SimpleNamespace(selected={0: selected})
     report = {
         "status": "passed",
         "model": "streaming_wakeword_v1",
@@ -139,20 +139,13 @@ def test_streaming_ww_seed_alignment_accepts_inclusive_ten_percent_boundary(tmp_
             for layer in layers
         ],
         "selected_config_identities": [
-            {"occurrence": index, "sha256": identity} for index in range(2)
+            {"occurrence": 0, "sha256": identity}
         ],
         "occurrences": [
             {
                 "occurrence": 0,
                 "symbol": "vta_0",
                 "deployment_cycles": 110,
-                "autotvm_cycles": 100,
-                "passed": True,
-            },
-            {
-                "occurrence": 1,
-                "symbol": "vta_1",
-                "deployment_cycles": 90,
                 "autotvm_cycles": 100,
                 "passed": True,
             },
