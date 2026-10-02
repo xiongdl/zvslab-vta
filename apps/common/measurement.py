@@ -5,6 +5,7 @@ import json
 import multiprocessing
 import os
 import queue
+import re
 import traceback
 
 import numpy as np
@@ -14,12 +15,21 @@ DEFAULT_TIMEOUT_SECONDS = {"fsim": 60, "tsim": 120}
 
 
 def _selection(layer, config_indices):
-    if len(config_indices) != len(layer.config_spaces):
+    tunable = [
+        (position, entry)
+        for position, entry in enumerate(layer.config_spaces)
+        if entry[0] != "add.vta" and len(entry[3]) > 1
+    ]
+    if len(config_indices) == len(layer.config_spaces):
+        indexed = [(entry, config_indices[position]) for position, entry in tunable]
+    elif len(config_indices) == len(tunable):
+        indexed = [(entry, index) for (_, entry), index in zip(tunable, config_indices)]
+    else:
         raise ValueError(
-            f"candidate requires {len(layer.config_spaces)} config indices, got {len(config_indices)}"
+            f"candidate requires {len(tunable)} tunable config indices, got {len(config_indices)}"
         )
     selected = []
-    for (template, workload, target, space), index in zip(layer.config_spaces, config_indices):
+    for (template, workload, target, space), index in indexed:
         if isinstance(index, bool) or not isinstance(index, int):
             raise ValueError("config indices must be integers")
         if index < 0 or index >= len(space):
@@ -29,7 +39,8 @@ def _selection(layer, config_indices):
             raise ValueError(f"config index {index} is invalid for {template}")
         selected.append((template, workload, target, entity))
     identity = [
-        {"template": template, "workload": repr(workload), "target": target,
+        {"template": template, "workload": repr(workload),
+         "target": re.sub(r"(?<=-model=)(?:fsim|tsim)_", "sim_", str(target)),
          "config": entity.to_json_dict()}
         for template, workload, target, entity in selected
     ]
@@ -87,6 +98,11 @@ def _single_layer_module(function):
 
 
 def _evaluate_candidate(function_json, activation, config_indices, backend):
+    # Select the worker's backend before importing VTA modules so every
+    # process-local environment lookup observes its explicit simulator.
+    if backend not in DEFAULT_TIMEOUT_SECONDS:
+        raise ValueError(f"unsupported backend {backend!r}; expected fsim or tsim")
+    os.environ["VTA_BACKEND"] = backend
     import tvm
     import vta
     import vta.relay
@@ -96,8 +112,6 @@ def _evaluate_candidate(function_json, activation, config_indices, backend):
     from vta.relay import transform
     from vta.testing import simulator
 
-    if backend not in DEFAULT_TIMEOUT_SECONDS:
-        raise ValueError(f"unsupported backend {backend!r}; expected fsim or tsim")
     function = tvm.ir.load_json(function_json)
     compiler_config = transform.VTACompilerConfig.from_env(vta.get_env())
     from common.deployment_compute import _capture_layer
