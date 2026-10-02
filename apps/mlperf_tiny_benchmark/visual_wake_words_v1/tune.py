@@ -175,7 +175,7 @@ def create_seed_snapshot(*, output_log=None):
     _, compute, _, artifacts, graph, session, simulator = _prepare_actual_compute(
         runtime, "tsim", schedule=seed_snapshot.path
     )
-    from mlperf_tiny_benchmark.deployment_evidence import profile_graph_resident_nodes
+    from common.deployment_evidence import profile_graph_resident_nodes
 
     rows = profile_graph_resident_nodes(
         artifacts.mixed.graph_json,

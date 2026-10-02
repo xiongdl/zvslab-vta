@@ -823,7 +823,7 @@ def write_deployment_report(result, report_path, *, schedule=None,
             raise RuntimeError("schedule evidence requires HOST-checked outputs for all ten committed samples")
 
         from tvm.contrib.debugger import debug_executor
-        from mlperf_tiny_benchmark.deployment_evidence import profile_graph_resident_nodes
+        from common.deployment_evidence import profile_graph_resident_nodes
 
         sample_path = committed_sample_paths()[0]
         sample_input = load_sample(sample_path)

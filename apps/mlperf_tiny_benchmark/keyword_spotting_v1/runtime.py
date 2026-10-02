@@ -843,7 +843,7 @@ def write_deployment_report(
             raise RuntimeError("schedule evidence requires all twelve HOST-checked KWS samples")
 
         from tvm.contrib.debugger import debug_executor
-        from mlperf_tiny_benchmark.deployment_evidence import profile_graph_resident_nodes
+        from common.deployment_evidence import profile_graph_resident_nodes
 
         sample = committed_sample_records()[0]
         input_data = load_sample(sample.path)
