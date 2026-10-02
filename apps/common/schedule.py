@@ -114,15 +114,26 @@ def _measurement_result(measurement):
     if not isinstance(costs, (list, tuple)) or not costs:
         raise ValueError("measured schedule requires non-empty measurement costs")
     if any(isinstance(cost, bool) or not isinstance(cost, (int, float))
-           or not math.isfinite(cost) or cost < 0 for cost in costs):
-        raise ValueError("measurement costs must be finite non-negative numbers")
-    if isinstance(error_no, bool) or not isinstance(error_no, int) or error_no < 0:
-        raise ValueError("measurement error_no must be a non-negative integer")
+           or not math.isfinite(cost) or cost <= 0 for cost in costs):
+        raise ValueError("measurement costs must be finite positive numbers")
+    if isinstance(error_no, bool) or not isinstance(error_no, int) or error_no != 0:
+        raise ValueError("measured schedule result must have error_no 0")
     if isinstance(all_cost, bool) or not isinstance(all_cost, (int, float)) or not math.isfinite(all_cost) or all_cost < 0:
         raise ValueError("measurement all_cost must be a finite non-negative number")
-    if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)) or not math.isfinite(timestamp):
-        raise ValueError("measurement timestamp must be finite")
+    if (isinstance(timestamp, bool) or not isinstance(timestamp, (int, float))
+            or not math.isfinite(timestamp) or timestamp <= 0):
+        raise ValueError("measurement timestamp must be finite and positive")
     return autotvm.measure.MeasureResult(tuple(costs), error_no, all_cost, timestamp)
+
+
+def _validate_measured_provenance(measurement, occurrence):
+    if (not isinstance(measurement, dict)
+            or measurement.get("backend") != "tsim"
+            or measurement.get("protocol") != "tsim_single_call_v1"
+            or measurement.get("units") != "cycles"):
+        raise ValueError(
+            f"occurrence {occurrence} requires TSIM single-call cycle measurement provenance"
+        )
 
 
 def _layer_identity(layer):
@@ -183,12 +194,7 @@ def export_schedule_snapshot(path, deployment, selections, *, measurements=None,
             )
         measurement_provenance = measurements.get(occurrence)
         if measurement_provenance is not None:
-            if not isinstance(measurement_provenance, dict) or measurement_provenance.get("backend") not in ("fsim", "tsim"):
-                raise ValueError(f"occurrence {occurrence} measurement backend is invalid")
-            if not isinstance(measurement_provenance.get("protocol"), str) or not measurement_provenance["protocol"]:
-                raise ValueError(f"occurrence {occurrence} measurement protocol is required")
-            if not isinstance(measurement_provenance.get("units"), str) or not measurement_provenance["units"]:
-                raise ValueError(f"occurrence {occurrence} measurement units are required")
+            _validate_measured_provenance(measurement_provenance, occurrence)
             result_specs = measurement_provenance.get("results")
             if not isinstance(result_specs, (list, tuple)) or len(result_specs) != len(indices):
                 raise ValueError(f"occurrence {occurrence} measurement count does not match config count")
@@ -402,17 +408,31 @@ def load_schedule_snapshot(path, deployment):
         if not isinstance(measured, bool) or (measured != (measurement is not None)):
             raise ValueError(f"schedule occurrence {occurrence} measurement provenance is inconsistent")
         if measured:
-            if (not isinstance(measurement, dict)
-                    or measurement.get("backend") not in ("fsim", "tsim")
-                    or not isinstance(measurement.get("protocol"), str)
-                    or not measurement.get("protocol")
-                    or not isinstance(measurement.get("units"), str)
-                    or not measurement.get("units")):
-                raise ValueError(f"schedule occurrence {occurrence} measurement provenance is malformed")
+            _validate_measured_provenance(measurement, occurrence)
             results = measurement.get("results")
             if not isinstance(results, list) or len(results) != len(record_rows):
                 raise ValueError(f"schedule occurrence {occurrence} measurement provenance is malformed")
             for item, (_, result) in zip(results, [records[ref["record_index"]] for ref in record_rows]):
+                if result.error_no != 0:
+                    raise ValueError(
+                        f"schedule occurrence {occurrence} native measurement result reports failure"
+                    )
+                if (not result.costs or any(
+                        isinstance(cost, bool) or not isinstance(cost, (int, float))
+                        or not math.isfinite(cost) or cost <= 0 for cost in result.costs)):
+                    raise ValueError(
+                        f"schedule occurrence {occurrence} native measurement costs must be finite positive numbers"
+                    )
+                if (isinstance(result.timestamp, bool) or not isinstance(result.timestamp, (int, float))
+                        or not math.isfinite(result.timestamp) or result.timestamp <= 0):
+                    raise ValueError(
+                        f"schedule occurrence {occurrence} native measurement timestamp must be finite and positive"
+                    )
+                if (isinstance(result.all_cost, bool) or not isinstance(result.all_cost, (int, float))
+                        or not math.isfinite(result.all_cost) or result.all_cost < 0):
+                    raise ValueError(
+                        f"schedule occurrence {occurrence} native measurement all_cost must be finite and non-negative"
+                    )
                 native_result = {
                     "costs": list(result.costs),
                     "error_no": result.error_no,

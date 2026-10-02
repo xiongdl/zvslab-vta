@@ -134,13 +134,89 @@ def test_measured_candidate_carries_backend_protocol_and_units(deployment, tmp_p
     with pytest.raises(ValueError, match="disagrees with native record"):
         load_schedule_snapshot(path, deployment)
 
-    with pytest.raises(ValueError, match="units are required"):
+    with pytest.raises(ValueError, match="TSIM single-call cycle"):
         export_schedule_snapshot(
             tmp_path / "bad-provenance.log",
             deployment,
             {layer.occurrence: selection},
             measurements={layer.occurrence: {"backend": "tsim", "protocol": "one-call", "results": provenance["results"]}},
         )
+
+
+def test_failed_native_measurement_cannot_be_relabelled_as_measured(deployment, tmp_path):
+    import hashlib
+
+    from tvm import autotvm
+
+    from common.schedule import export_schedule_snapshot, load_schedule_snapshot
+
+    layer = deployment.layers[0]
+    indices = _indices(layer)
+    path = tmp_path / "failed-measured.log"
+    export_schedule_snapshot(
+        path,
+        deployment,
+        {layer.occurrence: indices},
+        measurements={layer.occurrence: {
+            "backend": "tsim",
+            "protocol": "tsim_single_call_v1",
+            "units": "cycles",
+            "results": [
+                {"costs": [12.0], "error_no": 0, "all_cost": 0.5, "timestamp": 1.0}
+                for _ in indices
+            ],
+        }},
+    )
+
+    metadata_path = path.with_suffix(".json")
+    metadata = json.loads(metadata_path.read_text())
+    lines = path.read_text().splitlines()
+    row = metadata["occurrences"][0]
+    reference = row["records"][0]
+    measure_input, result = autotvm.record.decode(lines[reference["record_index"]])
+    failed_result = autotvm.measure.MeasureResult(result.costs, 1, result.all_cost, result.timestamp)
+    lines[reference["record_index"]] = autotvm.record.encode(measure_input, failed_result)
+    log_bytes = ("\n".join(lines) + "\n").encode("utf-8")
+    path.write_bytes(log_bytes)
+    reference["record_sha256"] = hashlib.sha256(lines[reference["record_index"]].encode("utf-8")).hexdigest()
+    metadata["log_sha256"] = hashlib.sha256(log_bytes).hexdigest()
+    row["measurement"]["results"][0]["error_no"] = 1
+    metadata_path.write_text(json.dumps(metadata))
+
+    with pytest.raises(ValueError, match="native measurement result reports failure"):
+        load_schedule_snapshot(path, deployment)
+
+
+def test_invalid_or_mislabelled_measurements_are_rejected(deployment, tmp_path):
+    from common.schedule import export_schedule_snapshot
+
+    layer = deployment.layers[0]
+    selections = {layer.occurrence: _indices(layer)}
+    results = [
+        {"costs": [12.0], "error_no": 0, "all_cost": 0.5, "timestamp": 1.0}
+        for _ in selections[layer.occurrence]
+    ]
+    measured_slot = next(
+        index for index, (template, _, _, space) in enumerate(layer.config_spaces)
+        if template != "add.vta" and len(space) > 1
+    )
+    failed_results = list(results)
+    failed_results[measured_slot] = dict(results[measured_slot], error_no=1)
+    zero_cost_results = list(results)
+    zero_cost_results[measured_slot] = dict(results[measured_slot], costs=[0.0])
+    base = {"backend": "tsim", "protocol": "tsim_single_call_v1", "units": "cycles", "results": results}
+    for key, value, message in (
+        ("results", zero_cost_results, "finite positive"),
+        ("results", failed_results, "error_no 0"),
+        ("protocol", "other", "TSIM single-call"),
+        ("units", "seconds", "TSIM single-call"),
+    ):
+        measurement = dict(base, **{key: value})
+        with pytest.raises(ValueError, match=message):
+            export_schedule_snapshot(
+                tmp_path / f"invalid-{key}.log", deployment, selections,
+                measurements={layer.occurrence: measurement},
+            )
 
 
 def test_missing_sidecar_swapped_pair_and_tampered_log_fail(deployment, tmp_path):
