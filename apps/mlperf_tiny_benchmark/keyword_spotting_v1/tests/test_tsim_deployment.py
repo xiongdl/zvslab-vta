@@ -62,6 +62,10 @@ def test_cli_exposes_host_codegen_simulator_and_output_directory_options(deploym
     assert module._parser().parse_args(["--host-codegen", "all"]).host_codegen == "all"
     assert module._parser().parse_args(["--simulator", "host"]).simulator == "host"
     assert module._parser().parse_args(["--simulator", "tsim"]).simulator == "tsim"
+    assert module._parser().parse_args(["--schedule", "candidate.log"]).schedule == "candidate.log"
+    assert module._parser().parse_args(["--schedule", "none"]).schedule == "none"
+    assert module._parser().parse_args(["--deployment-report", "report.json"]).deployment_report == Path("report.json")
+    assert module._parser().parse_args(["--validate-schedule-evidence"]).validate_schedule_evidence
 
 
 @pytest.mark.parametrize(
