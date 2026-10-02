@@ -217,3 +217,29 @@ def test_model_pipeline_has_no_forbidden_runtime_dependency_or_legacy_flow():
     lowered = source.lower()
     for forbidden in ["autotvm", "graphpack", "relay.ext." + "vta", "tiny-v1.4", "download_testdata"]:
         assert forbidden not in lowered
+
+
+def test_actual_compute_tuning_has_no_model_local_shadow_helpers():
+    app_root = MODEL_PIPELINE_PATH.parent
+    retired = (
+        app_root / "fused_tasks.py",
+        app_root / "tune" / "artifacts.py",
+        app_root / "tune" / "measurement.py",
+        app_root / "tune" / "search.py",
+        app_root / "tune" / "tune.py",
+        app_root / "tune" / "deployment.py",
+    )
+    assert all(not path.exists() for path in retired)
+
+    source = (app_root / "tune.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imports = {
+        node.module for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    assert "fused_tasks" not in imports
+    assert "common.deployment_compute" in imports
+    assert "common.tuning" in source
+
+    assert (app_root / "tune" / "seed" / "20261001T213545.307779Z" / "best-manifest.json").is_file()
+    assert (app_root / "tune" / "optimal" / "20261001T220401.514781Z" / "best-manifest.json").is_file()
