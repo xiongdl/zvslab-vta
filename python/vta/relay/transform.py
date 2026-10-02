@@ -310,6 +310,27 @@ def _lower_to_scheduled_te(func, config=None):
     return _schedule_packed_core(_packed_core(func, config), config)
 
 
+def capture_vta_compute(func, config=None):
+    """Return the deployment function's packed compute before schedule choice.
+
+    The function is validated and legalized through the same path used by
+    :func:`lower_vta_function`. Non-scalar Relay constants are lifted into
+    explicit parameters and returned as bound tensors for standalone capture
+    or measurement.
+    """
+    config = config or VTACompilerConfig.from_env(get_env())
+    _validate_vta_function(func, config)
+    return _lift_constants(_packed_core(func, config))
+
+
+def lower_vta_compute(compute, config=None):
+    """Schedule and lower captured packed compute with active AutoTVM config."""
+    if not isinstance(compute, relay.Function):
+        raise TypeError("compute must be a captured Relay function")
+    config = config or VTACompilerConfig.from_env(get_env())
+    return _schedule_packed_core(compute, config)
+
+
 class _ConstantLifter(relay.ExprMutator):
     def __init__(self):
         super().__init__()
@@ -556,8 +577,8 @@ def lower_vta_function(func, config=None):
         conv2d = conv_or_bias
     output_layout = str(conv2d.attrs.out_layout) or str(conv2d.attrs.data_layout)
 
-    packed_core, constants = _lift_constants(_packed_core(func, config))
-    cached = _schedule_packed_core(packed_core, config)
+    packed_core, constants = capture_vta_compute(func, config)
+    cached = lower_vta_compute(packed_core, config)
     symbol = func.attrs.get_str("global_symbol")
     scheduled_primfuncs = [
         item for item in cached.funcs.functions.values() if isinstance(item, tvm.tir.PrimFunc)
