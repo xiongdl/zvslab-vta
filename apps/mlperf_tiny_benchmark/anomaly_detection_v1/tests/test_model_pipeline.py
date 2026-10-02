@@ -185,6 +185,24 @@ def test_real_quantized_partition_has_exact_nine_region_routing(model_pipeline):
     assert len(first.routing.composite_names) == 9
 
 
+def test_actual_compute_capture_uses_ordered_deployment_layers(model_pipeline):
+    from common.deployment_compute import capture_deployment_compute
+
+    prepared = model_pipeline.prepare_model(MODEL_PATH)
+    deployment = capture_deployment_compute(
+        prepared.mixed_module, "anomaly_detection_v1", prepared.imported.model_sha256
+    )
+
+    assert [layer.occurrence for layer in deployment.layers] == list(range(9))
+    assert [layer.symbol for layer in deployment.layers] == list(prepared.routing.symbols)
+    assert all(len(layer.compute_sha256) == 64 for layer in deployment.layers)
+    assert all(layer.compute is not None and layer.config_spaces for layer in deployment.layers)
+    assert deployment.layers[0].inputs[0].shape == (1, 1, 1, 128)
+    assert deployment.layers[0].constants["shift"] == 6
+    assert deployment.layers[-1].output.shape == (1, 1, 1, 640)
+    assert deployment.layers[-1].constants["output_dtype"] == "int8"
+
+
 def test_model_pipeline_has_no_librosa_or_local_environment_dependency():
     source = MODEL_PIPELINE_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source)

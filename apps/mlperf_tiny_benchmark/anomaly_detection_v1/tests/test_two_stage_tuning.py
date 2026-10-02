@@ -1,6 +1,7 @@
 """AD V1 adapter contracts for common actual-compute tuning."""
 
 import importlib.util
+import ast
 import sys
 from pathlib import Path
 
@@ -89,3 +90,20 @@ def test_candidate_export_requires_occurrence_and_rejects_negative_index():
             "--export-candidate", "-1", "--workload-index", "0",
             "--resume-manifest", "resume.json", "--output-log", "candidate.log",
         ])
+
+
+def test_legacy_deployment_and_tuning_entries_are_retired():
+    assert not (APP_ROOT / "tune" / "tune.py").exists()
+    assert not (APP_ROOT / "tune" / "deployment.py").exists()
+    source = TUNE_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imported = {
+        node.module.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+    assert "fused_tasks" not in imported
+    assert "autotvm_tuner" not in imported
+    options = {option for action in _load_tune()._parser()._actions for option in action.option_strings}
+    assert "--autotvm-log" not in options
+    assert "--autotvm-sidecar" not in options
