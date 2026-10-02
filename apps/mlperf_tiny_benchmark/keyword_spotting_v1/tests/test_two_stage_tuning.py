@@ -1,9 +1,12 @@
-"""AD V1 adapter contracts for common actual-compute tuning."""
+"""KWS V1 contracts for common actual-compute tuning."""
 
 import importlib.util
 import ast
+import hashlib
+import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,7 +16,7 @@ TUNE_PATH = APP_ROOT / "tune.py"
 
 
 def _load_tune():
-    spec = importlib.util.spec_from_file_location("ad_v1_actual_tune", TUNE_PATH)
+    spec = importlib.util.spec_from_file_location("kws_v1_actual_tune", TUNE_PATH)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -107,3 +110,65 @@ def test_legacy_deployment_and_tuning_entries_are_retired():
     options = {option for action in _load_tune()._parser()._actions for option in action.option_strings}
     assert "--autotvm-log" not in options
     assert "--autotvm-sidecar" not in options
+
+
+def test_kws_seed_alignment_accepts_inclusive_ten_percent_boundary(tmp_path):
+    tune = _load_tune()
+    schedule = tmp_path / "seed.log"
+    schedule.write_text("seed snapshot", encoding="utf-8")
+    config = SimpleNamespace(to_json_dict=lambda: {"tile": 1})
+    selected = SimpleNamespace(configs=(config,))
+    identity = hashlib.sha256(
+        json.dumps([{"tile": 1}], sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    layers = tuple(SimpleNamespace(occurrence=index, symbol=f"vta_{index}") for index in range(2))
+    compute = SimpleNamespace(layers=layers)
+    snapshot = SimpleNamespace(selected={0: selected, 1: selected})
+    report = {
+        "status": "passed",
+        "model": "keyword_spotting_v1",
+        "model_sha256": "a" * 64,
+        "measurement_protocol": "tsim_single_call_v1",
+        "sample_count": 12,
+        "outputs_passed": 12,
+        "performance_sample_count": 1,
+        "performance_stats": {"cycle_count": 120},
+        "schedule": str(schedule.resolve()),
+        "schedule_coverage": [
+            {"occurrence": layer.occurrence, "symbol": layer.symbol, "selected": True}
+            for layer in layers
+        ],
+        "selected_config_identities": [
+            {"occurrence": index, "sha256": identity} for index in range(2)
+        ],
+        "occurrences": [
+            {
+                "occurrence": 0,
+                "symbol": "vta_0",
+                "deployment_cycles": 110,
+                "autotvm_cycles": 100,
+                "passed": True,
+            },
+            {
+                "occurrence": 1,
+                "symbol": "vta_1",
+                "deployment_cycles": 90,
+                "autotvm_cycles": 100,
+                "passed": True,
+            },
+        ],
+    }
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    runtime = SimpleNamespace(_schedule_measurement_cycles=lambda *_: 100)
+
+    assert tune._validate_alignment_report(
+        report_path, schedule, compute, "a" * 64, snapshot, runtime
+    ) == report
+
+    report["sample_count"] = 11
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    with pytest.raises(ValueError, match="passing one-sample KWS seed report"):
+        tune._validate_alignment_report(
+            report_path, schedule, compute, "a" * 64, snapshot, runtime
+        )
