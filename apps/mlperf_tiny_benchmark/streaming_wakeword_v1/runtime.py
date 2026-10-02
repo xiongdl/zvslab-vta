@@ -1,13 +1,12 @@
 """Build and execute the streaming wakeword graph on HOST or FSIM."""
 
 import hashlib
-import importlib.util
 import json
 import math
 import re
 import stat
 import sys
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +18,10 @@ from tvm import relay
 from tvm.contrib import graph_executor
 from tvm.relay.backend import te_compiler
 from vta.relay import plan_devices_for_vta
+
+from common.deployment_compute import capture_deployment_compute
+from common.deployment import lower_selected_deployment, write_json_atomic
+from common.schedule import load_schedule_snapshot
 
 from graph_artifacts import export_graph_bundle, validate_output_root
 from model_pipeline import (
@@ -73,6 +76,8 @@ class HostArtifacts:
     reference: ReloadedArtifact
     mixed: ReloadedArtifact
     vta_symbols: tuple
+    schedule_coverage: tuple = ()
+    schedule_config_identities: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -358,22 +363,24 @@ def _mixed_build_plan(module, host_codegen):
     return SimpleNamespace(module=module, targets=_mixed_target(host_codegen))
 
 
-def _history_best(log_path, sidecar_path, prepared, simulator):
-    tuner_path = APP_ROOT.parent / "autotvm_tuner.py"
-    spec = importlib.util.spec_from_file_location("mlperf_tiny_autotvm_tuner", tuner_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"cannot load AutoTVM tuner: {tuner_path}")
-    tuner = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = tuner
-    spec.loader.exec_module(tuner)
-    return tuner.history_best(
-        log_path,
-        sidecar_path,
-        model_id=MODEL_ID,
-        model_sha256=prepared.imported.model_sha256,
-        backend=simulator,
-        config_path=tuner.DEFAULT_CONFIG_PATH,
-    )
+@contextmanager
+def _selected_snapshot_lowering(compiler, deployment, snapshot, compiler_config):
+    """Route normal VTA lowering through the validated actual-layer snapshot."""
+    name = "vta.relay._relay_to_tir"
+    previous = tvm.get_global_func(name, allow_missing=True)
+    if previous is None:
+        raise RuntimeError("VTA Relay-to-TIR callback is unavailable")
+
+    def lower(module):
+        return lower_selected_deployment(
+            module, deployment, snapshot, compiler, compiler_config
+        )
+
+    tvm.register_func(name, lower, override=True)
+    try:
+        yield
+    finally:
+        tvm.register_func(name, previous, override=True)
 
 
 def _model_metadata(prepared):
@@ -388,12 +395,10 @@ def _model_metadata(prepared):
 
 def build_host_artifacts(prepared, output_dir=DEFAULT_OUTPUT_DIR,
                          host_codegen=DEFAULT_HOST_CODEGEN, simulator="fsim",
-                         autotvm_log=None, autotvm_sidecar=None):
-    """Build and reload reference/mixed bundles without loading a simulator."""
+                         schedule=None):
+    """Build and reload reference/mixed bundles using a validated schedule snapshot."""
     _validate_host_codegen(host_codegen)
     _validate_simulator(simulator)
-    if (autotvm_log is None) != (autotvm_sidecar is None):
-        raise ValueError("AutoTVM replay requires both --autotvm-log and --autotvm-sidecar")
     output_dir = validate_output_root(output_dir)
     if host_codegen == "llvm":
         reference_factory = relay.build(prepared.reference_module, target="llvm")
@@ -404,22 +409,34 @@ def build_host_artifacts(prepared, output_dir=DEFAULT_OUTPUT_DIR,
             )
     device_plan = _mixed_build_plan(prepared.mixed_module, host_codegen)
     build_config = {"tir.disable_vectorize": True} if host_codegen == "c" else {}
-    history_context = (
-        _history_best(autotvm_log, autotvm_sidecar, prepared, simulator)
-        if autotvm_log is not None
-        else nullcontext()
-    )
-    with history_context:
-        compiler = te_compiler.get() if autotvm_log is not None else None
-        if autotvm_log is not None:
-            # TECompiler's cache key omits history-best dispatch state.
+    schedule_path = None if schedule is None or str(schedule).lower() == "none" else schedule
+    deployment = None
+    snapshot = None
+    compiler_config = None
+    if isinstance(prepared.mixed_module, tvm.IRModule):
+        deployment = capture_deployment_compute(
+            prepared.mixed_module, MODEL_ID, prepared.imported.model_sha256
+        )
+        snapshot = load_schedule_snapshot(schedule_path, deployment)
+        compiler_config = vta.relay.transform.VTACompilerConfig.from_env(vta.get_env())
+    elif schedule_path is not None:
+        raise TypeError("schedule replay requires the prepared actual Relay deployment module")
+    compiler = te_compiler.get()
+    replay_enabled = bool(snapshot and snapshot.selected)
+    if replay_enabled:
+        compiler.clear()
+        try:
+            with _selected_snapshot_lowering(compiler, deployment, snapshot, compiler_config):
+                with vta.build_config(config=build_config):
+                    mixed_factory = relay.build(device_plan.module, target=device_plan.targets)
+        finally:
             compiler.clear()
+    else:
         try:
             with vta.build_config(config=build_config):
                 mixed_factory = relay.build(device_plan.module, target=device_plan.targets)
         finally:
-            if compiler is not None:
-                compiler.clear()
+            compiler.clear()
     metadata = _model_metadata(prepared)
     model_sha256 = metadata["model_sha256"]
     reference = export_graph_bundle(
@@ -446,6 +463,22 @@ def build_host_artifacts(prepared, output_dir=DEFAULT_OUTPUT_DIR,
         expected_vta_symbols=prepared.routing.symbols,
         metadata=metadata,
     )
+    selected_configs = snapshot.selected if snapshot is not None else {}
+    config_identities = tuple(
+        (
+            occurrence,
+            hashlib.sha256(json.dumps(
+                [config.to_json_dict() for config in selected.configs if config is not None],
+                sort_keys=True, separators=(",", ":"),
+            ).encode("utf-8")).hexdigest(),
+        )
+        for occurrence, selected in sorted(selected_configs.items())
+    )
+    coverage = (
+        snapshot.coverage(deployment)
+        if snapshot is not None
+        else tuple((index, symbol, False) for index, symbol in enumerate(prepared.routing.symbols))
+    )
     return HostArtifacts(
         host_codegen=host_codegen,
         simulator=simulator,
@@ -458,6 +491,8 @@ def build_host_artifacts(prepared, output_dir=DEFAULT_OUTPUT_DIR,
             mixed.params, mixed.module, (tvm.cpu(0), tvm.ext_dev(0)),
         ),
         vta_symbols=tuple(prepared.routing.symbols),
+        schedule_coverage=coverage,
+        schedule_config_identities=config_identities,
     )
 
 
@@ -605,7 +640,8 @@ def _execute_matrix(artifacts, sample_paths, simulator="fsim"):
     return tuple(executions)
 
 
-def deploy_fsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HOST_CODEGENS):
+def deploy_fsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HOST_CODEGENS,
+                       schedule=None):
     """Build the ordered LLVM/C matrix and execute it on FSIM."""
     output_dir = validate_output_root(output_dir)
     host_codegens = _validate_host_codegens(host_codegens)
@@ -617,6 +653,7 @@ def deploy_fsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HO
             _matrix_artifact_root(output_dir, codegen, "fsim"),
             codegen,
             "fsim",
+            schedule=schedule,
         )
         for codegen in host_codegens
     )
@@ -624,7 +661,8 @@ def deploy_fsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HO
     return SimulationMatrixResult("fsim", prepared, artifacts, executions)
 
 
-def deploy_tsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HOST_CODEGENS):
+def deploy_tsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HOST_CODEGENS,
+                       schedule=None):
     """Build the ordered LLVM/C matrix and execute it on TSIM."""
     output_dir = validate_output_root(output_dir)
     host_codegens = _validate_host_codegens(host_codegens)
@@ -636,6 +674,7 @@ def deploy_tsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HO
             _matrix_artifact_root(output_dir, codegen, "tsim"),
             codegen,
             "tsim",
+            schedule=schedule,
         )
         for codegen in host_codegens
     )
@@ -644,7 +683,7 @@ def deploy_tsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HO
 
 
 def deploy(output_dir=DEFAULT_OUTPUT_DIR, host_codegen=DEFAULT_HOST_CODEGEN, simulator="fsim",
-           autotvm_log=None, autotvm_sidecar=None):
+           schedule=None):
     """Build one artifact pair and execute HOST reference or FSIM mixed output."""
     output_dir = validate_output_root(output_dir)
     _validate_host_codegen(host_codegen)
@@ -655,7 +694,7 @@ def deploy(output_dir=DEFAULT_OUTPUT_DIR, host_codegen=DEFAULT_HOST_CODEGEN, sim
     paths = committed_sample_paths()
     artifacts = build_host_artifacts(
         prepared, output_dir, host_codegen, simulator,
-        autotvm_log=autotvm_log, autotvm_sidecar=autotvm_sidecar,
+        schedule=schedule,
     )
     if simulator == "host":
         execution = execute_host(artifacts, paths)
@@ -664,3 +703,185 @@ def deploy(output_dir=DEFAULT_OUTPUT_DIR, host_codegen=DEFAULT_HOST_CODEGEN, sim
     else:
         execution = _execute_matrix((artifacts,), paths, "tsim")[0]
     return DeploymentResult(prepared, artifacts, execution)
+
+
+def schedule_coverage_rows(artifacts):
+    return [
+        {"occurrence": occurrence, "symbol": symbol, "selected": selected}
+        for occurrence, symbol, selected in artifacts.schedule_coverage
+    ]
+
+
+def select_deployment_sample():
+    """Return the first manifest audio window and its stateless execution contract."""
+    records = committed_sample_records()
+    if not records or records[0].order != 0:
+        raise ValueError("Streaming Wakeword V1 sample manifest must begin at order zero")
+    sample = records[0]
+    input_data = np.asarray(load_sample(sample.path))
+    if input_data.shape != INPUT_SHAPE or input_data.dtype != np.dtype(INPUT_DTYPE):
+        raise ValueError("Streaming Wakeword V1 sample input violates the model tensor contract")
+    evidence = {
+        "sample_count": 1,
+        "audio_window_count": 1,
+        "audio_window_samples": int(CLIP_FRAMES),
+        "feature_frame_count": int(INPUT_SHAPE[1]),
+        "model_invocations": 1,
+        "state_policy": "stateless_single_invocation",
+    }
+    return sample, input_data, evidence
+
+
+def _schedule_measurement_cycles(selected, layer):
+    measurement = selected.measurement
+    if (measurement.get("backend") != "tsim"
+            or measurement.get("protocol") != "tsim_single_call_v1"
+            or measurement.get("units") != "cycles"):
+        raise ValueError(f"occurrence {layer.occurrence} requires one-call TSIM cycle provenance")
+    results = measurement.get("results")
+    configs = [
+        config for (template, _, _, space), config in zip(layer.config_spaces, selected.configs)
+        if template != "add.vta" and len(space) > 1
+    ]
+    if not isinstance(results, (list, tuple)) or len(results) != len(configs):
+        raise ValueError(f"occurrence {layer.occurrence} measurement count is invalid")
+    cycles = 0
+    for config, result in zip(configs, results):
+        costs = result.get("costs") if isinstance(result, dict) else None
+        if config is None or not isinstance(costs, (list, tuple)) or len(costs) != 1:
+            raise ValueError(f"occurrence {layer.occurrence} must have one measured cycle value")
+        value = costs[0]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or int(value) != value or value <= 0:
+            raise ValueError(f"occurrence {layer.occurrence} has invalid measured cycle value")
+        cycles += int(value)
+    if not configs:
+        raise ValueError(f"occurrence {layer.occurrence} has no measured selected config")
+    return cycles
+
+
+def _validate_schedule_evidence(deployment, snapshot):
+    if len(snapshot.selected) != len(deployment.layers):
+        raise ValueError("schedule evidence requires complete occurrence coverage")
+    for layer in deployment.layers:
+        selected = snapshot.selected.get(layer.occurrence)
+        if selected is None or not selected.measured:
+            raise ValueError(
+                f"schedule evidence requires measured config for occurrence {layer.occurrence}"
+            )
+
+
+def cycles_within_ten_percent(deployment_cycles, measured_cycles):
+    """Preserve the streaming wakeword inclusive 10% deployment evidence gate."""
+    for label, value in (("deployment", deployment_cycles), ("measured", measured_cycles)):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{label} cycle count must be a positive integer")
+    return 10 * abs(deployment_cycles - measured_cycles) <= measured_cycles
+
+
+class _EvidenceProfileSession:
+    def __init__(self, session):
+        self.session = session
+
+    def clear_and_validate(self, simulator):
+        return self.session.clear_and_validate(simulator)
+
+    def read_stats(self, simulator):
+        return self.session.read_stats(simulator=simulator)
+
+    def validate_activity(self, stats):
+        return self.session.validate_activity(stats)
+
+
+def write_deployment_report(result, report_path, *, schedule=None, validate_schedule_evidence=False):
+    """Write HOST-checked sample results and optional graph-resident TSIM evidence."""
+    schedule_path = None if schedule is None or str(schedule).lower() == "none" else Path(schedule)
+    config_identities = dict(result.artifacts.schedule_config_identities)
+    report = {
+        "schema_version": 1,
+        "artifact_kind": "vta_deployment_profile_v1",
+        "model": MODEL_ID,
+        "model_sha256": result.prepared.imported.model_sha256,
+        "simulator": result.artifacts.simulator,
+        "host_codegen": result.artifacts.host_codegen,
+        "schedule": str(schedule_path.resolve()) if schedule_path else None,
+        "schedule_coverage": schedule_coverage_rows(result.artifacts),
+        "selected_config_identities": [
+            {"occurrence": occurrence, "sha256": config_identities[occurrence]}
+            for occurrence in sorted(config_identities)
+        ],
+        "sample_count": len(result.execution.comparisons),
+        "outputs_passed": sum(item.mixed is not None for item in result.execution.comparisons),
+        "samples": [
+            {"filename": item.sample_path.name, "label": item.sample_path.name,
+             "reference_top1": item.top1,
+             "mixed_top1": None if item.mixed is None else int(item.mixed.argmax(axis=1)[0])}
+            for item in result.execution.comparisons
+        ],
+        "profiler_stats": result.execution.profiler_stats,
+        "status": "passed",
+    }
+    if validate_schedule_evidence:
+        if result.artifacts.simulator != "tsim":
+            raise ValueError("schedule evidence validation requires --simulator tsim")
+        if schedule_path is None:
+            raise ValueError("schedule evidence validation requires a measured schedule snapshot")
+        deployment = capture_deployment_compute(
+            result.prepared.mixed_module, MODEL_ID, result.prepared.imported.model_sha256
+        )
+        snapshot = load_schedule_snapshot(schedule_path, deployment)
+        _validate_schedule_evidence(deployment, snapshot)
+        if len(result.execution.comparisons) != len(committed_sample_records()) or report["outputs_passed"] != len(committed_sample_records()):
+            raise RuntimeError("schedule evidence requires HOST-checked outputs for every committed sample")
+
+        from tvm.contrib.debugger import debug_executor
+        from mlperf_tiny_benchmark.deployment_evidence import profile_graph_resident_nodes
+
+        sample, input_data, sample_evidence = select_deployment_sample()
+        session, simulator = _load_simulator("tsim")
+        graph = debug_executor.create(
+            result.artifacts.mixed.graph_json,
+            result.artifacts.mixed.module,
+            result.artifacts.mixed.device,
+        )
+        graph.load_params(result.artifacts.mixed.params)
+        graph.set_input(INPUT_NAME, input_data)
+        session.clear_and_validate(simulator)
+        graph._run_per_layer()
+        performance_stats = session.read_stats(simulator=simulator)
+        session.validate_activity(performance_stats)
+        rows = profile_graph_resident_nodes(
+            result.artifacts.mixed.graph_json,
+            [{"occurrence": layer.occurrence, "symbol": layer.symbol}
+             for layer in deployment.layers],
+            graph, _EvidenceProfileSession(session), simulator,
+        )
+        occurrences = []
+        for layer, row in zip(deployment.layers, rows):
+            measured = _schedule_measurement_cycles(snapshot.selected[layer.occurrence], layer)
+            deployed = row["deployment_cycles"]
+            passed = cycles_within_ten_percent(deployed, measured)
+            occurrences.append({
+                "occurrence": layer.occurrence, "symbol": layer.symbol,
+                "deployment_cycles": deployed, "autotvm_cycles": measured,
+                "relative_cycle_difference": abs(deployed - measured) / measured,
+                "graph_node": row["graph_node_name"], "counted_invocations": 1,
+                "passed": passed,
+            })
+            if not passed:
+                report.update({"status": "failed", "occurrences": occurrences})
+                write_json_atomic(Path(report_path).with_suffix(".failure.json"), report)
+                raise ValueError(
+                    f"deployment versus selected schedule cycles exceeds 10% at occurrence "
+                    f"{layer.occurrence}: deployment={deployed}, measured={measured}"
+                )
+        report.update({
+            "measurement_protocol": "tsim_single_call_v1",
+            "performance_sample": sample.path.name,
+            "performance_sample_count": 1,
+            "performance_stats": performance_stats,
+            "occurrences": occurrences,
+            "sample_contract": sample_evidence,
+            "sample_sha256": hashlib.sha256(sample.path.read_bytes()).hexdigest(),
+        })
+    write_json_atomic(report_path, report)
+    return report

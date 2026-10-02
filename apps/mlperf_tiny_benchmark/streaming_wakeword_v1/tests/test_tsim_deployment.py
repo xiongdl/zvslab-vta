@@ -104,6 +104,7 @@ def test_tsim_simulator_is_not_initialized_when_runtime_is_imported_in_a_fresh_p
             str(APP_ROOT),
             str(APP_ROOT.parents[3] / "tvm" / "python"),
             str(APP_ROOT.parents[3] / "vta" / "python"),
+            str(APP_ROOT.parents[1]),
         )
     )
     probe = subprocess.run(
@@ -148,6 +149,7 @@ def test_tsim_matrix_loads_once_after_both_host_variants_and_runs_three_samples(
     monkeypatch.setattr(
         deployment_runtime.vta, "get_env", lambda: SimpleNamespace(TARGET="tsim")
     )
+    monkeypatch.setenv("VTA_BACKEND", "tsim")
 
     def fake_build(*args, **kwargs):
         host_codegen = args[2]

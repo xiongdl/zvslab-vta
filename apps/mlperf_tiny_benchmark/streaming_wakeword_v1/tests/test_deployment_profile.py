@@ -1,4 +1,4 @@
-"""Deployment evidence contracts for Streaming Wakeword V1."""
+"""Deployment report, HOST comparison, and schedule evidence contracts."""
 
 import importlib.util
 import sys
@@ -10,82 +10,80 @@ import pytest
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
-DEPLOYMENT = APP_ROOT / "tune" / "deployment.py"
+RUNTIME = APP_ROOT / "runtime.py"
+RUN = APP_ROOT / "run.py"
 
 
-def _load_deployment():
-    spec = importlib.util.spec_from_file_location("streaming_ww_v1_deployment", DEPLOYMENT)
+def _load_runtime():
+    spec = importlib.util.spec_from_file_location("streaming_ww_v1_report_runtime", RUNTIME)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    sys.path.insert(0, str(APP_ROOT))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
     return module
 
 
 def test_cycle_gate_is_inclusive_at_ten_percent():
-    deployment = _load_deployment()
+    runtime = _load_runtime()
 
-    assert deployment.compare_cycles(110, 100)["passed"] is True
-    assert deployment.compare_cycles(90, 100)["passed"] is True
-    with pytest.raises(ValueError, match="exceeds 10%"):
-        deployment.compare_cycles(111, 100)
+    assert runtime.cycles_within_ten_percent(110, 100) is True
+    assert runtime.cycles_within_ten_percent(90, 100) is True
+    assert runtime.cycles_within_ten_percent(111, 100) is False
+    with pytest.raises(ValueError, match="positive integer"):
+        runtime.cycles_within_ten_percent(True, 100)
 
 
-def test_deployment_uses_one_manifest_sample_and_one_stateless_audio_window():
-    deployment = _load_deployment()
+def test_deployment_sample_is_one_fixed_stateless_audio_window(monkeypatch):
+    runtime = _load_runtime()
     sample = SimpleNamespace(path=Path("marvin.wav"), filename="marvin.wav", order=0)
-    runtime = SimpleNamespace(
-        committed_sample_records=lambda: (sample, object(), object()),
-        load_sample=lambda path: np.zeros((1, 30, 1, 40), dtype=np.int8),
-        INPUT_SHAPE=(1, 30, 1, 40),
-        INPUT_DTYPE="int8",
-        CLIP_FRAMES=16000,
-    )
+    monkeypatch.setattr(runtime, "committed_sample_records", lambda: (sample, object(), object()))
+    monkeypatch.setattr(runtime, "load_sample", lambda _path: np.zeros(runtime.INPUT_SHAPE, dtype=np.int8))
 
-    selected, input_data, evidence = deployment.select_deployment_sample(runtime)
+    selected, input_data, evidence = runtime.select_deployment_sample()
 
     assert selected is sample
-    assert input_data.shape == (1, 30, 1, 40)
+    assert input_data.shape == runtime.INPUT_SHAPE
     assert input_data.dtype == np.int8
     assert evidence == {
         "sample_count": 1,
         "audio_window_count": 1,
-        "audio_window_samples": 16000,
-        "feature_frame_count": 30,
+        "audio_window_samples": runtime.CLIP_FRAMES,
+        "feature_frame_count": runtime.INPUT_SHAPE[1],
         "model_invocations": 1,
         "state_policy": "stateless_single_invocation",
     }
 
 
-def test_seed_manifest_rejects_foreign_model(tmp_path):
-    deployment = _load_deployment()
-    manifest = tmp_path / "foreign.json"
-    manifest.write_text('{"schema_version": 1, "model": "keyword_spotting_v1"}')
+def test_run_parser_has_one_schedule_and_evidence_interface():
+    run_spec = importlib.util.spec_from_file_location("streaming_ww_v1_run_contract", RUN)
+    run_module = importlib.util.module_from_spec(run_spec)
+    sys.modules[run_spec.name] = run_module
+    sys.path.insert(0, str(APP_ROOT))
+    try:
+        run_spec.loader.exec_module(run_module)
+    finally:
+        sys.path.pop(0)
 
-    with pytest.raises(ValueError, match="mismatched selected-schedule manifest"):
-        deployment.validate_seed_manifest(manifest, object(), ())
+    defaults = run_module._parser().parse_args([])
+    assert defaults.schedule is None
+    assert defaults.deployment_report is None
+    assert defaults.validate_schedule_evidence is False
+    assert run_module._parser().parse_args(["--schedule", "none"]).schedule == "none"
+    assert run_module._parser().parse_args(["--schedule", "candidate.log"]).schedule == "candidate.log"
+    assert not hasattr(defaults, "autotvm_log")
 
 
-def test_configs_bind_to_exact_occurrence_and_fusion():
-    import hashlib
-    import json
+def test_schedule_evidence_requires_complete_measured_occurrences():
+    runtime = _load_runtime()
+    layers = (SimpleNamespace(occurrence=0),)
+    selected = SimpleNamespace(measured=True)
+    snapshot = SimpleNamespace(selected={0: selected})
+    runtime._validate_schedule_evidence(SimpleNamespace(layers=layers), snapshot)
 
-    deployment = _load_deployment()
-    identity = SimpleNamespace(occurrence=0, symbol="vta_symbol_0", sha256="a" * 64)
-    config = {"tile": [1, 2]}
-    config_sha = hashlib.sha256(
-        json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-    entry = {
-        "occurrence": 0,
-        "symbol": identity.symbol,
-        "fusion_sha256": identity.sha256,
-        "config": config,
-        "config_sha256": config_sha,
-    }
-
-    assert deployment.config_entries_by_symbol((identity,), [entry]) == {
-        identity.symbol: config
-    }
-    entry["symbol"] = "foreign_symbol"
-    with pytest.raises(ValueError, match="identity mismatch"):
-        deployment.config_entries_by_symbol((identity,), [entry])
+    with pytest.raises(ValueError, match="complete occurrence coverage"):
+        runtime._validate_schedule_evidence(
+            SimpleNamespace(layers=layers), SimpleNamespace(selected={})
+        )
