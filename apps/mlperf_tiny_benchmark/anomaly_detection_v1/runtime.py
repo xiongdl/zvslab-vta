@@ -1015,6 +1015,21 @@ def write_deployment_report(
         )
         debug_graph.load_params(result.artifacts.mixed.params)
         debug_graph.set_input(INPUT_NAME, features[0][None, :])
+        session.clear_and_validate(simulator)
+        debug_graph._run_per_layer()
+        performance_stats = session.read_stats(simulator.stats)
+        session.validate_activity(performance_stats)
+        reference_output = _run_graph(
+            result.artifacts.reference, features[0][None, :]
+        )
+        deployed_output = debug_graph.get_output(0).numpy()
+        if (reference_output.shape != deployed_output.shape
+                or reference_output.dtype != deployed_output.dtype):
+            raise RuntimeError("AD V1 evidence output shape or dtype differs from HOST reference")
+        reference_score = float(np.mean((features[0][None, :] - reference_output) ** 2))
+        deployed_score = float(np.mean((features[0][None, :] - deployed_output) ** 2))
+        if not np.isclose(reference_score, deployed_score, rtol=1e-6, atol=1e-6):
+            raise RuntimeError("AD V1 evidence reconstruction score differs from HOST reference")
         profiler = _EvidenceProfileSession(session)
         profiled = profile_graph_resident_nodes(
             result.artifacts.mixed.graph_json,
@@ -1057,8 +1072,12 @@ def write_deployment_report(
         if {(row["occurrence"], row["symbol"]) for row in rows} != expected_rows:
             raise ValueError("deployment occurrence coverage is incomplete")
         report.update({
+            "geometry_sha256": snapshot.geometry_sha256,
+            "schedule_log_sha256": hashlib.sha256(schedule_path.read_bytes()).hexdigest(),
             "measurement_protocol": "tsim_single_call_v1",
             "performance_sample": sample.filename,
+            "performance_sample_count": 1,
+            "performance_stats": performance_stats,
             "performance_window_index": 0,
             "occurrences": rows,
         })
