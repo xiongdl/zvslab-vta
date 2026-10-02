@@ -154,7 +154,9 @@ export PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_ben
 
 Find the generated seed run directory after the seed command and pass its
 `best-manifest.json` to the one-sample alignment deployment. Only after the
-report passes should the full search run:
+report passes should the full search run. Every full-search invocation,
+including `--workload-index` and bounded smoke runs, validates this complete
+one-sample report and its bound seed manifest before searching:
 
 ```bash
 VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
@@ -172,10 +174,10 @@ VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
 
 If an approved full search is interrupted, resume with its run manifest and
 the same FSIM identity/options. Replay the self-contained optimal manifest in
-a fresh TSIM process; this validates selected records and real lowering
-without the intermediate search build. Then deploy the selected manifest once
-on the model's committed representative sample and calculate measured
-per-occurrence and whole-model MAC utilization:
+a fresh TSIM process; this requires complete occurrence coverage and validates
+selected records and real lowering without the intermediate search build. Then
+deploy the selected manifest once on the model's committed representative
+sample and calculate measured per-occurrence and whole-model MAC utilization:
 
 ```bash
 VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \

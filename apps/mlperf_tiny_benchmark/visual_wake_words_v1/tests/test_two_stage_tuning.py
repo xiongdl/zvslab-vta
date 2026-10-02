@@ -1,6 +1,7 @@
 """VWW V1 complete-fusion tuning adapter checks."""
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -62,5 +63,25 @@ def test_seed_and_full_search_modes_are_explicit():
 
     with pytest.raises(SystemExit, match="full search requires --alignment-report"):
         entry.main(["--all"])
+    with pytest.raises(SystemExit, match="full search requires --alignment-report"):
+        entry.main(["--workload-index", "0"])
     with pytest.raises(SystemExit, match="--seed requires --all"):
         entry.main(["--seed", "--workload-index", "0"])
+
+
+@pytest.mark.parametrize("mutation", ["empty", "partial", "incomplete"])
+def test_standalone_replay_rejects_incomplete_manifest(tmp_path, mutation):
+    entry = _load_entry()
+    source = next((APP_ROOT / "tune" / "optimal").glob("*/best-manifest.json"))
+    manifest = json.loads(source.read_text(encoding="utf-8"))
+    if mutation == "empty":
+        manifest["entries"] = []
+    elif mutation == "partial":
+        manifest["entries"] = manifest["entries"][:-1]
+    else:
+        manifest["status"] = "incomplete"
+    path = tmp_path / "incomplete.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        entry._replay_manifest(path)

@@ -575,31 +575,24 @@ def _export_best_artifacts(run_dir, run_manifest, prepared, identities, tasks, a
 
 
 def _validate_alignment_report(path, prepared, identities, tasks):
-    path = Path(path).expanduser().resolve(strict=True)
-    report = json.loads(path.read_text(encoding="utf-8"))
-    if (report.get("schema_version") != 1 or report.get("phase") != "seed"
-            or report.get("status") != "passed"
-            or report.get("model_id", report.get("model")) != "anomaly_detection_v1"
-            or report.get("sample_count") != 1):
-        raise ValueError("alignment report must be a passing one-sample AD V1 seed report")
-    rows = report.get("occurrences")
-    if not isinstance(rows, list) or len(rows) != len(identities) or len(tasks) != len(identities):
-        raise ValueError("alignment report does not cover every AD V1 VTA occurrence")
-    expected = {identity.occurrence: identity for identity in identities}
-    seen = set()
-    for row in rows:
-        occurrence = row.get("occurrence")
-        identity = expected.get(occurrence)
-        if identity is None or occurrence in seen:
-            raise ValueError(f"alignment report has an unexpected or duplicate occurrence {occurrence}")
-        if (row.get("symbol") != identity.symbol
-                or row.get("fusion_sha256") != identity.sha256
-                or row.get("passed") is not True):
-            raise ValueError(f"alignment report identity or gate failed at occurrence {occurrence}")
-        seen.add(occurrence)
-    if seen != set(expected):
-        raise ValueError("alignment report occurrence coverage is incomplete")
-    return path
+    from deployment_evidence import validate_seed_alignment_report
+
+    geometry_path, geometry_sha = legacy.shared._config_identity(
+        os.environ.get("VTA_CONFIG_FILE", legacy.shared.DEFAULT_CONFIG_PATH)
+    )
+    _, model_dir, model_filename = legacy.shared.MODEL_PIPELINES["anomaly_detection_v1"]
+    model_sha = legacy.shared._sha256_file(APP_ROOT / model_dir / model_filename)
+    expected = [
+        {"occurrence": identity.occurrence, "symbol": identity.symbol,
+         "fusion_sha256": identity.sha256,
+         "workload_sha256": legacy.shared._task_workload_id(task)}
+        for identity, task in zip(identities, tasks)
+    ]
+    return validate_seed_alignment_report(
+        path, model_id="anomaly_detection_v1", model_sha256=model_sha,
+        geometry_path=geometry_path, geometry_sha256=geometry_sha,
+        expected_occurrences=expected,
+    )
 
 
 def _run_controller(args):
@@ -609,7 +602,7 @@ def _run_controller(args):
     if args.seed:
         args.min_successful = 1
     prepared, identities, tasks = legacy.prepare_v1_workloads()
-    if not args.seed and args.workload_index is None:
+    if not args.seed:
         args.alignment_report = _validate_alignment_report(
             args.alignment_report, prepared, identities, tasks
         )
@@ -733,12 +726,33 @@ def _replay_manifest(path):
         manifest = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError(f"best manifest is not readable JSON: {path}") from error
-    if manifest.get("schema_version") != 1 or manifest.get("model") != "anomaly_detection_v1":
-        raise ValueError("unsupported or mismatched best manifest")
-    entries = manifest.get("entries")
-    if not isinstance(entries, list):
-        raise ValueError("best manifest entries must be a list")
+    _, identities, tasks = legacy.prepare_v1_workloads()
+    _, geometry_sha = legacy.shared._config_identity(
+        os.environ.get("VTA_CONFIG_FILE", legacy.shared.DEFAULT_CONFIG_PATH)
+    )
+    _, model_dir, model_filename = legacy.shared.MODEL_PIPELINES["anomaly_detection_v1"]
+    model_sha = legacy.shared._sha256_file(APP_ROOT / model_dir / model_filename)
+    expected = [
+        {"occurrence": identity.occurrence, "symbol": identity.symbol,
+         "fusion_sha256": identity.sha256,
+         "workload_sha256": legacy.shared._task_workload_id(task)}
+        for identity, task in zip(identities, tasks)
+    ]
+    from deployment_evidence import validate_replay_manifest
+
+    entries = validate_replay_manifest(
+        manifest, model_id="anomaly_detection_v1", model_sha256=model_sha,
+        geometry_sha256=geometry_sha, expected_occurrences=expected,
+    )
     for entry in entries:
+        for field in ("result_json", "native_record"):
+            name = entry.get(field)
+            if not isinstance(name, str) or Path(name).name != name:
+                raise ValueError(f"best manifest {field} must be a local filename")
+        native_path = path.parent / entry["native_record"]
+        if (not native_path.is_file()
+                or legacy.shared._sha256_file(native_path) != entry.get("native_record_sha256")):
+            raise ValueError("best manifest native record hash does not match its artifact")
         result_path = path.parent / entry["result_json"]
         replay = legacy.replay_result(
             result_path, expected_workload_index=entry.get("workload_index")
@@ -746,6 +760,12 @@ def _replay_manifest(path):
         result = replay["result"]
         if result.get("fusion_sha256") != entry.get("fusion_sha256"):
             raise ValueError("best manifest fusion identity does not match its result")
+        result_config = result.get("conv_config", result.get("config"))
+        if (result.get("workload_sha256") != entry.get("workload_sha256")
+                or _sha256_json(result_config) != entry.get("config_sha256")
+                or result.get("best_native_record") != entry.get("native_record")
+                or result.get("best_native_record_sha256") != entry.get("native_record_sha256")):
+            raise ValueError("best manifest identity does not match its result")
         if result.get("tsim_cycles") != entry.get("tsim_cycles"):
             raise ValueError("best manifest cycles do not match its result")
     print(f"Validated self-contained best manifest: {path}")
@@ -812,7 +832,7 @@ def main(argv=None):
         raise SystemExit("select exactly one of --all or --workload-index")
     if args.seed and (not args.all or args.alignment_report):
         raise SystemExit("--seed requires --all and cannot use --alignment-report")
-    if args.all and not args.seed and not args.alignment_report:
+    if not args.seed and not args.alignment_report:
         raise SystemExit("full search requires --alignment-report from the passing seed deployment")
     if args.resume_manifest and args.build_dir:
         raise SystemExit("--build-dir cannot be combined with --resume-manifest")

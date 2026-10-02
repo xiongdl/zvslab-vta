@@ -240,3 +240,156 @@ def test_failure_report_keeps_stage_diagnostics(tmp_path):
     assert failure["status"] == "failed"
     assert failure["error"] == "RuntimeError: bad output"
     assert failure["details"]["sample_id"] == "s0"
+
+
+def _write_seed_gate(tmp_path, deployment_cycles=110, autotvm_cycles=100):
+    geometry = tmp_path / "geometry.json"
+    geometry.write_text('{"LOG_BATCH": 0, "LOG_BLOCK": 3}', encoding="utf-8")
+    geometry_hash = evidence.sha256_file(geometry)
+    model_id = "remaining_model"
+    model_hash = _hash("d")
+    identity = _identity()
+    config = {"tile": 1}
+    config_hash = evidence.sha256_json(config)
+    native_path = tmp_path / "seed.tsim.log"
+    native_path.write_text("native record\n", encoding="utf-8")
+    native_hash = evidence.sha256_file(native_path)
+    result = {
+        "model": model_id, "model_sha256": model_hash,
+        "geometry_sha256": geometry_hash, "workload_index": 0,
+        "symbol": identity["symbol"], "fusion_sha256": identity["fusion_sha256"],
+        "workload_sha256": identity["workload_sha256"], "tsim_cycles": autotvm_cycles,
+        "best_native_record": native_path.name,
+        "best_native_record_sha256": native_hash, "conv_config": config,
+    }
+    result_path = tmp_path / "seed-result.json"
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    manifest = {
+        "schema_version": 1, "status": "complete", "model": model_id,
+        "model_id": model_id, "model_sha256": model_hash,
+        "geometry_sha256": geometry_hash, "phase": "seed", "bounded": False,
+        "completion_label": "SEED_COMPLETE", "workload_count": 1,
+        "selected_workload_indices": [0], "failures": [],
+        "measurement_protocol": {"name": "tsim_single_call", "version": 1,
+                                  "warmup_excluded": True, "counted_invocations": 1},
+        "entries": [{**identity, "config": config, "config_sha256": config_hash,
+                     "workload_index": 0, "tsim_cycles": autotvm_cycles,
+                     "result_json": result_path.name,
+                     "native_record": native_path.name,
+                     "native_record_sha256": native_hash}],
+    }
+    manifest_path = tmp_path / "seed-manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    report = {
+        "schema_version": 1, "artifact_kind": evidence.REPORT_KIND,
+        "phase": "seed", "status": "passed", "completion_label": "SEED_ALIGNMENT",
+        "model_id": model_id, "model": model_id, "model_sha256": model_hash,
+        "backend": "tsim", "sample_count": 1,
+        "measurement_protocol": {**evidence.PROTOCOL,
+                                  "operator_counted_invocations": 1,
+                                  "full_model_counted_invocations": 1},
+        "geometry": {"path": str(geometry.resolve()), "sha256": geometry_hash},
+        "selected_manifest": str(manifest_path),
+        "selected_manifest_sha256": evidence.sha256_file(manifest_path),
+        "occurrences": [{**identity, "config_sha256": config_hash,
+                         "deployment_cycles": deployment_cycles,
+                         "autotvm_cycles": autotvm_cycles,
+                         "relative_cycle_difference": (
+                             abs(deployment_cycles - autotvm_cycles) / autotvm_cycles
+                             if isinstance(autotvm_cycles, int) and autotvm_cycles > 0 else None
+                         ),
+                         "counted_invocations": 1, "passed": True}],
+    }
+    report_path = tmp_path / "seed-report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    return report_path, geometry, geometry_hash, model_hash, model_id, [identity]
+
+
+def test_seed_alignment_gate_binds_cycles_and_complete_seed_manifest(tmp_path):
+    report_path, geometry, geometry_hash, model_hash, model_id, expected = _write_seed_gate(tmp_path)
+    assert evidence.validate_seed_alignment_report(
+        report_path, model_id=model_id, model_sha256=model_hash,
+        geometry_path=geometry, geometry_sha256=geometry_hash,
+        expected_occurrences=expected,
+    ) == report_path.resolve()
+
+
+@pytest.mark.parametrize("deployment,autotvm", [(111, 100), (0, 100), (True, 100), (110, 0)])
+def test_seed_alignment_gate_rejects_invalid_or_over_ten_percent_cycles(
+    tmp_path, deployment, autotvm
+):
+    report_path, geometry, geometry_hash, model_hash, model_id, expected = _write_seed_gate(
+        tmp_path, deployment, autotvm
+    )
+    with pytest.raises(ValueError):
+        evidence.validate_seed_alignment_report(
+            report_path, model_id=model_id, model_sha256=model_hash,
+            geometry_path=geometry, geometry_sha256=geometry_hash,
+            expected_occurrences=expected,
+        )
+
+
+def test_seed_alignment_gate_rejects_tampered_manifest_binding(tmp_path):
+    report_path, geometry, geometry_hash, model_hash, model_id, expected = _write_seed_gate(tmp_path)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["selected_manifest_sha256"] = _hash("f")
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    with pytest.raises(ValueError, match="manifest hash"):
+        evidence.validate_seed_alignment_report(
+            report_path, model_id=model_id, model_sha256=model_hash,
+            geometry_path=geometry, geometry_sha256=geometry_hash,
+            expected_occurrences=expected,
+        )
+
+
+@pytest.mark.parametrize("field,value", [
+    ("model_id", "foreign_model"),
+    ("geometry.sha256", _hash("f")),
+])
+def test_seed_alignment_gate_rejects_foreign_report_identity(tmp_path, field, value):
+    report_path, geometry, geometry_hash, model_hash, model_id, expected = _write_seed_gate(tmp_path)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if field == "geometry.sha256":
+        report["geometry"]["sha256"] = value
+    else:
+        report[field] = value
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    with pytest.raises(ValueError):
+        evidence.validate_seed_alignment_report(
+            report_path, model_id=model_id, model_sha256=model_hash,
+            geometry_path=geometry, geometry_sha256=geometry_hash,
+            expected_occurrences=expected,
+        )
+
+
+def test_seed_alignment_gate_rejects_incomplete_bound_manifest(tmp_path):
+    report_path, geometry, geometry_hash, model_hash, model_id, expected = _write_seed_gate(tmp_path)
+    manifest_path = tmp_path / "seed-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["status"] = "incomplete"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["selected_manifest_sha256"] = evidence.sha256_file(manifest_path)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    with pytest.raises(ValueError, match="complete, matching seed manifest"):
+        evidence.validate_seed_alignment_report(
+            report_path, model_id=model_id, model_sha256=model_hash,
+            geometry_path=geometry, geometry_sha256=geometry_hash,
+            expected_occurrences=expected,
+        )
+
+
+@pytest.mark.parametrize("mutate,match", [
+    (lambda manifest: manifest.update(status="incomplete"), "incomplete"),
+    (lambda manifest: manifest.update(entries=[]), "cover every"),
+    (lambda manifest: manifest.update(selected_workload_indices=[]), "cover every"),
+])
+def test_replay_manifest_requires_complete_occurrence_coverage(tmp_path, mutate, match):
+    _, geometry, geometry_hash, model_hash, model_id, expected = _write_seed_gate(tmp_path)
+    manifest = json.loads((tmp_path / "seed-manifest.json").read_text(encoding="utf-8"))
+    mutate(manifest)
+    with pytest.raises(ValueError, match=match):
+        evidence.validate_replay_manifest(
+            manifest, model_id=model_id, model_sha256=model_hash,
+            geometry_sha256=geometry_hash, expected_occurrences=expected,
+        )

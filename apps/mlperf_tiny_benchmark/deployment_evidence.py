@@ -69,6 +69,165 @@ def validate_selected_configs(manifest, expected_occurrences, *, phase):
     return entries
 
 
+def validate_seed_alignment_report(path, *, model_id, model_sha256, geometry_path,
+                                   geometry_sha256, expected_occurrences):
+    """Validate a complete deployment gate and the exact seed manifest it measured."""
+    try:
+        path = Path(path).expanduser().resolve(strict=True)
+    except (OSError, TypeError) as error:
+        raise ValueError("alignment report path does not name an existing file") from error
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"alignment report is not readable JSON: {path}") from error
+    protocol = {
+        **PROTOCOL,
+        "operator_counted_invocations": 1,
+        "full_model_counted_invocations": 1,
+    }
+    if (not isinstance(report, dict) or report.get("schema_version") != REPORT_SCHEMA_VERSION
+            or report.get("artifact_kind") != REPORT_KIND or report.get("phase") != "seed"
+            or report.get("status") != "passed" or report.get("completion_label") != "SEED_ALIGNMENT"
+            or report.get("model_id") != model_id or report.get("model") != model_id
+            or report.get("model_sha256") != model_sha256 or report.get("backend") != "tsim"
+            or report.get("sample_count") != 1 or report.get("measurement_protocol") != protocol):
+        raise ValueError("alignment report is not a passing one-sample seed report for this model")
+    geometry_path = Path(geometry_path).expanduser().resolve(strict=True)
+    if (not isinstance(report.get("geometry"), dict)
+            or report["geometry"].get("path") != str(geometry_path)
+            or report["geometry"].get("sha256") != geometry_sha256
+            or sha256_file(geometry_path) != geometry_sha256):
+        raise ValueError("alignment report geometry identity does not match the active configuration")
+
+    try:
+        manifest_path = Path(report.get("selected_manifest", "")).expanduser().resolve(strict=True)
+    except (OSError, TypeError) as error:
+        raise ValueError("alignment report seed manifest path does not exist") from error
+    if (report.get("selected_manifest_sha256") != sha256_file(manifest_path)):
+        raise ValueError("alignment report seed manifest hash does not match the referenced file")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("alignment report seed manifest is not readable JSON") from error
+    if (not isinstance(manifest, dict) or manifest.get("model") != model_id
+            or manifest.get("model_id") != model_id or manifest.get("phase") != "seed"
+            or manifest.get("status") != "complete" or manifest.get("bounded") is not False
+            or manifest.get("completion_label") != "SEED_COMPLETE"
+            or manifest.get("model_sha256") != model_sha256
+            or manifest.get("geometry_sha256") != geometry_sha256
+            or manifest.get("measurement_protocol") != {
+                "name": PROTOCOL["name"], "version": PROTOCOL["version"],
+                "warmup_excluded": True, "counted_invocations": 1,
+            }):
+        raise ValueError("alignment report does not reference a complete, matching seed manifest")
+    entries = validate_selected_configs(manifest, expected_occurrences, phase="seed")
+    expected_indices = list(range(len(expected_occurrences)))
+    if (manifest.get("workload_count") != len(expected_indices)
+            or manifest.get("selected_workload_indices") != expected_indices
+            or manifest.get("failures") != []):
+        raise ValueError("seed manifest does not cover every prepared occurrence")
+    seed_by_occurrence = {entry["occurrence"]: entry for entry in entries}
+    expected = {item["occurrence"]: item for item in expected_occurrences}
+    for occurrence, seed in seed_by_occurrence.items():
+        for field in ("result_json", "native_record"):
+            name = seed.get(field)
+            if not isinstance(name, str) or Path(name).name != name:
+                raise ValueError(f"seed manifest {field} must be a local filename")
+            artifact_path = manifest_path.parent / name
+            if not artifact_path.is_file():
+                raise ValueError(f"seed manifest {field} is missing at occurrence {occurrence}")
+        native_path = manifest_path.parent / seed["native_record"]
+        native_hash = seed.get("native_record_sha256")
+        if (not isinstance(native_hash, str) or sha256_file(native_path) != native_hash):
+            raise ValueError(f"seed native record hash mismatch at occurrence {occurrence}")
+        try:
+            result = json.loads((manifest_path.parent / seed["result_json"]).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f"seed result JSON is unreadable at occurrence {occurrence}") from error
+        expected_identity = expected[occurrence]
+        if (not isinstance(result, dict)
+                or result.get("model") != model_id
+                or result.get("model_sha256") != model_sha256
+                or result.get("geometry_sha256") != geometry_sha256
+                or result.get("workload_index") != occurrence
+                or result.get("symbol") != expected_identity["symbol"]
+                or result.get("fusion_sha256") != expected_identity["fusion_sha256"]
+                or result.get("workload_sha256") != expected_identity["workload_sha256"]
+                or result.get("tsim_cycles") != seed.get("tsim_cycles")
+                or result.get("best_native_record") != seed.get("native_record")
+                or result.get("best_native_record_sha256") != native_hash
+                or sha256_json(result.get("conv_config", result.get("config")))
+                != seed.get("config_sha256")):
+            raise ValueError(f"seed result identity mismatch at occurrence {occurrence}")
+    rows = report.get("occurrences")
+    if not isinstance(rows, list) or len(rows) != len(expected_occurrences):
+        raise ValueError("alignment report does not cover every prepared occurrence")
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("alignment report occurrences must be objects")
+        occurrence = row.get("occurrence")
+        if isinstance(occurrence, bool) or not isinstance(occurrence, int):
+            raise ValueError("alignment report occurrence must be an integer")
+        identity = expected.get(occurrence)
+        seed = seed_by_occurrence.get(occurrence)
+        if identity is None or seed is None or occurrence in seen:
+            raise ValueError(f"alignment report has an unexpected or duplicate occurrence {occurrence}")
+        for field in ("symbol", "fusion_sha256", "workload_sha256"):
+            if row.get(field) != identity.get(field) or seed.get(field) != identity.get(field):
+                raise ValueError(f"alignment report {field} mismatch at occurrence {occurrence}")
+        for field in ("config_sha256",):
+            if row.get(field) != seed.get(field):
+                raise ValueError(f"alignment report {field} mismatch at occurrence {occurrence}")
+        deployment_cycles = row.get("deployment_cycles")
+        autotvm_cycles = row.get("autotvm_cycles")
+        if not cycles_within_ten_percent(deployment_cycles, autotvm_cycles):
+            raise ValueError(f"alignment report cycle difference exceeds 10% at occurrence {occurrence}")
+        if (row.get("passed") is not True or row.get("counted_invocations") != 1
+                or seed.get("tsim_cycles") != autotvm_cycles
+                or row.get("relative_cycle_difference")
+                != abs(deployment_cycles - autotvm_cycles) / autotvm_cycles):
+            raise ValueError(f"alignment report gate or seed cycles mismatch at occurrence {occurrence}")
+        seen.add(occurrence)
+    if seen != set(expected):
+        raise ValueError("alignment report occurrence coverage is incomplete")
+    return path
+
+
+def validate_replay_manifest(manifest, *, model_id, model_sha256, geometry_sha256,
+                             expected_occurrences):
+    """Require a complete, model-bound artifact manifest before replaying records."""
+    if (not isinstance(manifest, dict) or manifest.get("schema_version") != REPORT_SCHEMA_VERSION
+            or manifest.get("model") != model_id or manifest.get("model_id") != model_id):
+        raise ValueError("unsupported or mismatched best manifest")
+    phase = manifest.get("phase")
+    completion = "SEED_COMPLETE" if phase == "seed" else "FULL_SEARCH"
+    if (phase not in ("seed", "selected") or manifest.get("status") != "complete"
+            or manifest.get("bounded") is not False
+            or manifest.get("completion_label") != completion
+            or manifest.get("model_sha256") != model_sha256
+            or manifest.get("geometry_sha256") != geometry_sha256
+            or manifest.get("measurement_protocol") != {
+                "name": PROTOCOL["name"], "version": PROTOCOL["version"],
+                "warmup_excluded": True, "counted_invocations": 1,
+            }):
+        raise ValueError("best manifest is incomplete or has a mismatched model, geometry, or protocol")
+    entries = validate_selected_configs(manifest, expected_occurrences, phase=phase)
+    indices = list(range(len(expected_occurrences)))
+    if (manifest.get("workload_count") != len(indices)
+            or manifest.get("selected_workload_indices") != indices
+            or manifest.get("failures") != []):
+        raise ValueError("best manifest does not cover every prepared occurrence")
+    for entry in entries:
+        config = entry.get("config", entry.get("conv_config"))
+        if entry.get("config_sha256") != sha256_json(config):
+            raise ValueError(f"best manifest config hash mismatch at occurrence {entry['occurrence']}")
+        _cycles = entry.get("tsim_cycles")
+        if isinstance(_cycles, bool) or not isinstance(_cycles, int) or _cycles <= 0:
+            raise ValueError(f"best manifest TSIM cycles are invalid at occurrence {entry['occurrence']}")
+    return entries
+
+
 def lower_selected_configs(manifest, expected_occurrences, lowerer, *, phase):
     """Lower each exact exported config against its matching prepared symbol."""
     if not callable(lowerer):
