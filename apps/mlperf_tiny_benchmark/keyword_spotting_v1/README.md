@@ -86,64 +86,71 @@ successful single run reports twelve comparisons; each FSIM matrix entry must
 have positive GEMM, weight-load, and output-store counters, while each TSIM
 entry must have a positive integer `cycle_count`.
 
-## Complete-fusion two-stage tuning
+## Actual-deployment schedule tuning
 
-`tune.py` extracts each routed KWS Conv fusion from the prepared graph,
-including its per-channel bias, right shift, clipping, and cast. Occurrences
-remain separate even when they share a workload. Seed artifacts and durable
-search state are written under `tune/` and `build/two_stage_tuning/`.
+`run.py` is the only deployment command. It accepts `--schedule PATH` for a
+native AutoTVM `.log` paired with automatically loaded same-stem `.json`
+metadata. Omitting the option or passing `none` uses the default schedule.
+Partial snapshots are supported: provided configurations apply to their exact
+prepared VTA occurrences; uncovered occurrences use defaults and are listed
+in the output. Model, geometry, compute, workload/configuration, and record
+identities are validated. `--deployment-report PATH` writes provenance,
+coverage, output checks, and measurement evidence. On TSIM,
+`--validate-schedule-evidence` requires complete measured coverage and passes
+only when the strict per-layer cycle-alignment gate succeeds.
 
-Run the seed search and deployment in separate processes using the same
-absolute geometry file. Full search requires a passing seed deployment report;
-`--resume-manifest` resumes its matching durable run and `--replay-manifest`
-validates standalone exported artifacts.
-
-```bash
-MODEL=keyword_spotting_v1
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL" \
-  ./.envs/tvm-vta-env/bin/python \
-  "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/tune.py" --seed --all
-```
-
-Apply the exported seed manifest in a fresh TSIM process. The deployment uses
-the first committed WAV sample, the existing MFCC preprocessing, and exact
-HOST output comparison. It reports one sample, selected per-occurrence cycles,
-and ordinary/debug full-model counter agreement.
+The deployment continues to preprocess its twelve committed WAV files through
+the existing quantized MFCC path, compares each mixed output exactly against
+the CPU reference, and requires positive simulator activity. These are
+execution checks, not an accuracy or MLPerf score claim.
 
 ```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/keyword_spotting_v1" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/deployment.py \
-  --best-manifest vta/apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/seed/<run-id>/best-manifest.json \
-  --output vta/apps/mlperf_tiny_benchmark/keyword_spotting_v1/tune/deployment-seed.json
+MODEL_DIR=vta/apps/mlperf_tiny_benchmark/keyword_spotting_v1
+export MODEL_DIR
+export VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json"
+export PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps"
+
+VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/run.py" \
+  --simulator fsim --schedule none
+
+VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/run.py" \
+  --simulator tsim --schedule /path/to/snapshot.log \
+  --deployment-report /tmp/kws-deployment.json
 ```
 
-## AutoTVM schedule tuning
+## Tune actual deployment occurrences
 
-The shared tuner extracts supported VTA convolution/dense task families from
-the prepared KWS graph and records unsupported VTA task families in the JSON
-sidecar. FSIM and TSIM produce separate logs and sidecars under
-`vta/apps/mlperf_tiny_benchmark/build/autotvm/`. Add `--trials-per-task 1` for
-a bounded workflow check:
+The model's `tune.py` tunes the actual prepared VTA occurrences with shared
+lowering. Measure all default schedules on TSIM first, then apply the seed
+through `run.py` with the strict evidence option. Search requires that complete
+passing report:
 
 ```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
-  --model keyword_spotting_v1 --backend fsim --trials-per-task 1
+VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune.py" --seed --all
+VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/run.py" \
+  --simulator tsim \
+  --schedule "$MODEL_DIR/build/actual_compute_tuning/seed/seed.log" \
+  --validate-schedule-evidence \
+  --deployment-report "$MODEL_DIR/build/actual_compute_tuning/seed/deployment.json"
 
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
-  --model keyword_spotting_v1 --backend tsim --trials-per-task 1
+VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune.py" \
+  --all --alignment-report "$MODEL_DIR/build/actual_compute_tuning/seed/deployment.json"
 ```
 
-Pass the matching `--autotvm-log` and `--autotvm-sidecar` to `run.py` with the
-same backend to replay history-best during mixed-graph compilation. Run each
-backend in a fresh process. Replay validates model, backend, config, log hash,
-and task coverage. MFCC preprocessing and the 12-sample, 12-label output
-contract remain in place; TSIM reports simulator `cycle_count`.
+The seed log and metadata are stored under `build/actual_compute_tuning/seed/`.
+Search tests 100 distinct configs per batch until 20 successful candidates per
+occurrence or exhaustion, with 60-second FSIM and 120-second TSIM candidate
+timeouts. Use `--workload-index N` or `--max-workloads N` to bound scope.
+Resume with `--resume-manifest PATH`, the same alignment report, and the same
+model/geometry/compute/options; state lives under
+`build/actual_compute_tuning/<run-id>/`.
+
+Search exports `best.log` with same-stem metadata when successful TSIM results
+exist. Explicit exports require the resume manifest and `--output-log PATH`:
+use `--export-candidate CANDIDATE --workload-index OCCURRENCE` for one ledger
+entry, or `--export-best` for the best successful schedules. The resulting
+partial or complete snapshot is applied by `run.py --schedule PATH`.
+Compatible historical manifests can be converted with
+`common.schedule.migrate_legacy_full_fusion` after checking actual compute,
+model/geometry identity, valid configurations, native record hashes, and the
+single-call TSIM measurement protocol. Migration creates no measurements.

@@ -101,89 +101,79 @@ structure, output differences, wrong configuration, and absent accelerator
 activity cause a nonzero exit. TSIM initialization and hardware loading remain
 lazy until all four bundles have been built, exported, and reloaded.
 
-## Actual-deployment schedule tuning
+## Actual-deployment schedules and tuning
 
-`run.py` and `tune.py` use the same thirteen VTA layer occurrences captured from
-the prepared model. A schedule file is one native AutoTVM `.log` plus a
-same-stem `.json` file; `run.py` finds and validates the sidecar automatically.
-Omitting `--schedule` or passing `--schedule none` uses the default lowering.
-A partial schedule applies to its covered occurrences and reports which other
-layers use the default schedule.
+`run.py` is the only deployment entry point. Omitting `--schedule` or passing
+`--schedule none` uses default schedules. `--schedule PATH` loads one native
+AutoTVM `.log` and its same-stem `.json` metadata automatically. The metadata
+binds schedules to the model, actual prepared computation, geometry,
+occurrences, workloads/configurations, and native record hashes. Partial
+snapshots are allowed; uncovered occurrences remain on default schedules and
+the runner reports this coverage. Invalid identities or records fail before
+execution.
 
-Run the normal deployment or replay a snapshot with the same command:
-
-```bash
-MODEL=visual_wake_words_v1
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL"
-
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PYTHONPATH" ./.envs/tvm-vta-env/bin/python \
-  "vta/apps/mlperf_tiny_benchmark/$MODEL/run.py" --simulator fsim
-
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PYTHONPATH" ./.envs/tvm-vta-env/bin/python \
-  "vta/apps/mlperf_tiny_benchmark/$MODEL/run.py" --simulator fsim --schedule none
-
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PYTHONPATH" ./.envs/tvm-vta-env/bin/python \
-  "vta/apps/mlperf_tiny_benchmark/$MODEL/run.py" --simulator fsim \
-  --schedule /path/to/schedule.log
-```
-
-Generate a measured TSIM seed snapshot, then ask the unified deployment to
-check all ten HOST-reference outputs and per-layer cycle alignment:
+The graph contains thirteen deterministic single-convolution VTA regions and
+keeps thirteen depthwise convolutions on CPU. The ten committed JPEG samples
+are compared against the pure HOST reference with the fixed `1e-6`
+absolute/relative tolerance and exact classification agreement. The
+`--deployment-report PATH` option records model/schedule provenance, coverage,
+outputs, and measured evidence. On TSIM,
+`--validate-schedule-evidence` requires complete measured coverage and the
+strict per-layer cycle-alignment gate. Standard correctness execution still
+checks all ten committed samples; schedule evidence measures one performance
+sample. `cycle_count` is simulator activity, not FPGA latency or MLPerf
+performance.
 
 ```bash
-MODEL=visual_wake_words_v1
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL"
-SEED_LOG="$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL/build/actual_compute_tuning/seed/seed.log"
-SEED_REPORT="$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL/build/actual_compute_tuning/seed/deployment-report.json"
+MODEL_DIR=vta/apps/mlperf_tiny_benchmark/visual_wake_words_v1
+export MODEL_DIR
+export VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json"
+export PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps"
 
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-PYTHONPATH="$PYTHONPATH" ./.envs/tvm-vta-env/bin/python \
-  "vta/apps/mlperf_tiny_benchmark/$MODEL/tune.py" --seed --all --output-log "$SEED_LOG"
+VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/run.py" \
+  --simulator fsim --schedule none
 
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-PYTHONPATH="$PYTHONPATH" ./.envs/tvm-vta-env/bin/python \
-  "vta/apps/mlperf_tiny_benchmark/$MODEL/run.py" --simulator tsim \
-  --schedule "$SEED_LOG" --deployment-report "$SEED_REPORT" \
-  --validate-schedule-evidence
+VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/run.py" \
+  --simulator tsim --schedule /path/to/snapshot.log \
+  --deployment-report /tmp/vww-deployment.json
 ```
 
-Search a bounded set of actual layer schedules, then resume by supplying the
-printed `resume-manifest.json` with identical search options and alignment
-report. `--all` can replace `--workload-index 0` to search every occurrence.
+## Tune actual deployment occurrences
+
+`tune.py` captures the real prepared VTA occurrences and tunes them through
+shared lowering. The seed measures each default schedule on TSIM and writes
+`build/actual_compute_tuning/seed/seed.log` with same-stem metadata. Deploy it
+with the strict TSIM evidence gate; the passing report is a prerequisite for
+search:
 
 ```bash
-MODEL=visual_wake_words_v1
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL"
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PYTHONPATH" ./.envs/tvm-vta-env/bin/python \
-  "vta/apps/mlperf_tiny_benchmark/$MODEL/tune.py" --workload-index 0 \
-  --trial-batch 1 --min-successful 1 --alignment-report "$SEED_REPORT"
+VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune.py" --seed --all
+VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/run.py" \
+  --simulator tsim \
+  --schedule "$MODEL_DIR/build/actual_compute_tuning/seed/seed.log" \
+  --validate-schedule-evidence \
+  --deployment-report "$MODEL_DIR/build/actual_compute_tuning/seed/deployment.json"
+
+VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune.py" \
+  --all --alignment-report "$MODEL_DIR/build/actual_compute_tuning/seed/deployment.json"
 ```
 
-Export either a ledger candidate or the best measured candidate and pass the
-resulting `.log` to `run.py` like any other schedule snapshot:
+Search defaults to 100 unique configurations per batch, 20 successful
+schedules per occurrence, and 60/120-second FSIM/TSIM candidate timeouts; it
+stops at the quota or when the valid configuration space is exhausted. Use
+`--workload-index N` or `--max-workloads N` for bounded search. Resume with
+`--resume-manifest PATH` and the unchanged alignment report and tuning
+identity. The manifest, occurrence ledgers, failures, and intermediate logs are
+kept under `build/actual_compute_tuning/<run-id>/`.
 
-```bash
-MODEL=visual_wake_words_v1
-RESUME=/path/to/resume-manifest.json
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL" \
-  ./.envs/tvm-vta-env/bin/python \
-  "vta/apps/mlperf_tiny_benchmark/$MODEL/tune.py" --export-candidate 0 \
-  --workload-index 0 --resume-manifest "$RESUME" --output-log /tmp/vww-candidate.log
-
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL" \
-  ./.envs/tvm-vta-env/bin/python \
-  "vta/apps/mlperf_tiny_benchmark/$MODEL/run.py" --simulator fsim \
-  --schedule /tmp/vww-candidate.log
-```
-
-Search ledgers and temporary builds live under the ignored `build/` directory.
-Committed historical seed and optimal artifacts remain available as records;
-new schedule snapshots carry their own model, geometry, compute, and log
-identity metadata. TSIM `cycle_count` is simulated accelerator work, not FPGA
-latency or an MLPerf result.
+When successful TSIM candidates exist, search writes a `best.log` and its
+same-stem metadata. To export a specific candidate, pass the matching resume
+manifest and `--output-log PATH` with
+`--export-candidate CANDIDATE --workload-index OCCURRENCE`; use `--export-best`
+for the best successful candidate of each selected occurrence. A partial
+candidate is a deployable snapshot and uncovered regions use defaults. Candidate
+provenance records whether it has TSIM measurements. Historical compatible
+complete-fusion manifests can be migrated with
+`common.schedule.migrate_legacy_full_fusion`; it validates the current model,
+geometry, occurrence computations, schedule records, and single-call TSIM
+protocol without inventing measurements.

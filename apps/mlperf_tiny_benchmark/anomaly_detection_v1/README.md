@@ -146,85 +146,77 @@ a positive integer `cycle_count`. Missing TSIM registries, a non-TSIM
 labels are deployment contracts only; they do not claim classification
 accuracy.
 
-## AutoTVM tuning and replay
+## Actual-deployment schedules
 
-The tuner extracts from the prepared anomaly mixed graph and writes a separate
-native log and JSON sidecar for each backend. The sidecar records the model
-hash and supported/unsupported VTA task templates; only supported templates
-are measured and represented in history-best replay.
+`run.py` accepts one `--schedule PATH` snapshot: a native AutoTVM `.log` plus
+same-stem `.json` metadata, discovered automatically. Omitting `--schedule` or
+using `--schedule none` selects the normal default schedule. Partial snapshots
+are supported and the runner reports which VTA occurrences use the supplied
+configuration and which use defaults. Model, prepared-compute, geometry,
+occurrence, workload, config, and native-record identities are checked before
+execution. `--deployment-report PATH` writes provenance, coverage, output
+checks, and measured evidence. On TSIM, `--validate-schedule-evidence`
+requires complete measured coverage and the strict per-layer alignment gate.
 
-```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
-  --model anomaly_detection_v1 --backend fsim --trials-per-task 1
-
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
-  --model anomaly_detection_v1 --backend tsim --trials-per-task 1
-```
-
-Pass a matching log/sidecar pair to the runner to compile and execute with
-history-best. TSIM replay keeps the existing bounded-window policy; the default
-is one deterministic representative feature window per sample, which is a
-smoke score rather than a full-window anomaly score.
+The anomaly application keeps its score contract: its ten committed WAVs are
+five normal followed by five anomalous, and each score is reconstruction MSE
+from its executed feature windows. The default TSIM budget remains one
+representative window per sample, so that score is explicitly a sampled-window
+score; `--tsim-window-budget N` raises the positive per-sample budget, and
+`VTA_ANOMALY_TSIM_WINDOW_BUDGET` supplies the default when the CLI option is
+omitted. HOST/FSIM retain their full-window behavior. Schedule selection does
+not change preprocessing, threshold, score, or sample policy.
 
 ```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/anomaly_detection_v1/run.py \
-  --mode tsim --tsim-window-budget 1 \
-  --autotvm-log <anomaly_detection_v1-tsim.log> \
-  --autotvm-sidecar <anomaly_detection_v1-tsim.json>
+MODEL_DIR=vta/apps/mlperf_tiny_benchmark/anomaly_detection_v1
+export MODEL_DIR
+export VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json"
+export PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps"
+
+VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/run.py" \
+  --simulator fsim --schedule none --output-json /tmp/ad-fsim.json
+
+VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/run.py" \
+  --simulator tsim --tsim-window-budget 1 \
+  --schedule "$MODEL_DIR/build/actual_compute_tuning/seed/seed.log" \
+  --deployment-report "$MODEL_DIR/build/actual_compute_tuning/seed/deployment.json" \
+  --validate-schedule-evidence
 ```
 
-## Complete-fusion two-stage tuning
+## Tune actual deployment occurrences
 
-The AD V1 two-stage adapter prepares this model's own quantized mixed graph,
-extracts all nine deployed VTA fusion occurrences, and preserves the existing
-HOST/VTA partition and audio preprocessing. A seed run searches one successful
-FSIM schedule per occurrence and measures each on TSIM. A full run requires a
-passing seed deployment alignment report and defaults to batches of 100
-configurations until each occurrence has 20 successful schedules or its valid
-space is exhausted. `--workload-index` supports one-occurrence execution;
-`--resume-manifest`, `--replay-manifest`, and `--artifact-dir` support resume
-and standalone validation.
-
-Run from the repository root with the project Python environment and the same
-absolute geometry file for both backend processes:
+The model's `tune.py` captures the actual prepared VTA layer occurrences and
+searches their real schedule spaces through shared lowering. First measure the
+default configuration for all occurrences on TSIM, then deploy that complete
+snapshot to create the passing alignment report required before search:
 
 ```bash
-MODEL=anomaly_detection_v1
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL"
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim PYTHONPATH="$PYTHONPATH" \
-  ./.envs/tvm-vta-env/bin/python "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/tune.py" --seed
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim PYTHONPATH="$PYTHONPATH" \
-  ./.envs/tvm-vta-env/bin/python "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/tune.py" --all --alignment-report <seed-deployment.json>
+VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune.py" --seed --all
+VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/run.py" \
+  --simulator tsim --tsim-window-budget 1 \
+  --schedule "$MODEL_DIR/build/actual_compute_tuning/seed/seed.log" \
+  --validate-schedule-evidence \
+  --deployment-report "$MODEL_DIR/build/actual_compute_tuning/seed/deployment.json"
+
+VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune.py" \
+  --all --alignment-report "$MODEL_DIR/build/actual_compute_tuning/seed/deployment.json"
 ```
 
-The adapter uses 60-second FSIM and 120-second TSIM candidate timeouts. Search
-state and intermediate logs go below the model's ignored
-`build/two_stage_tuning/`; self-contained native records and manifests are
-written below `tune/optimal/` by default. Seed artifacts use a separate
-`--artifact-dir` and remain distinct from full-search evidence.
+Seed writes `seed.log` and `seed.json` under `build/actual_compute_tuning/seed/`.
+Search defaults to 100 distinct configs per batch, 20 successful configs per
+occurrence, and 60/120-second FSIM/TSIM candidate timeouts. It stops at the
+quota or when a valid space is exhausted. `--workload-index N` and
+`--max-workloads N` select bounded scopes. Resume with `--resume-manifest PATH`
+and the same alignment report and search identity; ledgers, errors, and the
+manifest are stored under `build/actual_compute_tuning/<run-id>/`.
 
-Deploy the seed or selected manifest once on TSIM with the model's existing
-first committed normal sample and the first deterministic representative
-feature window. The adapter checks the existing reconstruction-score tolerance,
-requires ordinary/debug full-run counters to agree, measures each graph-resident
-VTA node once, and writes per-occurrence TSIM cycles with the inclusive 10%
-comparison. It records the sample filename, file hash, window index, and total
-window count in the deployment JSON.
-
-```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/anomaly_detection_v1" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/deployment.py \
-  --best-manifest <seed-best-manifest.json> \
-  --output vta/apps/mlperf_tiny_benchmark/anomaly_detection_v1/tune/deployment-seed.json
-```
+The search writes `best.log` plus matching metadata when each selected
+occurrence has a successful TSIM measurement. Export a candidate with
+`--resume-manifest PATH --workload-index OCCURRENCE --export-candidate CANDIDATE --output-log PATH`,
+or export best successful schedules with `--resume-manifest PATH --export-best --output-log PATH`.
+Both exports use the same `run.py --schedule PATH` interface; a single
+occurrence export is a valid partial schedule. Unmeasured candidates retain
+that status in metadata. Model-compatible historical complete-fusion
+manifests can be converted with `common.schedule.migrate_legacy_full_fusion`,
+which verifies actual computation, geometry, configuration, record hashes,
+and single-call TSIM protocol without creating measurements.
