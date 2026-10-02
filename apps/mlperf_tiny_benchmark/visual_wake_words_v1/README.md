@@ -101,85 +101,89 @@ structure, output differences, wrong configuration, and absent accelerator
 activity cause a nonzero exit. TSIM initialization and hardware loading remain
 lazy until all four bundles have been built, exported, and reloaded.
 
-## AutoTVM tuned replay
+## Actual-deployment schedule tuning
 
-The shared tuner registers `visual_wake_words_v1` and records supported and
-unsupported VTA task templates in a JSON sidecar next to each backend-specific
-native AutoTVM log. The model hash, active simulator, shared
-`vta/config/vta_64mac.json` hash, log hash, and trial options are checked before
-the history-best schedule is applied. FSIM and TSIM each need their own log
-and sidecar; TSIM logs contain cycle-based trial costs. Tune with a bounded
-trial count while validating the workflow:
+`run.py` and `tune.py` use the same thirteen VTA layer occurrences captured from
+the prepared model. A schedule file is one native AutoTVM `.log` plus a
+same-stem `.json` file; `run.py` finds and validates the sidecar automatically.
+Omitting `--schedule` or passing `--schedule none` uses the default lowering.
+A partial schedule applies to its covered occurrences and reports which other
+layers use the default schedule.
 
-```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
-  --model visual_wake_words_v1 --backend fsim --trials-per-task 1
-
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
-  --model visual_wake_words_v1 --backend tsim --trials-per-task 1
-```
-
-Pass the matching log and sidecar to `run.py` for a tuned replay. It preserves
-the CPU/VTA partition routing and compares all ten committed sample outputs
-against the CPU reference:
-
-```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/visual_wake_words_v1/run.py \
-  --simulator tsim \
-  --autotvm-log <visual_wake_words_v1-tsim.log> \
-  --autotvm-sidecar <visual_wake_words_v1-tsim.json>
-```
-
-Replace the placeholders with the paired paths printed by the tuner. Generated
-logs, sidecars, and replay bundles are stored below ignored `build/` paths.
-Reported TSIM `cycle_count` is simulated accelerator work, not FPGA latency or
-an MLPerf result. The existing CPU/VTA routing and ten-sample correctness
-contract remain in force for tuned replay.
-
-## Complete-fusion two-stage tuning
-
-The model-local adapter extracts each of the thirteen VTA-routed Conv fusions
-from the prepared mixed graph, including the model's exact bias, shift, clip,
-and cast arithmetic. Depthwise Conv, pooling, dense, reshape, and softmax
-operators stay on the existing host path. Every VTA occurrence keeps its own
-symbol and workload identity. Run the one-success seed phase first; the full
-search requires a passing one-sample seed deployment report.
+Run the normal deployment or replay a snapshot with the same command:
 
 ```bash
 MODEL=visual_wake_words_v1
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL"
+
 VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL" \
-  ./.envs/tvm-vta-env/bin/python \
-  "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/tune.py" --seed --all --trial-batch 1
+PYTHONPATH="$PYTHONPATH" ./.envs/tvm-vta-env/bin/python \
+  "vta/apps/mlperf_tiny_benchmark/$MODEL/run.py" --simulator fsim
+
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PYTHONPATH" ./.envs/tvm-vta-env/bin/python \
+  "vta/apps/mlperf_tiny_benchmark/$MODEL/run.py" --simulator fsim --schedule none
+
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PYTHONPATH" ./.envs/tvm-vta-env/bin/python \
+  "vta/apps/mlperf_tiny_benchmark/$MODEL/run.py" --simulator fsim \
+  --schedule /path/to/schedule.log
 ```
 
-The seed manifest and selected deployment report are stored below `tune/`;
-FSIM/TSIM state and temporary builds are stored below `build/`.
-
-Apply the seed schedule to one image using the existing HOST reference and
-manifest-label checks. This deployment report is the required alignment gate
-for the later full search:
+Generate a measured TSIM seed snapshot, then ask the unified deployment to
+check all ten HOST-reference outputs and per-layer cycle alignment:
 
 ```bash
 MODEL=visual_wake_words_v1
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL"
+SEED_LOG="$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL/build/actual_compute_tuning/seed/seed.log"
+SEED_REPORT="$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL/build/actual_compute_tuning/seed/deployment-report.json"
+
 VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL" \
-  ./.envs/tvm-vta-env/bin/python \
-  "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/deployment.py" \
-  --best-manifest "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/seed/<run-id>/best-manifest.json" \
-  --output "vta/apps/mlperf_tiny_benchmark/$MODEL/tune/deployment-seed.json"
+PYTHONPATH="$PYTHONPATH" ./.envs/tvm-vta-env/bin/python \
+  "vta/apps/mlperf_tiny_benchmark/$MODEL/tune.py" --seed --all --output-log "$SEED_LOG"
+
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+PYTHONPATH="$PYTHONPATH" ./.envs/tvm-vta-env/bin/python \
+  "vta/apps/mlperf_tiny_benchmark/$MODEL/run.py" --simulator tsim \
+  --schedule "$SEED_LOG" --deployment-report "$SEED_REPORT" \
+  --validate-schedule-evidence
 ```
 
-The report includes all thirteen occurrence cycle pairs, exact image identity,
-the complete-model baseline/tuned TSIM counts, and the one-image stateless
-execution policy. Full search accepts this report only when HOST correctness,
-ordinary/debug counter agreement, and every inclusive 10% cycle gate pass.
+Search a bounded set of actual layer schedules, then resume by supplying the
+printed `resume-manifest.json` with identical search options and alignment
+report. `--all` can replace `--workload-index 0` to search every occurrence.
+
+```bash
+MODEL=visual_wake_words_v1
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL"
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PYTHONPATH" ./.envs/tvm-vta-env/bin/python \
+  "vta/apps/mlperf_tiny_benchmark/$MODEL/tune.py" --workload-index 0 \
+  --trial-batch 1 --min-successful 1 --alignment-report "$SEED_REPORT"
+```
+
+Export either a ledger candidate or the best measured candidate and pass the
+resulting `.log` to `run.py` like any other schedule snapshot:
+
+```bash
+MODEL=visual_wake_words_v1
+RESUME=/path/to/resume-manifest.json
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL" \
+  ./.envs/tvm-vta-env/bin/python \
+  "vta/apps/mlperf_tiny_benchmark/$MODEL/tune.py" --export-candidate 0 \
+  --workload-index 0 --resume-manifest "$RESUME" --output-log /tmp/vww-candidate.log
+
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps:$PWD/vta/apps/mlperf_tiny_benchmark/$MODEL" \
+  ./.envs/tvm-vta-env/bin/python \
+  "vta/apps/mlperf_tiny_benchmark/$MODEL/run.py" --simulator fsim \
+  --schedule /tmp/vww-candidate.log
+```
+
+Search ledgers and temporary builds live under the ignored `build/` directory.
+Committed historical seed and optimal artifacts remain available as records;
+new schedule snapshots carry their own model, geometry, compute, and log
+identity metadata. TSIM `cycle_count` is simulated accelerator work, not FPGA
+latency or an MLPerf result.
