@@ -35,6 +35,20 @@ def test_tune_cli_exposes_approved_seed_search_and_resume_controls():
     assert args.tsim_timeout == 9
     assert args.resume_manifest == Path("resume.json")
 
+    candidate = tune._parser().parse_args([
+        "--export-candidate", "3", "--workload-index", "2",
+        "--resume-manifest", "resume.json", "--output-log", "candidate.log",
+    ])
+    assert candidate.export_candidate == 3
+    assert candidate.workload_index == 2
+    assert candidate.output_log == Path("candidate.log")
+
+    best = tune._parser().parse_args([
+        "--export-best", "--resume-manifest", "resume.json", "--output-log", "best.log",
+    ])
+    assert best.export_best is True
+    assert best.output_log == Path("best.log")
+
 
 def test_seed_mode_requires_complete_all_occurrences_and_tsim(monkeypatch):
     tune = _load_tune()
@@ -50,6 +64,16 @@ def test_search_options_reject_zero_quotas_and_timeouts():
     args = tune._parser().parse_args(["--all", "--trial-batch", "0"])
     with pytest.raises(ValueError, match="trial-batch"):
         tune._validate_positive_options(args)
+
+
+def test_tune_cli_rejects_conflicting_export_modes(monkeypatch):
+    tune = _load_tune()
+    monkeypatch.setenv("VTA_BACKEND", "fsim")
+    with pytest.raises(ValueError, match="exactly one"):
+        tune.main([
+            "--export-candidate", "0", "--export-best", "--workload-index", "0",
+            "--resume-manifest", "resume.json", "--output-log", "out.log",
+        ])
 
 
 def test_resume_manifest_rejects_foreign_compute(tmp_path):

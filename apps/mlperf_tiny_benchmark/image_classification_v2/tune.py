@@ -24,7 +24,6 @@ import json
 import os
 import sys
 import tempfile
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -155,7 +154,7 @@ def create_seed_snapshot(*, output_log=None):
     runtime = _load_runtime()
     if _active_backend() != "tsim":
         raise ValueError("--seed requires VTA_BACKEND=tsim for schedule-alignment evidence")
-    prepared, compute, activations = _prepare_actual_compute(runtime, "tsim")
+    _, compute, activations = _prepare_actual_compute(runtime, "tsim")
     from common.measurement import measure_candidate
     from common.schedule import export_schedule_snapshot
 
@@ -175,7 +174,7 @@ def create_seed_snapshot(*, output_log=None):
             "units": "cycles",
             "results": [
                 {"costs": [measured["cycles"]], "error_no": 0, "all_cost": 0.0,
-                 "timestamp": time.time()}
+                 "timestamp": measured["timestamp"]}
                 for _ in selections[layer.occurrence]
             ],
         }
@@ -199,6 +198,9 @@ def _parser():
     parser.add_argument("--tsim-timeout", type=int, default=120)
     parser.add_argument("--resume-manifest", type=Path)
     parser.add_argument("--alignment-report", type=Path)
+    parser.add_argument("--export-candidate", type=int, help="export a zero-based ledger candidate")
+    parser.add_argument("--export-best", action="store_true", help="export best successful TSIM candidate per selected occurrence")
+    parser.add_argument("--output-log", type=Path, help="native AutoTVM log path for candidate/best export")
     return parser
 
 
@@ -312,6 +314,7 @@ def _search(args):
     from common.tuning import search_layer
 
     ledger_statuses = []
+    ledger_objects = {}
     for layer in selected:
         layer_identity = {
             "model_id": runtime.MODEL_ID,
@@ -333,6 +336,7 @@ def _search(args):
             seed=layer.occurrence, resume=args.resume_manifest is not None,
         )
         ledger_statuses.append(ledger["status"])
+        ledger_objects[layer.occurrence] = ledger
         print(
             f"occurrence {layer.occurrence}: {ledger['status']} "
             f"({len(ledger['candidates'])} candidates, {len(ledger['failures'])} failures)"
@@ -348,14 +352,138 @@ def _search(args):
         else "BOUNDED_SMOKE_INCOMPLETE" if manifest["status"] == "bounded_incomplete"
         else "FULL_SEARCH"
     )
+    best_candidates = {}
+    for occurrence, ledger in ledger_objects.items():
+        try:
+            best_candidates[occurrence] = tuning.best_tsim_candidate(ledger)[0]
+        except ValueError as error:
+            if "no successful TSIM candidate" not in str(error):
+                raise
+            best_candidates = {}
+            break
+    if len(best_candidates) == len(ledger_objects) and best_candidates:
+        best_path = run_dir / "best.log"
+        exported = tuning.export_best_snapshot(best_path, compute, ledger_objects)
+        manifest["best_snapshot"] = {
+            "log": str(exported["snapshot"].path),
+            "metadata": str(exported["snapshot"].path.with_suffix(".json")),
+            "selections": exported["selections"],
+        }
+        print(f"Best native log: {exported['snapshot'].path}")
+        print(f"Best metadata: {exported['snapshot'].path.with_suffix('.json')}")
+    else:
+        manifest.pop("best_snapshot", None)
     manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
     _write_json_atomic(manifest_path, manifest)
     print(f"Search resume manifest: {manifest_path}")
     return manifest
 
 
+def _export_snapshot(args):
+    runtime = _load_runtime()
+    _active_backend()
+    if args.resume_manifest is None or args.output_log is None:
+        raise ValueError("snapshot export requires --resume-manifest and --output-log")
+    if (args.export_candidate is None) == (not args.export_best):
+        raise ValueError("select exactly one of --export-candidate N or --export-best")
+    if args.export_candidate is not None:
+        if args.export_candidate < 0:
+            raise ValueError("--export-candidate must be a non-negative ledger index")
+        if args.workload_index is None:
+            raise ValueError("--export-candidate requires --workload-index N")
+    elif args.workload_index is not None and args.workload_index < 0:
+        raise ValueError("--workload-index must be non-negative")
+
+    manifest_path = args.resume_manifest.expanduser().resolve(strict=True)
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("resume manifest is not readable JSON") from error
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+        raise ValueError("unsupported or missing search resume manifest schema")
+
+    from common.deployment_compute import capture_deployment_compute
+    from common.schedule import _geometry_identity, _portable_config_space_identity
+    from common.tuning import export_best_snapshot, export_candidate_snapshot, load_ledger
+
+    prepared = runtime.prepare_model(runtime.MODEL_PATH)
+    model_sha = getattr(getattr(prepared, "imported", None), "model_sha256", runtime.MODEL_SHA256)
+    compute = capture_deployment_compute(prepared.mixed_module, runtime.MODEL_ID, model_sha)
+    identity = manifest.get("identity", {})
+    if (manifest.get("model") != runtime.MODEL_ID
+            or identity.get("model_sha256") != model_sha
+            or identity.get("geometry_sha256") != _geometry_identity(compute)):
+        raise ValueError("resume manifest does not match the current model or geometry")
+    selected_rows = identity.get("selected_occurrences")
+    if not isinstance(selected_rows, list):
+        raise ValueError("resume manifest selected occurrence list is malformed")
+    selected_by_occurrence = {
+        row.get("occurrence"): row for row in selected_rows if isinstance(row, dict)
+    }
+    if len(selected_by_occurrence) != len(selected_rows):
+        raise ValueError("resume manifest contains duplicate selected occurrences")
+    if args.export_candidate is not None:
+        occurrences = [args.workload_index]
+    elif args.workload_index is not None:
+        occurrences = [args.workload_index]
+    else:
+        occurrences = sorted(selected_by_occurrence)
+    layers = {layer.occurrence: layer for layer in compute.layers}
+    ledgers = {}
+    ledger_paths = manifest.get("ledgers")
+    if not isinstance(ledger_paths, dict):
+        raise ValueError("resume manifest ledger map is malformed")
+    for occurrence in occurrences:
+        row = selected_by_occurrence.get(occurrence)
+        layer = layers.get(occurrence)
+        if row is None or layer is None:
+            raise ValueError(f"occurrence {occurrence} is absent from the selected search")
+        if (row.get("symbol") != layer.symbol
+                or row.get("compute_sha256") != layer.compute_sha256
+                or row.get("config_space_sha256") != _portable_config_space_identity(layer)):
+            raise ValueError(f"resume manifest occurrence {occurrence} compute identity changed")
+        raw_path = ledger_paths.get(str(occurrence))
+        if not isinstance(raw_path, str):
+            raise ValueError(f"resume manifest has no ledger for occurrence {occurrence}")
+        ledger_path = Path(raw_path).expanduser()
+        if not ledger_path.is_absolute():
+            ledger_path = Path(manifest["run_dir"]) / ledger_path
+        expected_ledger_identity = {
+            "model_id": runtime.MODEL_ID,
+            "model_sha256": model_sha,
+            "geometry_sha256": _geometry_identity(compute),
+            "compute_sha256": layer.compute_sha256,
+            "config_space_sha256": _portable_config_space_identity(layer),
+            "occurrence": occurrence,
+            "symbol": layer.symbol,
+            "options": identity.get("options"),
+        }
+        ledgers[occurrence] = load_ledger(ledger_path, expected_ledger_identity)
+
+    output_log = args.output_log.expanduser().resolve()
+    if args.export_candidate is not None:
+        result = export_candidate_snapshot(
+            output_log, compute, ledgers[occurrences[0]], occurrences[0], args.export_candidate
+        )
+    else:
+        result = export_best_snapshot(output_log, compute, ledgers)
+    print(f"Schedule native log: {result['snapshot'].path}")
+    print(f"Schedule metadata: {result['snapshot'].path.with_suffix('.json')}")
+    for selection in result["selections"]:
+        print(
+            f"occurrence {selection['occurrence']}: "
+            f"candidate {selection['candidate_index']} {selection['validation_status']}"
+        )
+    return result
+
+
 def main(argv=None):
     args = _parser().parse_args(argv)
+    if args.export_candidate is not None or args.export_best:
+        if args.seed or args.all or args.alignment_report is not None:
+            raise ValueError("snapshot export cannot be combined with seed/search options")
+        _export_snapshot(args)
+        return 0
     if args.seed:
         if not args.all or args.workload_index is not None:
             raise ValueError("seed mode requires --seed --all and cannot select one occurrence")

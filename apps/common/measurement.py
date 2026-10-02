@@ -6,6 +6,7 @@ import multiprocessing
 import os
 import queue
 import re
+import time
 import traceback
 
 import numpy as np
@@ -175,6 +176,7 @@ def _evaluate_candidate(function_json, activation, config_indices, backend):
         "protocol": protocol,
         "config_identity": identity,
         "worker_pid": os.getpid(),
+        "timestamp": time.time(),
     }
 
 

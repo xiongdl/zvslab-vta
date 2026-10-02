@@ -143,7 +143,7 @@ def _layer_identity(layer):
     }
 
 
-def export_schedule_snapshot(path, deployment, selections, *, measurements=None):
+def export_schedule_snapshot(path, deployment, selections, *, measurements=None, provenance=None):
     """Write a native log and same-stem metadata for selected layer occurrences.
 
     `selections` maps occurrence integers to one config-space index per captured
@@ -157,6 +157,13 @@ def export_schedule_snapshot(path, deployment, selections, *, measurements=None)
     measurements = {} if measurements is None else measurements
     if not isinstance(measurements, dict):
         raise TypeError("measurements must map layer occurrences to measured results")
+    if provenance is not None and not isinstance(provenance, dict):
+        raise TypeError("schedule provenance must be a JSON object")
+    if provenance is not None:
+        try:
+            _canonical_json(provenance)
+        except (TypeError, ValueError) as error:
+            raise ValueError("schedule provenance must contain JSON-compatible values") from error
 
     layers = {layer.occurrence: layer for layer in deployment.layers}
     unknown = set(selections) - set(layers)
@@ -238,6 +245,8 @@ def export_schedule_snapshot(path, deployment, selections, *, measurements=None)
         "log_sha256": _sha256(log_bytes),
         "occurrences": occurrences,
     }
+    if provenance is not None:
+        metadata["provenance"] = provenance
     metadata_bytes = (_canonical_json(metadata) + "\n").encode("utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
     sidecar.parent.mkdir(parents=True, exist_ok=True)
@@ -302,6 +311,8 @@ def load_schedule_snapshot(path, deployment):
         raise ValueError(f"schedule snapshot cannot be read: {path}") from error
     if not isinstance(metadata, dict) or metadata.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("unsupported schedule metadata schema")
+    if "provenance" in metadata and not isinstance(metadata["provenance"], dict):
+        raise ValueError("schedule provenance must be a JSON object")
     if metadata.get("model_id") != deployment.model_id:
         raise ValueError("schedule model identity does not match the prepared deployment")
     if metadata.get("model_sha256") != deployment.model_sha256:

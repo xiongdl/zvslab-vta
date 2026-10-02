@@ -6,6 +6,7 @@ import json
 import os
 import random
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -229,6 +230,7 @@ def search_layer(layer, activation, identity, ledger_path, *, trial_batch, min_s
             record_candidate_stage(row, backend="tsim", result={
                 "cycles": result["cycles"], "protocol": result["protocol"],
                 "config_identity": result["config_identity"],
+                "timestamp": result["timestamp"],
             })
         except Exception as error:
             record_candidate_stage(row, backend="tsim", error=error)
@@ -305,3 +307,197 @@ def validate_evidence_rows(rows, expected):
             raise ValueError("alignment report occurrence cycles must be positive integers")
         if row.get("passed") is not True or 10 * abs(deployed - measured) >= measured:
             raise ValueError("alignment report contains a failed strict <10% cycle gate")
+
+
+def _successful_tsim_candidate(candidate):
+    result = candidate.get("measurements", {}).get("tsim")
+    cycles = result.get("cycles") if isinstance(result, dict) else None
+    protocol = result.get("protocol") if isinstance(result, dict) else None
+    timestamp = result.get("timestamp") if isinstance(result, dict) else None
+    return (
+        isinstance(cycles, int) and not isinstance(cycles, bool) and cycles > 0
+        and isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool) and timestamp > 0
+        and isinstance(protocol, dict)
+        and protocol.get("name") == "tsim_single_call"
+        and protocol.get("version") == 1
+        and protocol.get("counted_invocations") == 1
+        and protocol.get("warmup_excluded") is True
+        and not any(failure.get("stage") == "tsim" for failure in candidate.get("failures", []))
+    )
+
+
+def best_tsim_candidate(ledger):
+    """Return the lowest-cycle valid TSIM candidate, or fail explicitly."""
+    candidates = [
+        (index, candidate) for index, candidate in enumerate(ledger.get("candidates", []))
+        if _successful_tsim_candidate(candidate)
+    ]
+    if not candidates:
+        occurrence = ledger.get("identity", {}).get("occurrence", "?")
+        raise ValueError(f"occurrence {occurrence} has no successful TSIM candidate")
+    return min(
+        candidates,
+        key=lambda pair: (pair[1]["measurements"]["tsim"]["cycles"], pair[0]),
+    )
+
+
+def _candidate_for_export(ledger, candidate_index=None):
+    if candidate_index is None:
+        return best_tsim_candidate(ledger)
+    if isinstance(candidate_index, bool) or not isinstance(candidate_index, int):
+        raise ValueError("candidate index must be a non-negative integer")
+    candidates = ledger.get("candidates", [])
+    if candidate_index < 0 or candidate_index >= len(candidates):
+        raise ValueError(
+            f"candidate index {candidate_index} is out of range for {len(candidates)} ledger entries"
+        )
+    return candidate_index, candidates[candidate_index]
+
+
+def _source_ledger_sha256(ledger):
+    path = ledger.get("ledger_path")
+    if isinstance(path, str) and Path(path).is_file():
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    return _digest(ledger)
+
+
+def _expand_candidate_config(layer, candidate):
+    """Map portable candidate configs into this backend's actual captured spaces."""
+    from common.schedule import _portable_config_space_identity
+
+    config_rows = candidate.get("config")
+    if not isinstance(config_rows, list):
+        raise ValueError("ledger candidate configuration must be a list")
+    expected = [
+        entry for entry in layer.config_spaces
+        if entry[0] != "add.vta" and len(entry[3]) > 1
+    ]
+    refs = {}
+    for row in config_rows:
+        if not isinstance(row, dict):
+            raise ValueError("ledger candidate configuration entry is malformed")
+        key = (row.get("template"), row.get("workload"))
+        if key in refs:
+            raise ValueError("ledger candidate has duplicate template/workload configurations")
+        refs[key] = row.get("config")
+    if len(refs) != len(expected):
+        raise ValueError("ledger candidate config coverage does not match captured schedule spaces")
+
+    lookup = {}
+    for template, workload, _, space in expected:
+        key = (template, repr(workload))
+        config_json = refs.pop(key, None)
+        if config_json is None:
+            raise ValueError(f"ledger candidate is missing {template} for occurrence {layer.occurrence}")
+        config_index = next(
+            (index for index in range(len(space))
+             if _canonical(space.get(index).to_json_dict()) == _canonical(config_json)),
+            None,
+        )
+        if config_index is None or not space.get(config_index).valid():
+            raise ValueError(
+                f"ledger candidate config is not valid in current {template} space"
+            )
+        lookup[key] = config_index
+    if refs:
+        raise ValueError("ledger candidate contains unknown schedule spaces")
+    all_indices = []
+    for template, workload, _, space in layer.config_spaces:
+        if template != "add.vta" and len(space) > 1:
+            all_indices.append(lookup[(template, repr(workload))])
+        else:
+            all_indices.append(0)
+    return all_indices, _portable_config_space_identity(layer)
+
+
+def _export_ledger_selection(path, compute, ledgers, candidate_indices, *, mode):
+    from common.schedule import _geometry_identity, export_schedule_snapshot
+
+    layer_by_occurrence = {layer.occurrence: layer for layer in compute.layers}
+    if set(ledgers) != set(candidate_indices):
+        raise ValueError("ledger and selection occurrence sets differ")
+    selections = {}
+    measurements = {}
+    statuses = []
+    ledger_sources = []
+    for occurrence in sorted(candidate_indices):
+        layer = layer_by_occurrence.get(occurrence)
+        if layer is None:
+            raise ValueError(f"unknown occurrence {occurrence} in tuning ledger")
+        ledger = ledgers[occurrence]
+        identity = ledger.get("identity", {})
+        candidate_index, candidate = _candidate_for_export(
+            ledger, candidate_indices[occurrence]
+        )
+        expanded, config_space_identity = _expand_candidate_config(layer, candidate)
+        if (identity.get("model_id") != compute.model_id
+                or identity.get("model_sha256") != compute.model_sha256
+                or identity.get("geometry_sha256") != _geometry_identity(compute)
+                or identity.get("compute_sha256") != layer.compute_sha256
+                or identity.get("config_space_sha256") != config_space_identity):
+            raise ValueError(f"occurrence {occurrence} ledger identity does not match deployment")
+        selections[occurrence] = expanded
+        if _successful_tsim_candidate(candidate):
+            measurement = candidate["measurements"]["tsim"]
+            cycles = measurement["cycles"]
+            timestamp = measurement.get("timestamp")
+            if (isinstance(timestamp, bool) or not isinstance(timestamp, (int, float))
+                    or not timestamp > 0):
+                raise ValueError(
+                    f"occurrence {occurrence} TSIM candidate has no valid measurement timestamp"
+                )
+            measurements[occurrence] = {
+                "backend": "tsim",
+                "protocol": "tsim_single_call_v1",
+                "units": "cycles",
+                "results": [
+                    {"costs": [cycles], "error_no": 0, "all_cost": 0.0,
+                     "timestamp": timestamp}
+                    for _ in expanded
+                ],
+            }
+            validation_status = "measured_tsim"
+        else:
+            validation_status = "unmeasured_candidate"
+        statuses.append({
+            "occurrence": occurrence,
+            "candidate_index": candidate_index,
+            "validation_status": validation_status,
+            "candidate_failures": [
+                {"stage": failure.get("stage"), "type": failure.get("type"),
+                 "message": str(failure.get("message", ""))[:512]}
+                for failure in candidate.get("failures", [])
+            ],
+        })
+        ledger_sources.append({
+            "occurrence": occurrence,
+            "ledger_sha256": _source_ledger_sha256(ledger),
+        })
+    provenance = {
+        "kind": "actual_compute_tuning_export",
+        "mode": mode,
+        "source_ledgers": ledger_sources,
+        "selections": statuses,
+    }
+    snapshot = export_schedule_snapshot(
+        path, compute, selections, measurements=measurements, provenance=provenance
+    )
+    return {"snapshot": snapshot, "selections": statuses}
+
+
+def export_candidate_snapshot(path, compute, ledger, occurrence, candidate_index):
+    """Export one zero-based ledger candidate as a deployable partial snapshot."""
+    if ledger.get("identity", {}).get("occurrence") != occurrence:
+        raise ValueError("candidate ledger occurrence does not match the requested workload")
+    return _export_ledger_selection(
+        path, compute, {occurrence: ledger}, {occurrence: candidate_index}, mode="candidate"
+    )
+
+
+def export_best_snapshot(path, compute, ledgers):
+    """Export the best measured TSIM candidate for every supplied occurrence."""
+    candidate_indices = {
+        occurrence: best_tsim_candidate(ledger)[0]
+        for occurrence, ledger in ledgers.items()
+    }
+    return _export_ledger_selection(path, compute, ledgers, candidate_indices, mode="best")

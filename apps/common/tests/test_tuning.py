@@ -4,6 +4,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -97,6 +98,7 @@ def test_search_measures_actual_layer_on_both_backends_and_resumes(tmp_path):
             "worker_pid": 123,
             "cycles": None if backend == "fsim" else 321,
             "protocol": None if backend == "fsim" else {"name": "tsim_single_call", "version": 1},
+            "timestamp": 1.0,
         }
 
     identity = _identity()
@@ -185,3 +187,81 @@ def test_alignment_gate_requires_ten_outputs_one_performance_sample_and_cycles(t
             report_path, model_id="image_classification_v2", model_sha256="m" * 64,
             geometry_sha256="g" * 64, compute=Compute(), schedule_path=schedule,
         )
+
+
+def test_candidate_and_best_exports_share_snapshot_format_and_keep_failures_unmeasured(
+    monkeypatch, tmp_path
+):
+    from common import schedule
+
+    layer = SimpleNamespace(
+        occurrence=0,
+        symbol="vta_0",
+        compute_sha256="c" * 64,
+        config_spaces=[("conv2d_packed.vta", ("workload",), "vta", _Space())],
+    )
+    compute = SimpleNamespace(
+        model_id="image_classification_v2",
+        model_sha256="m" * 64,
+        geometry={"target": "sim_64x32", "model": "sim_64x32"},
+        layers=[layer],
+    )
+    identity = {
+        "model_id": compute.model_id, "model_sha256": compute.model_sha256,
+        "geometry_sha256": schedule._geometry_identity(compute),
+        "compute_sha256": layer.compute_sha256, "occurrence": 0, "symbol": layer.symbol,
+        "config_space_sha256": schedule._portable_config_space_identity(layer),
+        "options": {"trial_batch": 1},
+    }
+    config = [{"template": "conv2d_packed.vta", "workload": "('workload',)",
+               "target": "vta -model=fsim_64x32", "config": {"index": 1}}]
+    measured = {
+        "config_indices": [1], "config": config, "status": "measured",
+        "measurements": {"tsim": {
+            "cycles": 321,
+            "protocol": {"name": "tsim_single_call", "version": 1,
+                         "counted_invocations": 1, "warmup_excluded": True},
+            "timestamp": 42.0,
+        }}, "failures": [],
+    }
+    failed = {
+        "config_indices": [0], "config": [dict(config[0], config={"index": 0})],
+        "status": "failed", "measurements": {},
+        "failures": [{"stage": "fsim", "type": "RuntimeError", "message": "compile failed"}],
+    }
+    ledger = {"identity": identity, "candidates": [failed, measured]}
+    captured = []
+
+    def capture(path, actual_compute, selections, *, measurements=None, provenance=None):
+        captured.append((Path(path), selections, measurements, provenance))
+        return SimpleNamespace(path=Path(path))
+
+    monkeypatch.setattr(schedule, "export_schedule_snapshot", capture)
+    candidate = tuning.export_candidate_snapshot(tmp_path / "candidate.log", compute, ledger, 0, 0)
+    assert candidate["selections"][0]["validation_status"] == "unmeasured_candidate"
+    assert candidate["selections"][0]["candidate_failures"][0]["stage"] == "fsim"
+    assert captured[-1][2] == {}
+    assert captured[-1][3]["mode"] == "candidate"
+    assert captured[-1][3]["selections"][0]["candidate_index"] == 0
+
+    best_index, best = tuning.best_tsim_candidate(ledger)
+    assert (best_index, best) == (1, measured)
+    exported = tuning.export_best_snapshot(
+        tmp_path / "best.log", compute, {0: ledger}
+    )
+    assert exported["selections"][0]["validation_status"] == "measured_tsim"
+    assert captured[-1][2][0]["results"][0]["costs"] == [321]
+    assert captured[-1][3]["mode"] == "best"
+
+
+def test_best_export_rejects_occurrence_without_successful_tsim():
+    with pytest.raises(ValueError, match="no successful TSIM"):
+        tuning.best_tsim_candidate({"identity": {"occurrence": 0}, "candidates": []})
+
+
+def test_candidate_export_rejects_malformed_ledger_indices():
+    ledger = {"identity": {"occurrence": 0}, "candidates": []}
+    with pytest.raises(ValueError, match="out of range"):
+        tuning._candidate_for_export(ledger, 0)
+    with pytest.raises(ValueError, match="non-negative integer"):
+        tuning._candidate_for_export(ledger, True)
