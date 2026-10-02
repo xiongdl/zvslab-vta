@@ -1,8 +1,57 @@
 """Apply validated per-occurrence snapshots through VTA's normal lowering."""
 
+import json
+import os
+import tempfile
 from contextlib import contextmanager
+from pathlib import Path
 
 from tvm.autotvm.task.dispatcher import DispatchContext
+
+
+def cycles_within_strict_ten_percent(deployed_cycles, autotvm_cycles):
+    """Return whether positive integer cycle counts differ by strictly under 10%."""
+    for label, value in (("deployment", deployed_cycles), ("AutoTVM", autotvm_cycles)):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{label} cycle count must be a positive integer")
+    return 10 * abs(deployed_cycles - autotvm_cycles) < autotvm_cycles
+
+
+def validate_occurrence_rows(rows, expected):
+    """Require unique, passing cycle rows covering every expected occurrence."""
+    expected_keys = {(item["occurrence"], item["symbol"]) for item in expected}
+    actual_keys = []
+    for row in rows:
+        key = (row.get("occurrence"), row.get("symbol"))
+        actual_keys.append(key)
+        if key not in expected_keys:
+            raise ValueError(f"deployment contains unexpected occurrence {key}")
+        if not cycles_within_strict_ten_percent(
+            row.get("deployment_cycles"), row.get("autotvm_cycles")
+        ):
+            raise ValueError(f"strict <10% cycle gate failed for occurrence {key}")
+    if len(actual_keys) != len(set(actual_keys)):
+        raise ValueError("deployment contains duplicate occurrence rows")
+    if set(actual_keys) != expected_keys:
+        raise ValueError("deployment occurrence coverage is incomplete")
+    return rows
+
+
+def write_json_atomic(path, value):
+    """Publish JSON evidence by replacing a same-directory temporary file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=".deployment-", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return path
 
 
 class _OccurrenceConfigContext(DispatchContext):

@@ -21,7 +21,13 @@
 import argparse
 from pathlib import Path
 
-from runtime import DEFAULT_OUTPUT_DIR, deploy, deploy_fsim_matrix, deploy_tsim_matrix
+from runtime import (
+    DEFAULT_OUTPUT_DIR,
+    deploy,
+    deploy_fsim_matrix,
+    deploy_tsim_matrix,
+    write_deployment_report,
+)
 
 
 def _parser():
@@ -50,6 +56,16 @@ def _parser():
         default=None,
         help="native AutoTVM snapshot (.log plus same-stem .json); omitted or 'none' uses defaults",
     )
+    parser.add_argument(
+        "--deployment-report",
+        type=Path,
+        help="write deployment provenance, schedule coverage, output, and profiler evidence as JSON",
+    )
+    parser.add_argument(
+        "--validate-schedule-evidence",
+        action="store_true",
+        help="on TSIM, require measured complete schedule coverage and strict per-layer cycle alignment",
+    )
     return parser
 
 
@@ -61,6 +77,10 @@ def _report_schedule_coverage(artifacts, host_codegen, simulator):
 
 def main(argv=None):
     args = _parser().parse_args(argv)
+    if args.validate_schedule_evidence and args.deployment_report is None:
+        raise ValueError("--validate-schedule-evidence requires --deployment-report")
+    if args.host_codegen == "all" and args.deployment_report is not None:
+        raise ValueError("--deployment-report requires one host codegen, not --host-codegen all")
     if args.host_codegen == "all":
         result = (
             deploy_fsim_matrix(args.output_dir, schedule=args.schedule)
@@ -100,6 +120,11 @@ def main(argv=None):
         print(f"{args.host_codegen}-{args.simulator} compared samples: {len(result.execution.comparisons)}")
         print(f"{args.host_codegen}-{args.simulator} profiler: {result.execution.profiler_stats}")
         print("MLPerf ResNet8 Large HOST deployment passed")
+    if args.deployment_report is not None:
+        write_deployment_report(
+            result, args.deployment_report, schedule=args.schedule,
+            validate_schedule_evidence=args.validate_schedule_evidence,
+        )
     return 0
 
 

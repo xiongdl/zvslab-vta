@@ -18,6 +18,7 @@
 """Build, reload, and execute the fixed MLPerf Tiny HOST deployment."""
 
 import json
+import hashlib
 import importlib
 import sys
 from contextlib import contextmanager, nullcontext
@@ -34,7 +35,12 @@ from tvm.relay.backend import te_compiler
 
 from graph_artifacts import export_graph_bundle
 from model_pipeline import MODEL_SHA256, load_sample, prepare_model
-from common.deployment import lower_selected_deployment
+from common.deployment import (
+    cycles_within_strict_ten_percent,
+    lower_selected_deployment,
+    validate_occurrence_rows,
+    write_json_atomic,
+)
 from common.deployment_compute import capture_deployment_compute
 from common.schedule import load_schedule_snapshot
 
@@ -741,3 +747,127 @@ def deploy(
     else:
         execution = _execute_matrix((artifacts,), committed_sample_paths(), simulator)[0]
     return DeploymentResult(prepared=prepared, artifacts=artifacts, execution=execution)
+
+
+def write_deployment_report(result, report_path, *, schedule=None, validate_schedule_evidence=False):
+    """Write deployment provenance and, on request, strict occurrence evidence."""
+    if validate_schedule_evidence and result.artifacts.simulator != "tsim":
+        raise ValueError("schedule evidence validation requires --simulator tsim")
+    report_path = Path(report_path).expanduser().resolve()
+    report = {
+        "schema_version": 1,
+        "model": MODEL_ID,
+        "model_sha256": getattr(
+            getattr(result.prepared, "imported", None), "model_sha256", MODEL_SHA256
+        ),
+        "simulator": result.artifacts.simulator,
+        "host_codegen": result.artifacts.host_codegen,
+        "schedule": None if schedule is None or str(schedule).lower() == "none" else str(Path(schedule).resolve()),
+        "schedule_coverage": [
+            {"occurrence": occurrence, "symbol": symbol, "selected": selected}
+            for occurrence, symbol, selected in result.artifacts.schedule_coverage
+        ],
+        "sample_count": len(result.execution.comparisons),
+        "outputs_passed": len(result.execution.comparisons),
+        "profiler_stats": result.execution.profiler_stats,
+        "status": "passed",
+    }
+    if validate_schedule_evidence:
+        if schedule is None or str(schedule).lower() == "none":
+            raise ValueError("schedule evidence validation requires a measured schedule snapshot")
+        deployment = capture_deployment_compute(
+            result.prepared.mixed_module,
+            MODEL_ID,
+            report["model_sha256"],
+        )
+        snapshot = load_schedule_snapshot(schedule, deployment)
+        if len(snapshot.selected) != len(deployment.layers):
+            raise ValueError("schedule evidence requires complete occurrence coverage")
+        if not result.execution.comparisons or len(result.execution.comparisons) != 10:
+            raise RuntimeError("schedule evidence requires all ten committed output comparisons")
+
+        from tvm.contrib.debugger import debug_executor
+
+        session, simulator = _load_simulator("tsim")
+        graph = debug_executor.create(
+            result.artifacts.mixed.graph_json,
+            result.artifacts.mixed.module,
+            result.artifacts.mixed.device,
+        )
+        graph.load_params(result.artifacts.mixed.params)
+        first = result.execution.comparisons[0]
+        graph.set_input(INPUT_NAME, load_sample(first.sample_path))
+        session.clear_and_validate(simulator)
+        graph._run_per_layer()
+        full_stats = session.read_stats(simulator=simulator)
+        session.validate_activity(full_stats)
+        full_output = graph.get_output(0).numpy()
+        compare_outputs(first.sample_path, first.reference, full_output)
+
+        graph_nodes = json.loads(result.artifacts.mixed.graph_json)["nodes"]
+        rows = []
+        for layer in deployment.layers:
+            nodes = [
+                index for index, node in enumerate(graph_nodes)
+                if node.get("op") == "tvm_op"
+                and node.get("attrs", {}).get("func_name") == layer.symbol
+            ]
+            if len(nodes) != 1:
+                raise ValueError(
+                    f"deployed graph must map occurrence {layer.occurrence} to one node"
+                )
+            selected = snapshot.selected.get(layer.occurrence)
+            if selected is None or not selected.measured:
+                raise ValueError(f"occurrence {layer.occurrence} lacks measured schedule evidence")
+            measurement = selected.measurement
+            if (measurement.get("backend") != "tsim"
+                    or measurement.get("protocol") != "tsim_single_call_v1"
+                    or measurement.get("units") != "cycles"):
+                raise ValueError(
+                    f"occurrence {layer.occurrence} requires tsim_single_call_v1 cycle provenance"
+                )
+            costs = [cost for item in measurement["results"] for cost in item["costs"]]
+            if len(costs) != 1 or isinstance(costs[0], bool) or int(costs[0]) != costs[0]:
+                raise ValueError(f"occurrence {layer.occurrence} has invalid TSIM cycle evidence")
+            session.clear_and_validate(simulator)
+            graph._execute_node(nodes[0])
+            stats = session.read_stats(simulator=simulator)
+            session.validate_activity(stats)
+            deployed_cycles = stats["cycle_count"]
+            autotvm_cycles = int(costs[0])
+            rows.append({
+                "occurrence": layer.occurrence,
+                "symbol": layer.symbol,
+                "deployment_cycles": deployed_cycles,
+                "autotvm_cycles": autotvm_cycles,
+                "difference_numerator": abs(deployed_cycles - autotvm_cycles),
+                "difference_denominator": autotvm_cycles,
+                "difference_percent": 100.0 * abs(deployed_cycles - autotvm_cycles) / autotvm_cycles,
+                "passed": cycles_within_strict_ten_percent(deployed_cycles, autotvm_cycles),
+                "graph_node": graph_nodes[nodes[0]].get("name"),
+            })
+        try:
+            validate_occurrence_rows(rows, [
+                {"occurrence": layer.occurrence, "symbol": layer.symbol}
+                for layer in deployment.layers
+            ])
+        except ValueError:
+            report["status"] = "failed"
+            report["occurrences"] = rows
+            report["performance_sample_count"] = 1
+            report["performance_sample"] = first.sample_path.name
+            report["performance_stats"] = full_stats
+            write_json_atomic(report_path.with_suffix(".failure.json"), report)
+            raise
+        report.update({
+            "geometry_sha256": snapshot.geometry_sha256,
+            "schedule_log_sha256": hashlib.sha256(Path(schedule).read_bytes()).hexdigest(),
+            "measurement_protocol": "tsim_single_call_v1",
+            "performance_sample_count": 1,
+            "performance_sample": first.sample_path.name,
+            "performance_stats": full_stats,
+            "occurrences": rows,
+        })
+    write_json_atomic(report_path, report)
+    print(f"Deployment report: {report_path}")
+    return report
