@@ -432,7 +432,7 @@ def _run_dir_from_manifest(path):
 
 
 def _worker_command(args, index, backend, run_dir):
-    return [
+    command = [
         sys.executable, str(TUNE_DIR / "tune.py"), "--worker-backend", backend,
         "--workload-index", str(index), "--run-dir", str(run_dir),
         "--trial-batch", str(args.trial_batch),
@@ -440,6 +440,25 @@ def _worker_command(args, index, backend, run_dir):
         "--fsim-timeout", str(args.fsim_timeout),
         "--tsim-timeout", str(args.tsim_timeout),
     ] + (["--resume"] if args.resume_manifest else [])
+    if args.seed:
+        command.append("--seed")
+    elif args.alignment_report:
+        command.extend(["--alignment-report", str(args.alignment_report)])
+    return command
+
+
+def _validate_worker_gate(args):
+    """Require full-model seed evidence before a worker enters measurement."""
+    if args.seed:
+        if args.alignment_report:
+            raise ValueError("seed worker cannot use --alignment-report")
+        return
+    if not args.alignment_report:
+        raise ValueError("worker requires a passing --alignment-report before full search")
+    prepared, identities, tasks = legacy.prepare_v1_workloads()
+    args.alignment_report = _validate_alignment_report(
+        args.alignment_report, prepared, identities, tasks
+    )
 
 
 def _worker_env(backend):
@@ -827,6 +846,10 @@ def main(argv=None):
     if args.worker_backend:
         if args.workload_index is None or args.run_dir is None:
             raise SystemExit("worker requires --workload-index and --run-dir")
+        try:
+            _validate_worker_gate(args)
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
         return _fsim_worker(args) if args.worker_backend == "fsim" else _tsim_worker(args)
     if args.all == (args.workload_index is not None):
         raise SystemExit("select exactly one of --all or --workload-index")
