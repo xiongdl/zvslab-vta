@@ -19,7 +19,6 @@
 
 import json
 import importlib
-import importlib.util
 import sys
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
@@ -35,6 +34,9 @@ from tvm.relay.backend import te_compiler
 
 from graph_artifacts import export_graph_bundle
 from model_pipeline import MODEL_SHA256, load_sample, prepare_model
+from common.deployment import lower_selected_deployment
+from common.deployment_compute import capture_deployment_compute
+from common.schedule import load_schedule_snapshot
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -70,6 +72,7 @@ class HostArtifacts:
     reference: ReloadedArtifact
     mixed: ReloadedArtifact
     vta_symbols: tuple
+    schedule_coverage: tuple
 
 
 @dataclass(frozen=True)
@@ -324,24 +327,6 @@ def _mixed_target(host_codegen=DEFAULT_HOST_CODEGEN):
     return tvm.target.Target("vta", host=host)
 
 
-def _history_best(log_path, sidecar_path, prepared, simulator):
-    tuner_path = APP_ROOT.parent / "autotvm_tuner.py"
-    spec = importlib.util.spec_from_file_location("mlperf_tiny_autotvm_tuner", tuner_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"cannot load AutoTVM tuner: {tuner_path}")
-    tuner = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = tuner
-    spec.loader.exec_module(tuner)
-    return tuner.history_best(
-        log_path,
-        sidecar_path,
-        model_id=MODEL_ID,
-        model_sha256=getattr(getattr(prepared, "imported", None), "model_sha256", MODEL_SHA256),
-        backend=simulator,
-        config_path=tuner.DEFAULT_CONFIG_PATH,
-    )
-
-
 def _autotvm_api():
     """Load AutoTVM only for an explicit schedule replay request."""
     return importlib.import_module("tvm.autotvm")
@@ -398,32 +383,60 @@ def _selected_occurrence_lowering(compiler, selected_by_symbol):
         tvm.register_func(name, previous, override=True)
 
 
+@contextmanager
+def _selected_snapshot_lowering(compiler, deployment, snapshot, compiler_config):
+    name = "vta.relay._relay_to_tir"
+    previous = tvm.get_global_func(name, allow_missing=True)
+    if previous is None:
+        raise RuntimeError("VTA Relay-to-TIR callback is unavailable")
+
+    def lower(module):
+        return lower_selected_deployment(
+            module, deployment, snapshot, compiler, compiler_config
+        )
+
+    tvm.register_func(name, lower, override=True)
+    try:
+        yield
+    finally:
+        tvm.register_func(name, previous, override=True)
+
+
 def build_host_artifacts(
     prepared,
     output_dir,
     host_codegen=DEFAULT_HOST_CODEGEN,
     simulator="fsim",
-    autotvm_log=None,
-    autotvm_sidecar=None,
-    selected_config_log=None,
-    selected_configs_by_symbol=None,
+    schedule=None,
 ):
     """Build, export, and reload both standard host libraries without simulator loading."""
     _validate_host_codegen(host_codegen)
     _simulator_session(simulator).validate_environment()
-    if (autotvm_log is None) != (autotvm_sidecar is None):
-        raise ValueError("AutoTVM replay requires both --autotvm-log and --autotvm-sidecar")
-    if selected_config_log is not None and autotvm_log is not None:
-        raise ValueError("selected native records cannot be combined with legacy AutoTVM replay")
-    if selected_configs_by_symbol is not None and (
-        selected_config_log is not None or autotvm_log is not None
-    ):
-        raise ValueError("occurrence-selected configs cannot be combined with history-best replay")
     if prepared.reference_module is not prepared.quantized_module:
         raise RuntimeError("pure LLVM build must use the exact shared quantized module object")
-    if selected_configs_by_symbol is not None:
-        if set(selected_configs_by_symbol) != set(prepared.routing.symbols):
-            raise ValueError("selected schedules must cover every prepared VTA symbol exactly")
+
+    schedule_path = None if schedule is None or str(schedule).lower() == "none" else schedule
+    snapshot = None
+    compute = None
+    compiler_config = None
+    if schedule_path is not None:
+        model_sha256 = getattr(getattr(prepared, "imported", None), "model_sha256", MODEL_SHA256)
+        compute = capture_deployment_compute(
+            prepared.mixed_module, MODEL_ID, model_sha256
+        )
+        snapshot = load_schedule_snapshot(schedule_path, compute)
+        compiler_config = vta.relay.transform.VTACompilerConfig.from_env(vta.get_env())
+    selected_occurrences = {} if snapshot is None else snapshot.selected
+    if compute is not None:
+        schedule_coverage = tuple(
+            (layer.occurrence, layer.symbol, layer.occurrence in selected_occurrences)
+            for layer in compute.layers
+        )
+    else:
+        schedule_coverage = tuple(
+            (occurrence, symbol, False)
+            for occurrence, symbol in enumerate(prepared.routing.symbols)
+        )
 
     output_dir = Path(output_dir)
     if host_codegen == "llvm":
@@ -433,49 +446,37 @@ def build_host_artifacts(
             reference_factory = relay.build(
                 prepared.reference_module, target=tvm.target.Target("c")
             )
-    history_context = (
-        _history_best(autotvm_log, autotvm_sidecar, prepared, simulator)
-        if autotvm_log is not None
-        else _autotvm_api().apply_history_best(str(selected_config_log))
-        if selected_config_log is not None
+    replay_enabled = bool(selected_occurrences)
+    compiler = te_compiler.get() if replay_enabled else None
+    if replay_enabled:
+        # TECompiler cache keys omit AutoTVM dispatch state.
+        compiler.clear()
+    lowering_context = (
+        _selected_snapshot_lowering(compiler, compute, snapshot, compiler_config)
+        if replay_enabled
         else nullcontext()
     )
-    with history_context:
-        replay_enabled = (
-            autotvm_log is not None
-            or selected_config_log is not None
-            or selected_configs_by_symbol is not None
-        )
-        compiler = te_compiler.get() if replay_enabled else None
-        if replay_enabled:
-            # TECompiler cache keys omit AutoTVM dispatch state.
+    try:
+        with lowering_context:
+            if host_codegen == "c":
+                with vta.build_config(config={"tir.disable_vectorize": True}):
+                    mixed_factory = relay.build(
+                        prepared.mixed_module,
+                        target=_mixed_target(
+                            *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
+                        ),
+                    )
+            else:
+                with vta.build_config():
+                    mixed_factory = relay.build(
+                        prepared.mixed_module,
+                        target=_mixed_target(
+                            *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
+                        ),
+                    )
+    finally:
+        if compiler is not None:
             compiler.clear()
-        lowering_context = (
-            _selected_occurrence_lowering(compiler, selected_configs_by_symbol)
-            if selected_configs_by_symbol is not None
-            else nullcontext()
-        )
-        try:
-            with lowering_context:
-                if host_codegen == "c":
-                    with vta.build_config(config={"tir.disable_vectorize": True}):
-                        mixed_factory = relay.build(
-                            prepared.mixed_module,
-                            target=_mixed_target(
-                                *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
-                            ),
-                        )
-                else:
-                    with vta.build_config():
-                        mixed_factory = relay.build(
-                            prepared.mixed_module,
-                            target=_mixed_target(
-                                *(host_codegen,) if host_codegen != DEFAULT_HOST_CODEGEN else ()
-                            ),
-                        )
-        finally:
-            if compiler is not None:
-                compiler.clear()
 
     reference_identity = _artifact_identity(host_codegen, "reference")
     mixed_identity = _artifact_identity(host_codegen, "mixed")
@@ -523,6 +524,7 @@ def build_host_artifacts(
             device=tvm.ext_dev(0),
         ),
         vta_symbols=tuple(prepared.routing.symbols),
+        schedule_coverage=schedule_coverage,
     )
 
 
@@ -677,7 +679,7 @@ def _execute_fsim_matrix(artifacts, sample_paths):
     return _execute_matrix(artifacts, sample_paths, "fsim")
 
 
-def _deploy_matrix(output_dir, host_codegens, simulator):
+def _deploy_matrix(output_dir, host_codegens, simulator, schedule=None):
     session = _simulator_session(simulator)
     session.validate_environment()
     host_codegens = _validate_host_codegens(host_codegens)
@@ -692,6 +694,7 @@ def _deploy_matrix(output_dir, host_codegens, simulator):
             _matrix_artifact_root(output_dir, host_codegen, simulator),
             host_codegen=host_codegen,
             simulator=simulator,
+            schedule=schedule,
         )
         for host_codegen in host_codegens
     )
@@ -701,22 +704,21 @@ def _deploy_matrix(output_dir, host_codegens, simulator):
     )
 
 
-def deploy_fsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HOST_CODEGENS):
+def deploy_fsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HOST_CODEGENS, schedule=None):
     """Build and execute the complete ordered LLVM/C FSIM matrix."""
-    return _deploy_matrix(output_dir, host_codegens, "fsim")
+    return _deploy_matrix(output_dir, host_codegens, "fsim", schedule)
 
 
-def deploy_tsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HOST_CODEGENS):
+def deploy_tsim_matrix(output_dir=DEFAULT_OUTPUT_DIR, host_codegens=SUPPORTED_HOST_CODEGENS, schedule=None):
     """Build and execute the complete ordered LLVM/C TSIM matrix."""
-    return _deploy_matrix(output_dir, host_codegens, "tsim")
+    return _deploy_matrix(output_dir, host_codegens, "tsim", schedule)
 
 
 def deploy(
     output_dir=DEFAULT_OUTPUT_DIR,
     host_codegen=DEFAULT_HOST_CODEGEN,
     simulator="fsim",
-    autotvm_log=None,
-    autotvm_sidecar=None,
+    schedule=None,
 ):
     """Perform the complete fixed HOST deployment and return its evidence."""
     _validate_host_codegen(host_codegen)
@@ -732,8 +734,7 @@ def deploy(
         output_dir,
         host_codegen=host_codegen,
         simulator=simulator,
-        autotvm_log=autotvm_log,
-        autotvm_sidecar=autotvm_sidecar,
+        schedule=schedule,
     )
     if simulator == "fsim":
         execution = execute_samples(artifacts, committed_sample_paths())

@@ -2,7 +2,9 @@
 
 import hashlib
 import json
+import math
 import os
+import re
 import tempfile
 import time
 from dataclasses import dataclass
@@ -47,6 +49,47 @@ def _canonical_json(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
+def _portable_target(target):
+    return re.sub(r"(?<=-model=)(?:fsim|tsim)_", "sim_", str(target))
+
+
+def _tunable_template(template, space):
+    # VTA's add.vta task is backend plumbing: FSIM exposes a singleton
+    # fallback space while TSIM exposes host fallback entities. It is not a
+    # selectable accelerator schedule and must remain on normal lowering.
+    return template != "add.vta" and len(space) > 1
+
+
+def _geometry_identity(deployment):
+    geometry = dict(deployment.geometry)
+    for key in ("target", "model"):
+        if key in geometry:
+            target = str(geometry[key]) if key == "target" else f"-model={geometry[key]}"
+            geometry[key] = _portable_target(target).removeprefix("-model=")
+    return _sha256(_canonical_json(geometry).encode("utf-8"))
+
+
+def _portable_config_space_identity(layer):
+    spaces = [
+        {
+            "template": template,
+            "workload": repr(workload),
+            "target": _portable_target(target),
+            "space_size": len(space) if template != "add.vta" else None,
+            "entities": (
+                [space.get(index).to_json_dict() for index in range(len(space))]
+                if _tunable_template(template, space) else None
+            ),
+        }
+        for template, workload, target, space in sorted(
+            layer.config_spaces,
+            key=lambda entry: (entry[0], repr(entry[1]), _portable_target(entry[2])),
+        )
+        if template != "add.vta"
+    ]
+    return _sha256(_canonical_json(spaces).encode("utf-8"))
+
+
 def _sidecar_path(path):
     path = Path(path)
     if path.suffix != ".log":
@@ -70,12 +113,15 @@ def _measurement_result(measurement):
     timestamp = measurement.get("timestamp", time.time())
     if not isinstance(costs, (list, tuple)) or not costs:
         raise ValueError("measured schedule requires non-empty measurement costs")
-    if any(isinstance(cost, bool) or not isinstance(cost, (int, float)) or cost < 0 for cost in costs):
-        raise ValueError("measurement costs must be non-negative numbers")
+    if any(isinstance(cost, bool) or not isinstance(cost, (int, float))
+           or not math.isfinite(cost) or cost < 0 for cost in costs):
+        raise ValueError("measurement costs must be finite non-negative numbers")
     if isinstance(error_no, bool) or not isinstance(error_no, int) or error_no < 0:
         raise ValueError("measurement error_no must be a non-negative integer")
-    if isinstance(all_cost, bool) or not isinstance(all_cost, (int, float)) or all_cost < 0:
-        raise ValueError("measurement all_cost must be a non-negative number")
+    if isinstance(all_cost, bool) or not isinstance(all_cost, (int, float)) or not math.isfinite(all_cost) or all_cost < 0:
+        raise ValueError("measurement all_cost must be a finite non-negative number")
+    if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)) or not math.isfinite(timestamp):
+        raise ValueError("measurement timestamp must be finite")
     return autotvm.measure.MeasureResult(tuple(costs), error_no, all_cost, timestamp)
 
 
@@ -84,11 +130,15 @@ def _layer_identity(layer):
         "occurrence": layer.occurrence,
         "symbol": layer.symbol,
         "compute_sha256": layer.compute_sha256,
-        "config_space_identity": layer.config_space_identity,
+        "config_space_identity": _portable_config_space_identity(layer),
         "workloads": [
-            {"template": template, "workload": repr(workload), "target": target,
-             "space_size": len(space)}
-            for template, workload, target, space in layer.config_spaces
+            {"template": template, "workload": repr(workload), "target": _portable_target(target),
+             "space_size": len(space) if template != "add.vta" else None}
+            for template, workload, target, space in sorted(
+                layer.config_spaces,
+                key=lambda entry: (entry[0], repr(entry[1]), _portable_target(entry[2])),
+            )
+            if template != "add.vta"
         ],
     }
 
@@ -138,6 +188,7 @@ def export_schedule_snapshot(path, deployment, selections, *, measurements=None)
         else:
             result_specs = None
         record_refs = []
+        recorded_results = []
         for index, (entry, raw_index) in enumerate(zip(layer.config_spaces, indices)):
             template, workload, target, space = entry
             if isinstance(raw_index, bool) or not isinstance(raw_index, int):
@@ -150,23 +201,31 @@ def export_schedule_snapshot(path, deployment, selections, *, measurements=None)
             config = space.get(raw_index)
             if not config.valid():
                 raise ValueError(f"occurrence {occurrence} config {raw_index} is invalid for {template}")
+            if not _tunable_template(template, space):
+                continue
             spec = None if result_specs is None else result_specs[index]
             record_result = _measurement_result(spec)
+            if spec is not None:
+                recorded_results.append(spec)
             row = autotvm.record.encode(_record_input(layer, entry, config), record_result)
             row_index = len(rows)
             rows.append(row)
             record_refs.append({
                 "template": template,
                 "workload": repr(workload),
-                "target": str(target),
+                "target": _portable_target(target),
                 "record_index": row_index,
                 "record_sha256": _sha256(row.encode("utf-8")),
                 "config": config.to_json_dict(),
             })
+        stored_measurement = None
+        if measurement_provenance is not None:
+            stored_measurement = dict(measurement_provenance)
+            stored_measurement["results"] = recorded_results
         occurrences.append({
             **_layer_identity(layer),
             "measured": measurement_provenance is not None,
-            "measurement": measurement_provenance,
+            "measurement": stored_measurement,
             "records": record_refs,
         })
 
@@ -175,7 +234,7 @@ def export_schedule_snapshot(path, deployment, selections, *, measurements=None)
         "schema_version": SCHEMA_VERSION,
         "model_id": deployment.model_id,
         "model_sha256": deployment.model_sha256,
-        "geometry_sha256": deployment.geometry_sha256,
+        "geometry_sha256": _geometry_identity(deployment),
         "log_sha256": _sha256(log_bytes),
         "occurrences": occurrences,
     }
@@ -230,7 +289,7 @@ def load_schedule_snapshot(path, deployment):
     if path is None or (isinstance(path, str) and path.lower() == "none"):
         return ScheduleSnapshot(
             None, deployment.model_id, deployment.model_sha256,
-            deployment.geometry_sha256, {},
+            _geometry_identity(deployment), {},
         )
     path = Path(path)
     sidecar = _sidecar_path(path)
@@ -247,7 +306,7 @@ def load_schedule_snapshot(path, deployment):
         raise ValueError("schedule model identity does not match the prepared deployment")
     if metadata.get("model_sha256") != deployment.model_sha256:
         raise ValueError("schedule model content hash does not match the prepared deployment")
-    if metadata.get("geometry_sha256") != deployment.geometry_sha256:
+    if metadata.get("geometry_sha256") != _geometry_identity(deployment):
         raise ValueError("schedule geometry identity does not match the active VTA geometry")
     if metadata.get("log_sha256") != _sha256(log_bytes):
         raise ValueError("schedule log hash does not match its metadata")
@@ -275,13 +334,27 @@ def load_schedule_snapshot(path, deployment):
             if row.get(key) != value:
                 raise ValueError(f"schedule occurrence {occurrence} {key} does not match deployment")
         record_rows = row.get("records")
-        if not isinstance(record_rows, list) or len(record_rows) != len(layer.config_spaces):
-            raise ValueError(f"schedule occurrence {occurrence} must select every captured template")
+        tunable_entries = [entry for entry in layer.config_spaces if _tunable_template(entry[0], entry[3])]
+        if not isinstance(record_rows, list) or len(record_rows) != len(tunable_entries):
+            raise ValueError(f"schedule occurrence {occurrence} must select each tunable captured template")
         configs = []
-        for ref, entry in zip(record_rows, layer.config_spaces):
-            template, workload, target, space = entry
+        refs_by_key = {}
+        for ref in record_rows:
             if not isinstance(ref, dict):
                 raise ValueError(f"schedule occurrence {occurrence} record reference is malformed")
+            key = (ref.get("template"), ref.get("workload"), ref.get("target"))
+            if key in refs_by_key:
+                raise ValueError(f"schedule occurrence {occurrence} has duplicate template records")
+            refs_by_key[key] = ref
+        for entry in layer.config_spaces:
+            template, workload, target, space = entry
+            if not _tunable_template(template, space):
+                configs.append(None)
+                continue
+            key = (template, repr(workload), _portable_target(target))
+            ref = refs_by_key.pop(key, None)
+            if ref is None:
+                raise ValueError(f"schedule occurrence {occurrence} is missing the {template} record")
             record_index = ref.get("record_index")
             if isinstance(record_index, bool) or not isinstance(record_index, int) or not (0 <= record_index < len(records)):
                 raise ValueError(f"schedule occurrence {occurrence} record index is invalid")
@@ -292,10 +365,11 @@ def load_schedule_snapshot(path, deployment):
                 raise ValueError(f"schedule occurrence {occurrence} native record hash mismatch")
             measure_input, measure_result = records[record_index]
             if (measure_input.task.name != template or tuple(measure_input.task.args) != tuple(workload[1:])
-                    or str(measure_input.target) != str(target)):
+                    or _portable_target(measure_input.target) != _portable_target(target)):
                 raise ValueError(f"schedule occurrence {occurrence} native record workload/target mismatch")
             config_dict = measure_input.config.to_json_dict()
-            if ref.get("template") != template or ref.get("workload") != repr(workload) or ref.get("target") != str(target):
+            if (ref.get("template") != template or ref.get("workload") != repr(workload)
+                    or ref.get("target") != _portable_target(target)):
                 raise ValueError(f"schedule occurrence {occurrence} record identity metadata mismatch")
             if _canonical_json(ref.get("config")) != _canonical_json(config_dict):
                 raise ValueError(f"schedule occurrence {occurrence} metadata config differs from native record")
@@ -310,6 +384,8 @@ def load_schedule_snapshot(path, deployment):
             if matching_index is None or not config.valid():
                 raise ValueError(f"schedule occurrence {occurrence} config is invalid for {template}")
             configs.append(config)
+        if refs_by_key:
+            raise ValueError(f"schedule occurrence {occurrence} contains unknown template records")
         measured = row.get("measured")
         measurement = row.get("measurement")
         if not isinstance(measured, bool) or (measured != (measurement is not None)):
@@ -323,10 +399,16 @@ def load_schedule_snapshot(path, deployment):
                     or not measurement.get("units")):
                 raise ValueError(f"schedule occurrence {occurrence} measurement provenance is malformed")
             results = measurement.get("results")
-            if not isinstance(results, list) or len(results) != len(configs):
+            if not isinstance(results, list) or len(results) != len(record_rows):
                 raise ValueError(f"schedule occurrence {occurrence} measurement provenance is malformed")
             for item, (_, result) in zip(results, [records[ref["record_index"]] for ref in record_rows]):
-                if not isinstance(item, dict) or result.error_no != item.get("error_no", 0):
+                native_result = {
+                    "costs": list(result.costs),
+                    "error_no": result.error_no,
+                    "all_cost": result.all_cost,
+                    "timestamp": result.timestamp,
+                }
+                if not isinstance(item, dict) or _canonical_json(item) != _canonical_json(native_result):
                     raise ValueError(f"schedule occurrence {occurrence} measurement disagrees with native record")
         selected[occurrence] = SelectedSchedule(
             occurrence, layer.symbol, tuple(configs), measured, measurement
@@ -335,5 +417,5 @@ def load_schedule_snapshot(path, deployment):
         raise ValueError("schedule log contains unreferenced native records")
     return ScheduleSnapshot(
         path, deployment.model_id, deployment.model_sha256,
-        deployment.geometry_sha256, selected,
+        _geometry_identity(deployment), selected,
     )

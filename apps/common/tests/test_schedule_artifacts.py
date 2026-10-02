@@ -87,10 +87,13 @@ def test_complete_snapshot_round_trips_native_config_records(deployment, tmp_pat
 
     assert len(loaded.selected) == len(deployment.layers)
     for layer in deployment.layers:
-        assert [config.to_json_dict() for config in loaded.selected[layer.occurrence].configs] == [
-            layer.config_spaces[index][3].get(selected).to_json_dict()
-            for index, selected in enumerate(selections[layer.occurrence])
+        expected = [
+            None if entry[0] == "add.vta" or len(entry[3]) == 1 else entry[3].get(selected).to_json_dict()
+            for entry, selected in zip(layer.config_spaces, selections[layer.occurrence])
         ]
+        actual = [None if config is None else config.to_json_dict()
+                  for config in loaded.selected[layer.occurrence].configs]
+        assert actual == expected
         assert loaded.selected[layer.occurrence].measured is False
         assert loaded.selected[layer.occurrence].measurement is None
 
@@ -109,14 +112,27 @@ def test_measured_candidate_carries_backend_protocol_and_units(deployment, tmp_p
             {"costs": [34.0], "error_no": 0, "all_cost": 0.5, "timestamp": 1.0},
         ],
     }
+    path = tmp_path / "measured.log"
     snapshot = export_schedule_snapshot(
-        tmp_path / "measured.log",
+        path,
         deployment,
         {layer.occurrence: selection},
         measurements={layer.occurrence: provenance},
     )
     assert snapshot.selected[layer.occurrence].measured is True
-    assert snapshot.selected[layer.occurrence].measurement == provenance
+    assert snapshot.selected[layer.occurrence].measurement["backend"] == "tsim"
+    assert snapshot.selected[layer.occurrence].measurement["protocol"] == "tsim_single_call_v1"
+    assert snapshot.selected[layer.occurrence].measurement["units"] == "cycles"
+    assert len(snapshot.selected[layer.occurrence].measurement["results"]) == 1
+
+    sidecar = path.with_suffix(".json")
+    metadata = json.loads(sidecar.read_text())
+    metadata["occurrences"][0]["measurement"]["results"][0]["costs"] = [999]
+    sidecar.write_text(json.dumps(metadata))
+    from common.schedule import load_schedule_snapshot
+
+    with pytest.raises(ValueError, match="disagrees with native record"):
+        load_schedule_snapshot(path, deployment)
 
     with pytest.raises(ValueError, match="units are required"):
         export_schedule_snapshot(

@@ -19,7 +19,6 @@
 """Run the fixed MLPerf Tiny ResNet-8 Large HOST deployment."""
 
 import argparse
-import json
 from pathlib import Path
 
 from runtime import DEFAULT_OUTPUT_DIR, deploy, deploy_fsim_matrix, deploy_tsim_matrix
@@ -45,24 +44,31 @@ def _parser():
         default="fsim",
         help="simulator to execute (default: fsim)",
     )
-    parser.add_argument("--autotvm-log", type=Path, help="native AutoTVM log for tuned replay")
-    parser.add_argument("--autotvm-sidecar", type=Path, help="matching JSON sidecar")
+    parser.add_argument(
+        "--schedule",
+        type=Path,
+        default=None,
+        help="native AutoTVM snapshot (.log plus same-stem .json); omitted or 'none' uses defaults",
+    )
     return parser
+
+
+def _report_schedule_coverage(artifacts, host_codegen, simulator):
+    for occurrence, symbol, selected in artifacts.schedule_coverage:
+        choice = "snapshot" if selected else "default"
+        print(f"{host_codegen}-{simulator} occurrence {occurrence} ({symbol}): {choice} schedule")
 
 
 def main(argv=None):
     args = _parser().parse_args(argv)
-    if (args.autotvm_log is None) != (args.autotvm_sidecar is None):
-        raise SystemExit("--autotvm-log and --autotvm-sidecar must be provided together")
-    if args.autotvm_log is not None and args.host_codegen == "all":
-        raise SystemExit("AutoTVM replay accepts one --host-codegen: llvm or c")
     if args.host_codegen == "all":
         result = (
-            deploy_fsim_matrix(args.output_dir)
+            deploy_fsim_matrix(args.output_dir, schedule=args.schedule)
             if args.simulator == "fsim"
-            else deploy_tsim_matrix(args.output_dir)
+            else deploy_tsim_matrix(args.output_dir, schedule=args.schedule)
         )
         for artifacts, execution in zip(result.artifacts, result.executions):
+            _report_schedule_coverage(artifacts, artifacts.host_codegen, args.simulator)
             print(f"{artifacts.host_codegen}-{args.simulator} partitions: {len(result.prepared.routing.symbols)}")
             print(f"{artifacts.host_codegen}-{args.simulator} compared samples: {len(execution.comparisons)}")
             print(f"{artifacts.host_codegen}-{args.simulator} profiler: {execution.profiler_stats}")
@@ -70,37 +76,27 @@ def main(argv=None):
             print(f"{artifacts.host_codegen}-{args.simulator} mixed bundle: {artifacts.mixed.artifact_dir}")
         print(f"MLPerf ResNet8 Large LLVM/C {args.simulator.upper()} matrix passed")
     elif args.host_codegen == "llvm":
-        # Keep the original call shape for callers that wrap the compatibility API.
         result = (
-            deploy(
-                args.output_dir,
-                autotvm_log=args.autotvm_log,
-                autotvm_sidecar=args.autotvm_sidecar,
-            )
+            deploy(args.output_dir, schedule=args.schedule)
             if args.simulator == "fsim"
             else deploy(
                 args.output_dir,
                 simulator=args.simulator,
-                autotvm_log=args.autotvm_log,
-                autotvm_sidecar=args.autotvm_sidecar,
+                schedule=args.schedule,
             )
         )
+        _report_schedule_coverage(result.artifacts, "llvm", args.simulator)
         print(f"Compared samples: {len(result.execution.comparisons)}")
         print(f"{args.simulator.upper()} profiler: {result.execution.profiler_stats}")
-        if args.autotvm_sidecar is not None:
-            metadata = json.loads(args.autotvm_sidecar.read_text(encoding="utf-8"))
-            print(f"AutoTVM model: {metadata['model_id']} ({metadata['model_sha256']})")
-            print(f"AutoTVM log: {args.autotvm_log.resolve()}")
-            print(f"AutoTVM sidecar: {args.autotvm_sidecar.resolve()}")
         print("MLPerf ResNet8 Large HOST deployment passed")
     else:
         result = deploy(
             args.output_dir,
             host_codegen=args.host_codegen,
             simulator=args.simulator,
-            autotvm_log=args.autotvm_log,
-            autotvm_sidecar=args.autotvm_sidecar,
+            schedule=args.schedule,
         )
+        _report_schedule_coverage(result.artifacts, args.host_codegen, args.simulator)
         print(f"{args.host_codegen}-{args.simulator} compared samples: {len(result.execution.comparisons)}")
         print(f"{args.host_codegen}-{args.simulator} profiler: {result.execution.profiler_stats}")
         print("MLPerf ResNet8 Large HOST deployment passed")

@@ -33,6 +33,7 @@ import pytest
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_PATH = APP_ROOT / "runtime.py"
+RUN_PATH = APP_ROOT / "run.py"
 MODEL_PATH = APP_ROOT / "model" / "pretrainedResnet_large_float.tflite"
 MANIFEST_PATH = APP_ROOT / "samples" / "manifest.json"
 EXPECTED_VTA_SYMBOLS = tuple(f"tvmgen_mlperf_resnet_large_vta_main_{index}" for index in range(8))
@@ -71,8 +72,9 @@ def test_committed_sample_order_is_the_fixed_manifest_order(deployment_runtime):
     assert deployment_runtime.committed_sample_paths() == expected
 
 
+@pytest.mark.parametrize("schedule", [None, Path("none")])
 def test_build_exports_and_reloads_two_standard_dsos_without_loading_fsim(
-    deployment_runtime, monkeypatch, tmp_path
+    deployment_runtime, monkeypatch, tmp_path, schedule
 ):
     quantized = object()
     mixed = object()
@@ -152,7 +154,7 @@ def test_build_exports_and_reloads_two_standard_dsos_without_loading_fsim(
         lambda: pytest.fail("HOST/FSIM builds without tuning must not load AutoTVM"),
     )
 
-    artifacts = deployment_runtime.build_host_artifacts(prepared, tmp_path)
+    artifacts = deployment_runtime.build_host_artifacts(prepared, tmp_path, schedule=schedule)
 
     suffix = deployment_runtime.shared_library_suffix()
     assert artifacts.reference.path == tmp_path / "reference" / ("model" + suffix)
@@ -167,6 +169,9 @@ def test_build_exports_and_reloads_two_standard_dsos_without_loading_fsim(
     assert artifacts.mixed.params == serialized_params_by_kind["mixed"]
     assert artifacts.reference.params is not artifacts.mixed.params
     assert artifacts.vta_symbols == EXPECTED_VTA_SYMBOLS
+    assert artifacts.schedule_coverage == tuple(
+        (index, symbol, False) for index, symbol in enumerate(EXPECTED_VTA_SYMBOLS)
+    )
     assert artifacts.reference.path.read_bytes() == b"reference"
     assert artifacts.mixed.path.read_bytes() == b"mixed"
     for role in EXPECTED_ARTIFACT_DIRS:
@@ -471,7 +476,7 @@ def test_fsim_matrix_prepares_once_and_records_independent_host_windows(
         prepare_calls += 1
         return prepared
 
-    def fake_build(_prepared, _output, *, host_codegen, simulator):
+    def fake_build(_prepared, _output, *, host_codegen, simulator, schedule=None):
         artifact = SimpleNamespace(
             host_codegen=host_codegen,
             reference=SimpleNamespace(module=(host_codegen, "reference")),
@@ -593,7 +598,7 @@ def test_fsim_matrix_result_records_simulator_and_is_frozen(deployment_runtime, 
 
 
 def test_application_sources_use_only_the_approved_host_flow():
-    assert RUNTIME_PATH.is_file(), f"missing Task 7 implementation: {RUNTIME_PATH}"
+    assert RUNTIME_PATH.is_file(), f"missing deployment runtime: {RUNTIME_PATH}"
     artifact_path = APP_ROOT / "graph_artifacts.py"
     sources = {
         path.name: path.read_text(encoding="utf-8")
@@ -634,12 +639,56 @@ def test_application_sources_use_only_the_approved_host_flow():
     assert 'target="llvm"' in combined
 
 
+def test_runner_exposes_one_schedule_argument_and_removes_dual_log_options():
+    source = RUN_PATH.read_text(encoding="utf-8")
+    assert '"--schedule"' in source
+    assert "--autotvm-log" not in source
+    assert "--autotvm-sidecar" not in source
+    assert "autotvm_log" not in source
+    assert "autotvm_sidecar" not in source
+
+
+def test_invalid_schedule_identity_fails_before_any_relay_build(
+    deployment_runtime, monkeypatch, tmp_path
+):
+    prepared = SimpleNamespace(
+        quantized_module=object(),
+        mixed_module=object(),
+        routing=SimpleNamespace(symbols=EXPECTED_VTA_SYMBOLS),
+        imported=SimpleNamespace(model_sha256="actual-model-hash"),
+    )
+    prepared.reference_module = prepared.quantized_module
+    monkeypatch.setattr(
+        deployment_runtime,
+        "capture_deployment_compute",
+        lambda *_args: object(),
+    )
+    monkeypatch.setattr(
+        deployment_runtime,
+        "load_schedule_snapshot",
+        lambda *_args: (_ for _ in ()).throw(ValueError("schedule model identity mismatch")),
+    )
+    monkeypatch.setattr(
+        deployment_runtime.relay,
+        "build",
+        lambda *_args, **_kwargs: pytest.fail("schedule validation must precede Relay compilation"),
+    )
+
+    with pytest.raises(ValueError, match="model identity mismatch"):
+        deployment_runtime.build_host_artifacts(
+            prepared, tmp_path, simulator="fsim", schedule=tmp_path / "wrong-model.log"
+        )
+
+
 def test_end_to_end_host_fsim_deployment(deployment_runtime, tmp_path):
     result = deployment_runtime.deploy(tmp_path)
 
     assert result.artifacts.reference.path.is_file()
     assert result.artifacts.mixed.path.is_file()
     assert result.artifacts.vta_symbols == EXPECTED_VTA_SYMBOLS
+    assert result.artifacts.schedule_coverage == tuple(
+        (index, symbol, False) for index, symbol in enumerate(EXPECTED_VTA_SYMBOLS)
+    )
     assert len(result.execution.comparisons) == 10
     assert tuple(item.sample_path for item in result.execution.comparisons) == _expected_sample_paths()
     for comparison in result.execution.comparisons:
