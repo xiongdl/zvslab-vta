@@ -1,205 +1,132 @@
-# MLPerf Tiny VTA AutoTVM workflow
+# MLPerf Tiny VTA applications
 
-`autotvm_tuner.py` tunes the VTA tasks extracted from the six applications in
-this directory. The model selector `all` has a fixed order:
+Each model application has one deployment entry point, `run.py`, and one
+schedule-search entry point, `tune.py`. Both use the model's actual prepared
+deployment layers and shared VTA lowering. Generic per-operator AutoTVM tuning
+and separate model deployment commands have been retired.
 
-1. `image_classification_v1`
-2. `image_classification_v2`
-3. `anomaly_detection_v1`
-4. `keyword_spotting_v1`
-5. `streaming_wakeword_v1`
-6. `visual_wake_words_v1`
+The six applications are `image_classification_v1`,
+`image_classification_v2`, `anomaly_detection_v1`, `keyword_spotting_v1`,
+`streaming_wakeword_v1`, and `visual_wake_words_v1`. Each model README records
+its committed samples and output checks.
 
-Each invocation targets one backend and uses the shared
-`vta/config/vta_64mac.json` geometry. Run FSIM and TSIM in separate processes
-with matching `VTA_BACKEND` values. A bounded aggregate smoke run is:
+## Prerequisites and default run
+
+Use the existing `.envs/tvm-vta-env`, initialized `tvm/` and `vta/`
+submodules, built TVM/VTA libraries, and the shared absolute geometry file.
+Select the same backend in `VTA_BACKEND` and `--simulator`. For example:
 
 ```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
-  --model all --backend fsim --trials-per-task 1
+export VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json"
+export PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps"
 
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
-  --model all --backend tsim --trials-per-task 1
+VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/image_classification_v2/run.py \
+  --simulator fsim
 ```
 
-Omit `--trials-per-task` to search each supported task's full configuration
-space. `--timeout` overrides the default per-measurement timeout. The tuner
-completes models sequentially and atomically updates an aggregate JSON summary
-after each model. The summary reports the backend/configuration identity,
-task/trial counts, supported and unsupported task templates, each model's
-status, and the log/sidecar paths. A failed model remains marked failed while
-later models continue; the command returns nonzero if any model failed.
+Omitting `--schedule` or passing `--schedule none` compiles with the default
+schedule. Default runs do no schedule search. `--host-codegen` accepts
+`llvm`, `c`, or `all`; the default is `llvm`. FSIM runs the functional
+simulator. TSIM reports its supported `cycle_count` in simulator cycles; this
+is not FPGA latency or an official MLPerf score.
 
-To resume, pass the summary path printed by the earlier command:
+## One schedule input
+
+`--schedule PATH` accepts one native AutoTVM log and automatically reads the
+same-stem JSON metadata, for example `candidate.log` with `candidate.json`.
+The metadata binds the records to model, prepared computation, VTA geometry,
+occurrence, workload, configuration, and native record hashes. A missing,
+damaged, or mismatched pair fails validation before execution. Partial snapshots
+are allowed: selected occurrences use the supplied configs, while every
+uncovered occurrence uses its normal default; the runner reports this coverage.
 
 ```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/autotvm_tuner.py \
-  --model all --backend tsim --trials-per-task 1 \
-  --resume-summary <autotvm-all-tsim-summary.json>
+VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python \
+  vta/apps/mlperf_tiny_benchmark/image_classification_v2/run.py \
+  --simulator tsim --schedule /path/to/best.log \
+  --deployment-report /tmp/v2-deployment.json
 ```
 
-Resume accepts only the same backend, geometry hash, and tuning options. For
-each previously completed model, it validates the model hash and log/sidecar
-pair before reusing it. Invalid or incomplete pairs are tuned again. Each
-model/backend run owns distinct files under the ignored
-`build/autotvm/` directory; no model can inherit another model's log.
+`--validate-schedule-evidence` requires measured complete schedule coverage and
+the strict per-layer cycle alignment checks. The deployment report records
+model/geometry/schedule identities, selected and default coverage, output
+checks, and any measured evidence. Model README files describe the exact
+sample and performance gates.
 
-## Replay and correctness
+## Seed, search, resume, and export
 
-Replay a model with the matching backend-specific native log and JSON sidecar.
-The model runner validates the pair before applying history-best and then uses
-its existing sample, CPU/VTA routing, and output checks. For example:
-
-```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/visual_wake_words_v1/run.py \
-  --simulator tsim \
-  --autotvm-log <visual_wake_words_v1-tsim.log> \
-  --autotvm-sidecar <visual_wake_words_v1-tsim.json>
-```
-
-The same options are available on the V1, V2, anomaly, keyword spotting, and
-streaming wakeword runners. Each run directory's README describes its sample
-contract, runtime mode, and backend-specific CLI options. In particular:
-
-- image classification V1 compares baseline and tuned outputs and prints both
-  TSIM cycle counts;
-- image classification V2, anomaly, keyword spotting, streaming wakeword, and
-  VWW report their existing output comparisons and simulator counters while
-  applying the matching model/backend log;
-- task reports list unsupported VTA templates explicitly; unsupported work is
-  not presented as tuned;
-- TSIM `cycle_count` is a simulator measurement, not FPGA latency or an
-  official MLPerf result. A speedup is claimed only when a tuned/baseline
-  comparison demonstrates lower cycles under the same conditions.
-
-Per-model native logs and sidecars are independent for FSIM and TSIM. FSIM
-measurement costs must not be interpreted as TSIM cycle counts.
-
-## Per-layer useful-MAC utilization estimates
-
-`mac_utilization.py` associates each extracted VTA Conv/Dense graph occurrence
-with the best successful cycle cost for its matching workload in a validated
-TSIM AutoTVM log. For each occurrence it reports
-`logical_MACs / (best_successful_isolated_TSIM_task_cycles * peak_MACs_per_cycle)`.
-AutoTVM records FLOPs, so the script divides by two for logical MACs. Peak
-throughput comes from the geometry as
-`2**LOG_BATCH * 2**LOG_BLOCK * 2**LOG_BLOCK` MAC/cycle; the checked-in
-`vta_64mac.json` yields 64 MAC/cycle. The report includes both a ratio and a
-percentage, units, config hash, workload identity, paired log/sidecar identity,
-unsupported task coverage, and row counts.
-
-This is an isolated AutoTVM task estimate associated with a layer occurrence.
-TSIM does not provide per-layer full-model cycle profiling here, so this value
-must not be read as that occurrence's measured cost in full-model execution.
-Unsupported task templates are listed in the JSON summary and receive no
-fabricated utilization. Repeated layer occurrences remain separate CSV rows,
-even when they share a workload and its selected task cost.
-
-The commands require the existing `.envs/tvm-vta-env`, built TVM/VTA TSIM
-libraries, and a validated TSIM log/sidecar pair. Their default output is under
-the ignored `build/autotvm/mac-utilization/` directory:
+Tune the actual deployment occurrences with a model's `tune.py`; all six
+scripts expose the same command shape. A TSIM seed measures the default
+schedule at each occurrence, exports a complete schedule log/metadata pair,
+and is then run once through `run.py --validate-schedule-evidence` to create
+the alignment report required by search:
 
 ```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/mac_utilization.py \
-  --model image_classification_v1 --backend tsim \
-  --log vta/apps/mlperf_tiny_benchmark/build/autotvm/<v1-tsim-log>.log \
-  --sidecar vta/apps/mlperf_tiny_benchmark/build/autotvm/<v1-tsim-sidecar>.json
-
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/mac_utilization.py \
-  --model all --backend tsim \
-  --summary vta/apps/mlperf_tiny_benchmark/build/autotvm/<autotvm-all-tsim-summary>.json
-```
-
-The six-model command validates the aggregate summary, every model's sidecar,
-and each native log before writing reports. It produces a CSV with one row per
-supported occurrence and a JSON summary; stable output names are derived from
-the validated artifact identities. Set `--output-dir PATH` to write elsewhere.
-
-## Complete-fusion tuning for the remaining four models
-
-The model-local two-stage adapters cover `anomaly_detection_v1`,
-`keyword_spotting_v1`, `streaming_wakeword_v1`, and `visual_wake_words_v1`.
-Run one model at a time with its exact directory name below. Seed, full search,
-resume, replay, and deployment use separate FSIM/TSIM processes with the shared
-absolute geometry. Search defaults to 100 distinct FSIM configurations per
-batch until each occurrence has 20 successful schedules or its space is
-exhausted. A full search requires that model's passing seed deployment report.
-
-Set the selected model and repository-local Python paths:
-
-```bash
-MODEL=anomaly_detection_v1 # or keyword_spotting_v1, streaming_wakeword_v1, visual_wake_words_v1
+MODEL=image_classification_v2
 MODEL_DIR="vta/apps/mlperf_tiny_benchmark/$MODEL"
-export MODEL MODEL_DIR
-export PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps/mlperf_tiny_benchmark:$PWD/$MODEL_DIR"
+export MODEL_DIR
+
+VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune.py" --seed --all
+VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/run.py" \
+  --simulator tsim \
+  --schedule "$MODEL_DIR/build/actual_compute_tuning/seed/seed.log" \
+  --validate-schedule-evidence \
+  --deployment-report "$MODEL_DIR/build/actual_compute_tuning/seed/deployment.json"
+
+VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune.py" \
+  --all --alignment-report "$MODEL_DIR/build/actual_compute_tuning/seed/deployment.json"
 ```
 
-Find the generated seed run directory after the seed command and pass its
-`best-manifest.json` to the one-sample alignment deployment. Only after the
-report passes should the full search run. Every full-search invocation,
-including `--workload-index` and bounded smoke runs, validates this complete
-one-sample report and its bound seed manifest before searching:
+Search starts from actual occurrences captured from the normally prepared
+deployment graph. It tests distinct valid schedule configurations on FSIM and
+measures successful candidates on TSIM using one counted invocation after an
+excluded warmup (`tsim_single_call_v1`, units `cycles`). Default search options
+are `--trial-batch 100`, `--min-successful 20`, `--fsim-timeout 60`, and
+`--tsim-timeout 120` seconds per candidate. A task stops when its successful
+quota is reached or its valid configuration space is exhausted. Use
+`--workload-index N` or `--max-workloads N` for bounded occurrence selection.
+The search ledger and resume manifest live below the model's ignored
+`build/actual_compute_tuning/<run-id>/` directory. Failed trials are recorded.
+
+Resume with the matching manifest and unchanged model, geometry, compute,
+search options, and seed/alignment identities:
 
 ```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-  ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune/tune.py" --seed --all
-
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-  ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune/deployment.py" \
-  --best-manifest "$MODEL_DIR/tune/seed/<seed-run-id>/best-manifest.json" \
-  --output "$MODEL_DIR/tune/deployment-seed.json"
-
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-  ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune/tune.py" --all \
-  --alignment-report "$MODEL_DIR/tune/deployment-seed.json"
+VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune.py" \
+  --all --alignment-report "$MODEL_DIR/build/actual_compute_tuning/seed/deployment.json" \
+  --resume-manifest "$MODEL_DIR/build/actual_compute_tuning/<run-id>/resume-manifest.json"
 ```
 
-If an approved full search is interrupted, resume with its run manifest and
-the same FSIM identity/options. Replay the self-contained optimal manifest in
-a fresh TSIM process; this requires complete occurrence coverage and validates
-selected records and real lowering without the intermediate search build. Then
-deploy the selected manifest once on the model's committed representative
-sample and calculate measured per-occurrence and whole-model MAC utilization:
+The search exports `best.log` and its same-stem metadata when each selected
+occurrence has a successful TSIM result. Export any ledger candidate or the
+best successful candidates explicitly with `--resume-manifest`,
+`--workload-index` as needed, `--export-candidate N` or `--export-best`, and
+`--output-log PATH`. A candidate export preserves measurement status; an
+unmeasured or failed candidate is not represented as measured. Candidate and
+best exports are ordinary deployable schedule snapshots and can be supplied
+to `run.py --schedule PATH`. A one-occurrence export is a valid partial
+snapshot.
+
+The runner can migrate compatible historical full-fusion manifests to the
+current actual-compute snapshot format with the common
+`common.schedule.migrate_legacy_full_fusion` helper. Migration validates the
+real model computation, geometry, schedule configuration, native records, and
+historical single-call TSIM measurement protocol; it does not invent new
+measurements. Models expose this through their migration option in `tune.py`.
+
+## Cleanup
+
+Inspect generated files first, then choose a category and model explicitly:
 
 ```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-  ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune/tune.py" \
-  --resume-manifest "$MODEL_DIR/build/two_stage_tuning/<run-id>/manifest.json"
-
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-  ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune/tune.py" \
-  --replay-manifest "$MODEL_DIR/tune/optimal/<run-id>/best-manifest.json"
-
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-  ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune/deployment.py" \
-  --best-manifest "$MODEL_DIR/tune/optimal/<run-id>/best-manifest.json" \
-  --output "$MODEL_DIR/tune/deployment-full.json"
-
-./.envs/tvm-vta-env/bin/python scripts/mac_utilization.py \
-  --deployment-report "$MODEL_DIR/tune/deployment-full.json" \
-  --output-json "$MODEL_DIR/tune/mac-utilization-full.json"
+./.envs/tvm-vta-env/bin/python scripts/clean_mlperf_tiny.py \
+  --model all --cache --tuning-runs --dry-run
 ```
 
-The matching calculator CSV is written beside the JSON. The committed
-per-model `tune/optimal/` manifest, deployment report and MAC CSV/JSON are
-self-contained final evidence. See the initiative's `RESULTS.md` for the
-four-model occurrence table, search counts, sample hashes, cycle comparisons
-and report links.
+`--cache` selects recognized compiler/debug output; `--tuning-runs` selects
+generated ledgers, logs, and checkpoints. Remove `--dry-run` to delete those
+recognized, untracked files. Unknown files, tracked files, models, samples,
+saved seed/optimal snapshots, and evidence reports are retained. Removing
+tuning runs discards resume state. See `scripts/README.md` for prerequisites
+and the complete cleanup contract.
