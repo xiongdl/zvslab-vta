@@ -1,62 +1,87 @@
-"""Validation tests for versioned IC V1 deployment evidence."""
+"""Tests for the unified IC V1 deployment report contract."""
 
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "tune" / "deployment.py"
-SPEC = importlib.util.spec_from_file_location("ic_v1_deployment_profile_test", MODULE_PATH)
-deployment = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = deployment
-SPEC.loader.exec_module(deployment)
+APP_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_occurrence_config_map_preserves_different_configs_for_same_conv_shape():
-    identities = [
-        {"occurrence": 0, "symbol": "fusion_0"},
-        {"occurrence": 1, "symbol": "fusion_1"},
+def _load_runtime():
+    spec = importlib.util.spec_from_file_location("ic_v1_deployment_profile_runtime", APP_ROOT / "runtime.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_report_records_v1_samples_outputs_profiler_and_default_coverage(tmp_path):
+    runtime = _load_runtime()
+    output = SimpleNamespace(sample_path=Path("00-airplane.png"))
+    result = SimpleNamespace(
+        prepared=SimpleNamespace(imported=SimpleNamespace(model_sha256="model-hash")),
+        artifacts=SimpleNamespace(
+            simulator="fsim", host_codegen="llvm",
+            schedule_coverage=((0, "fusion_0", False), (1, "fusion_1", True)),
+            schedule_config_identities=((1, "selected-config-sha"),),
+        ),
+        execution=SimpleNamespace(comparisons=(output,) * 10, profiler_stats={"gemm_counter": 1}),
+    )
+
+    report = runtime.write_deployment_report(result, tmp_path / "report.json", schedule="candidate.log")
+
+    assert report["model"] == "image_classification_v1"
+    assert report["sample_count"] == report["outputs_passed"] == 10
+    assert report["schedule_coverage"] == [
+        {"occurrence": 0, "symbol": "fusion_0", "selected": False},
+        {"occurrence": 1, "symbol": "fusion_1", "selected": True},
     ]
-    entries = [
-        {"workload_index": 0, "occurrence": 0, "symbol": "fusion_0", "config": {"tile": 1}},
-        {"workload_index": 1, "occurrence": 1, "symbol": "fusion_1", "config": {"tile": 2}},
+    assert report["profiler_stats"] == {"gemm_counter": 1}
+    assert report["selected_config_identities"] == [
+        {"occurrence": 1, "sha256": "selected-config-sha"}
     ]
-
-    assert deployment.build_occurrence_config_map(identities, entries) == {
-        0: {"tile": 1}, 1: {"tile": 2}
-    }
+    assert (tmp_path / "report.json").is_file()
 
 
-def test_occurrence_config_map_rejects_missing_or_mismatched_occurrences():
-    identities = [
-        {"occurrence": 0, "symbol": "fusion_0"},
-        {"occurrence": 1, "symbol": "fusion_1"},
-    ]
-    entries = [
-        {"workload_index": 0, "occurrence": 0, "symbol": "fusion_0", "config": {"tile": 1}},
-        {"workload_index": 1, "occurrence": 9, "symbol": "fusion_1", "config": {"tile": 1}},
-    ]
-
-    with pytest.raises(ValueError, match="selected schedule identity mismatch"):
-        deployment.build_occurrence_config_map(identities, entries)
-
-
-def test_cycle_comparison_uses_autotvm_cycles_and_rejects_over_ten_percent():
-    assert deployment.compare_cycles(110, 100)["relative_cycle_difference"] == pytest.approx(0.1)
-    with pytest.raises(ValueError, match="exceeds 10%"):
-        deployment.compare_cycles(111, 100)
+def test_run_parser_exposes_one_schedule_option_and_rejects_old_log_pair():
+    runtime = _load_runtime()
+    sys.modules["runtime"] = runtime
+    sys.path.insert(0, str(APP_ROOT))
+    try:
+        spec = importlib.util.spec_from_file_location("ic_v1_schedule_run", APP_ROOT / "run.py")
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+    finally:
+        sys.path.pop(0)
+    args = runner._parser().parse_args(["--schedule", "none"])
+    assert args.schedule == "none"
+    with pytest.raises(SystemExit):
+        runner._parser().parse_args(["--autotvm-log", "candidate.log"])
 
 
-def test_report_validation_rejects_duplicate_occurrence_and_unaligned_counts():
-    report = deployment.example_valid_report()
-    report["occurrences"].append(dict(report["occurrences"][0]))
-    with pytest.raises(ValueError, match="occurrence identity must be unique"):
-        deployment.validate_deployment_report(report)
+def test_schedule_evidence_requires_tsim_and_a_report_path():
+    runtime = _load_runtime()
+    sys.modules["runtime"] = runtime
+    sys.path.insert(0, str(APP_ROOT))
+    try:
+        spec = importlib.util.spec_from_file_location("ic_v1_run_profile", APP_ROOT / "run.py")
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+    finally:
+        sys.path.pop(0)
+    with pytest.raises(ValueError, match="requires --deployment-report"):
+        runner.main(["--validate-schedule-evidence"])
 
-    report = deployment.example_valid_report()
-    report["measurement_protocol"]["full_model_counted_invocations"] = 2
-    report["full_model"]["invocation_count"] = 1
-    with pytest.raises(ValueError, match="invocation counts must align"):
-        deployment.validate_deployment_report(report)
+
+def test_report_rejects_schedule_evidence_for_fsim(tmp_path):
+    runtime = _load_runtime()
+    result = SimpleNamespace(artifacts=SimpleNamespace(simulator="fsim"))
+    with pytest.raises(ValueError, match="requires --simulator tsim"):
+        runtime.write_deployment_report(
+            result, tmp_path / "report.json", schedule="candidate.log",
+            validate_schedule_evidence=True,
+        )

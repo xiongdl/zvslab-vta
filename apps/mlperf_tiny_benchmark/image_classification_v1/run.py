@@ -9,123 +9,85 @@
 #
 #   http://www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-"""Run the fixed MLPerf Tiny ResNet-8 HOST deployment."""
+"""Run the fixed MLPerf Tiny ResNet-8 deployment."""
 
 import argparse
-import json
 from pathlib import Path
 
-from runtime import (
-    DEFAULT_OUTPUT_DIR,
-    deploy,
-    deploy_autotvm_comparison,
-    deploy_fsim_matrix,
-    deploy_tsim_matrix,
-)
+from runtime import DEFAULT_OUTPUT_DIR, deploy, deploy_fsim_matrix, deploy_tsim_matrix
+from runtime import write_deployment_report
 
 
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-dir", type=str, default=str(DEFAULT_OUTPUT_DIR))
+    parser.add_argument("--host-codegen", choices=("llvm", "c", "all"), default="llvm")
+    parser.add_argument("--simulator", choices=("fsim", "tsim"), default="fsim")
     parser.add_argument(
-        "--output-dir",
-        type=str,
-        default=str(DEFAULT_OUTPUT_DIR),
-        help="directory for the two generated host libraries",
+        "--schedule", type=str, default=None,
+        help="actual-deployment schedule snapshot (.log plus same-stem .json); omitted or none uses defaults",
     )
+    parser.add_argument("--deployment-report", type=Path)
     parser.add_argument(
-        "--host-codegen",
-        choices=("llvm", "c", "all"),
-        default="llvm",
-        help="host code generator to execute (all builds the ordered LLVM/C matrix)",
-    )
-    parser.add_argument(
-        "--simulator",
-        choices=("fsim", "tsim"),
-        default="fsim",
-        help="simulator to execute (default: fsim)",
-    )
-    parser.add_argument(
-        "--autotvm-log", type=Path, help="native AutoTVM log for a tuned comparison"
-    )
-    parser.add_argument(
-        "--autotvm-sidecar", type=Path, help="matching JSON sidecar for --autotvm-log"
+        "--validate-schedule-evidence", action="store_true",
+        help="on TSIM, require complete measured coverage and strict per-layer cycle alignment",
     )
     return parser
 
 
+def _print_coverage(artifacts):
+    for occurrence, symbol, selected in getattr(artifacts, "schedule_coverage", ()):
+        kind = "snapshot" if selected else "default"
+        print(f"occurrence {occurrence} ({symbol}): {kind} schedule")
+
+
 def main(argv=None):
     args = _parser().parse_args(argv)
-    if (args.autotvm_log is None) != (args.autotvm_sidecar is None):
-        raise SystemExit("--autotvm-log and --autotvm-sidecar must be provided together")
-    if args.autotvm_log is not None:
-        if args.host_codegen == "all":
-            raise SystemExit("AutoTVM comparison accepts one --host-codegen: llvm or c")
-        output_dir = args.output_dir
-        if output_dir == str(DEFAULT_OUTPUT_DIR):
-            output_dir = str(DEFAULT_OUTPUT_DIR / "autotvm-comparison")
-        result = deploy_autotvm_comparison(
-            args.autotvm_log,
-            args.autotvm_sidecar,
-            output_dir=output_dir,
-            host_codegen=args.host_codegen,
-            simulator=args.simulator,
-        )
-        metadata = json.loads(args.autotvm_sidecar.read_text(encoding="utf-8"))
-        print(f"Model: image_classification_v1 ({metadata['model_sha256']})")
-        print(f"Backend: {args.simulator}")
-        print(f"Config: {metadata['config_path']} (sha256 {metadata['config_sha256']})")
-        print(f"AutoTVM log: {metadata['log_path']} (sha256 {metadata['log_sha256']})")
-        print(f"AutoTVM sidecar: {args.autotvm_sidecar.resolve()}")
-        print(f"Baseline compared samples: {len(result.baseline_execution.comparisons)}")
-        print(f"Tuned compared samples: {len(result.tuned_execution.comparisons)}")
-        if args.simulator == "tsim":
-            print(
-                "TSIM cycle_count: "
-                f"baseline={result.baseline_execution.profiler_stats['cycle_count']}, "
-                f"tuned={result.tuned_execution.profiler_stats['cycle_count']}"
-            )
-        else:
-            print(f"FSIM baseline profiler: {result.baseline_execution.profiler_stats}")
-            print(f"FSIM tuned profiler: {result.tuned_execution.profiler_stats}")
-        print("MLPerf ResNet AutoTVM comparison passed")
-        return 0
+    if args.validate_schedule_evidence and args.deployment_report is None:
+        raise ValueError("--validate-schedule-evidence requires --deployment-report")
+    if args.host_codegen == "all" and args.deployment_report is not None:
+        raise ValueError("--deployment-report requires one host codegen, not --host-codegen all")
+    schedule = None if args.schedule is None else args.schedule
     if args.host_codegen == "all":
         result = (
-            deploy_fsim_matrix(args.output_dir)
+            deploy_fsim_matrix(args.output_dir, schedule=schedule)
             if args.simulator == "fsim"
-            else deploy_tsim_matrix(args.output_dir)
+            else deploy_tsim_matrix(args.output_dir, schedule=schedule)
         )
         for artifacts, execution in zip(result.artifacts, result.executions):
-            print(f"{artifacts.host_codegen}-{args.simulator} partitions: {len(result.prepared.routing.symbols)}")
+            _print_coverage(artifacts)
             print(f"{artifacts.host_codegen}-{args.simulator} compared samples: {len(execution.comparisons)}")
             print(f"{artifacts.host_codegen}-{args.simulator} profiler: {execution.profiler_stats}")
-            print(f"{artifacts.host_codegen}-{args.simulator} reference bundle: {artifacts.reference.artifact_dir}")
-            print(f"{artifacts.host_codegen}-{args.simulator} mixed bundle: {artifacts.mixed.artifact_dir}")
         print(f"MLPerf ResNet LLVM/C {args.simulator.upper()} matrix passed")
-    elif args.host_codegen == "llvm":
-        # Keep the original call shape for callers that wrap the compatibility API.
-        result = (
-            deploy(args.output_dir)
-            if args.simulator == "fsim"
-            else deploy(args.output_dir, simulator=args.simulator)
-        )
-        print(f"Compared samples: {len(result.execution.comparisons)}")
-        print(f"{args.simulator.upper()} profiler: {result.execution.profiler_stats}")
-        print("MLPerf ResNet HOST deployment passed")
+        return 0
+    if args.host_codegen == "llvm" and args.simulator == "fsim" and schedule is None:
+        result = deploy(args.output_dir)
     else:
         result = deploy(
-            args.output_dir, host_codegen=args.host_codegen, simulator=args.simulator
+            args.output_dir,
+            host_codegen=args.host_codegen,
+            simulator=args.simulator,
+            schedule=schedule,
         )
-        print(f"{args.host_codegen}-{args.simulator} compared samples: {len(result.execution.comparisons)}")
-        print(f"{args.host_codegen}-{args.simulator} profiler: {result.execution.profiler_stats}")
-        print("MLPerf ResNet HOST deployment passed")
+    if hasattr(result, "artifacts"):
+        _print_coverage(result.artifacts)
+    print(f"Compared samples: {len(result.execution.comparisons)}")
+    print(f"{args.simulator.upper()} profiler: {result.execution.profiler_stats}")
+    if args.deployment_report is not None:
+        report = write_deployment_report(
+            result, args.deployment_report, schedule=schedule,
+            validate_schedule_evidence=args.validate_schedule_evidence,
+        )
+        print(f"Deployment report: {args.deployment_report.resolve()}")
+        if report.get("occurrences"):
+            print(f"Measured occurrences validated: {len(report['occurrences'])}")
+    print("MLPerf ResNet HOST deployment passed")
     return 0
 
 
