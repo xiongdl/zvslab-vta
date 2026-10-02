@@ -290,3 +290,6 @@ tvm/
 !apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/optimal/20261001T220401.514781Z/
 !apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/optimal/20261001T220401.514781Z/*.json
 !apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/optimal/20261001T220401.514781Z/*.tsim.log
+# Keep the C9 VWW selected-deployment evidence reviewable.
+!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/deployment-full.json
+!apps/mlperf_tiny_benchmark/visual_wake_words_v1/tune/mac-utilization-full.json
