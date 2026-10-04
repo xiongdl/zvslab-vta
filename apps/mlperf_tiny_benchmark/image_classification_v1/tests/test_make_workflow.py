@@ -10,6 +10,7 @@ import unittest
 
 APP_DIR = Path(__file__).resolve().parents[1]
 REPO_DIR = APP_DIR.parents[3]
+VTA_DIR = APP_DIR.parents[2]
 
 
 class MakeWorkflowTests(unittest.TestCase):
@@ -144,6 +145,20 @@ class MakeWorkflowTests(unittest.TestCase):
         calls = self.records()
         self.assertEqual(len(calls), 1)
         self.assertIn("--export-workloads", calls[0]["args"])
+
+    def test_saved_tuning_files_are_visible_and_build_intermediates_ignored(self):
+        def ignored(path):
+            return subprocess.run(
+                ["git", "-C", str(VTA_DIR), "check-ignore", "-q", str(path)],
+                text=True, capture_output=True,
+            ).returncode == 0
+
+        tune_dir = APP_DIR / "tune" / "vta_64mac"
+        self.assertFalse(ignored(tune_dir / "fsim.tmp"))
+        self.assertFalse(ignored(tune_dir / "best.log"))
+        self.assertFalse(ignored(tune_dir / "best.json"))
+        self.assertFalse(ignored(APP_DIR / "tune" / "legacy" / "c4-full" / "best-manifest.json"))
+        self.assertTrue(ignored(APP_DIR / "build" / "workloads.json"))
 
     def test_make_c_relative_paths_resolve_from_make_working_directory(self):
         result = self.invoke(
