@@ -18,6 +18,7 @@
 """Compile and run one float ResNet-8 target using one RGB image."""
 
 import argparse
+import os
 from pathlib import Path
 
 
@@ -39,14 +40,17 @@ def _parser():
     parser.add_argument("--schedule", type=Path, help="selected AutoTVM schedule log and same-stem metadata")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--deployment-report", type=Path, help="write a Markdown deployment report")
+    parser.add_argument("--export-workloads", type=Path, help="export actual VTA computations and activations")
     return parser
 
 
 def main(argv=None):
     args = _parser().parse_args(argv)
-    if args.target.startswith("vta,") and not __import__("os").environ.get("VTA_BACKEND"):
+    if args.export_workloads is not None and not args.target.startswith("vta,"):
+        raise ValueError("--export-workloads requires a target that includes VTA")
+    if args.target.startswith("vta,") and not os.environ.get("VTA_BACKEND"):
         raise RuntimeError("VTA target requires VTA_BACKEND to match --simulator")
-    if args.target.startswith("vta,") and __import__("os").environ["VTA_BACKEND"] != args.simulator:
+    if args.target.startswith("vta,") and os.environ["VTA_BACKEND"] != args.simulator:
         raise RuntimeError("VTA_BACKEND must match --simulator")
 
     # Keep CPU startup independent from VTA and simulator package initialization.
@@ -59,6 +63,7 @@ def main(argv=None):
         output_dir=args.output_dir,
         model_path=args.model,
         input_path=args.input,
+        export_workloads=args.export_workloads,
     )
     if args.deployment_report is not None:
         runtime.write_deployment_report(result, args.deployment_report)

@@ -62,6 +62,21 @@ cycles, peak MAC/cycle, and the documented whole-graph and layer-cycle scopes.
 The graph bundle still validates exported library, graph, parameters, source
 files, and required VTA symbols before publication and after reload.
 
+`--export-workloads PATH` optionally saves the actual outlined VTA Relay
+functions, their constants, deployment input activations, and hardware/config
+provenance as a validated JSON snapshot. It requires a VTA target. The export
+uses the default schedule even when `--schedule` is supplied, then continues
+the requested deployment with that schedule. This lets tuning consume the same
+computations and real activations used by deployment without reopening the
+model or image. The loader checks the snapshot, hardware geometry, and current
+VTA config spaces before use. For example:
+
+```bash
+VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$APP/run.py" \
+  --target vta,llvm --simulator fsim \
+  --export-workloads "$APP/build/workloads.json"
+```
+
 ## Tuning during the transition
 
 The current tuning entry point still uses the prior intermediate interface.

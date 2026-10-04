@@ -20,6 +20,8 @@
 import json
 import hashlib
 import sys
+import tempfile
+import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -817,15 +819,99 @@ def _build_selected_factory(module, target, host_codegen, use_vta):
     return relay.build(module, target=target)
 
 
+def _export_pre_schedule_workloads(prepared, compute, image, input_path,
+                                  host_codegen, simulator, output_path):
+    """Capture true VTA activations from a temporary default-schedule graph."""
+    import vta
+    from tvm.contrib.debugger import debug_executor
+    from workloads import (
+        make_document,
+        make_layer_record,
+        portable_config_space_identity,
+        portable_geometry,
+        write_workloads,
+    )
+
+    compiler = te_compiler.get()
+    compiler.clear()
+    try:
+        factory = _build_selected_factory(
+            prepared.mixed_module, _mixed_target(host_codegen), host_codegen, True
+        )
+    finally:
+        compiler.clear()
+
+    with tempfile.TemporaryDirectory(prefix="resnet8-workloads-") as temporary:
+        bundle = export_graph_bundle(
+            factory, temporary, "default", artifact_name="resnet8-workloads-default",
+            artifact_role="mixed", model_sha256=prepared.imported.model_sha256,
+            host_codegen=host_codegen, simulator=simulator,
+            expected_vta_symbols=prepared.routing.symbols,
+        )
+        debug = debug_executor.create(bundle.graph_json, bundle.module, tvm.ext_dev(0))
+        debug.load_params(bundle.params)
+        debug.set_input(INPUT_NAME, image)
+        debug._run_per_layer()
+        graph_nodes = debug.debug_datum.get_graph_nodes()
+        node_outputs = debug.debug_datum.get_output_tensors()
+        raw_nodes = json.loads(bundle.graph_json)["nodes"]
+        node_indices = {
+            node.get("attrs", {}).get("global_symbol"): index
+            for index, node in enumerate(graph_nodes)
+            if node.get("attrs", {}).get("global_symbol")
+        }
+        records = []
+        for layer in compute.layers:
+            node_index = node_indices.get(layer.symbol)
+            if node_index is None:
+                raise RuntimeError(f"default graph omitted VTA workload {layer.symbol}")
+            activation = None
+            for source_index, output_index, *_ in raw_nodes[node_index]["inputs"]:
+                key = (
+                    f"{graph_nodes[source_index]['name']}____topo-index:{source_index}"
+                    f"____output-num:{output_index}"
+                )
+                tensor = node_outputs[key].numpy()
+                if (tuple(tensor.shape) == layer.inputs[0].shape
+                        and tensor.dtype.name == layer.inputs[0].dtype):
+                    activation = tensor
+                    break
+            if activation is None:
+                raise RuntimeError(
+                    f"could not capture the Relay input activation for {layer.symbol}"
+                )
+            records.append(make_layer_record(
+                index=layer.occurrence, symbol=layer.symbol, function=layer.function,
+                compute_sha256=layer.compute_sha256,
+                inputs=tuple(item.shape for item in layer.inputs),
+                input_dtypes=tuple(item.dtype for item in layer.inputs),
+                output_shape=layer.output.shape, output_dtype=layer.output.dtype,
+                activation=activation,
+                config_space_identity=portable_config_space_identity(layer),
+            ))
+
+    config_path = Path(os.environ["VTA_CONFIG_FILE"]).expanduser().resolve()
+    document = make_document(
+        model_sha256=prepared.imported.model_sha256,
+        input_sha256=hashlib.sha256(Path(input_path).read_bytes()).hexdigest(),
+        config_bytes=config_path.read_bytes(), config_basename=config_path.name,
+        geometry=portable_geometry(compute.geometry), tvm_version=tvm.__version__,
+        vta_version=getattr(vta, "__version__", "source-tree"), workloads=records,
+    )
+    return write_workloads(document, output_path)
+
+
 def run_selected(target="vta,llvm", simulator="fsim", schedule=None,
                  output_dir=DEFAULT_OUTPUT_DIR, model_path=MODEL_PATH,
-                 input_path=None):
+                 input_path=None, export_workloads=None):
     """Compile and run exactly one target using one image."""
     if target not in {"c", "llvm", "vta,c", "vta,llvm"}:
         raise ValueError(f"unsupported target {target!r}")
     if simulator not in {"fsim", "tsim"}:
         raise ValueError(f"unsupported simulator {simulator!r}")
     use_vta = target.startswith("vta,")
+    if export_workloads is not None and not use_vta:
+        raise ValueError("--export-workloads requires a target that includes VTA")
     if not use_vta:
         schedule = None
     model_path = Path(model_path).expanduser().resolve()
@@ -871,6 +957,12 @@ def run_selected(target="vta,llvm", simulator="fsim", schedule=None,
     if use_vta:
         validate_mixed_symbols(bundle.module, symbols)
         session, simulator_module = _load_simulator(simulator)
+        if export_workloads is not None:
+            exported = _export_pre_schedule_workloads(
+                prepared, compute, image, input_path, host_codegen,
+                simulator, export_workloads,
+            )
+            print(f"Workloads exported: {exported}")
     device = tvm.ext_dev(0) if use_vta else tvm.cpu(0)
     graph = graph_executor.create(bundle.graph_json, bundle.module, device)
     graph.load_params(bundle.params)

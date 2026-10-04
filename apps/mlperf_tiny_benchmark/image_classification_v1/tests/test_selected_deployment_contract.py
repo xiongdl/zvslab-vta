@@ -40,6 +40,7 @@ def test_run_parser_accepts_only_selected_targets_and_single_image_options():
     for retired in ("--host-codegen", "--validate-schedule-evidence"):
         with pytest.raises(SystemExit):
             runner._parser().parse_args([retired, "all"] if retired == "--host-codegen" else [retired])
+    assert runner._parser().parse_args(["--export-workloads", "build/workloads.json"]).export_workloads.name == "workloads.json"
 
 
 def test_cpu_run_does_not_import_vta_or_require_backend(monkeypatch, tmp_path):
@@ -59,6 +60,13 @@ def test_cpu_run_does_not_import_vta_or_require_backend(monkeypatch, tmp_path):
     runner.main(["--target", "llvm"])
     assert calls[0]["target"] == "llvm"
     assert {name for name in sys.modules if name == "vta" or name.startswith("vta.")} == loaded_vta_modules
+
+
+def test_cpu_rejects_workload_export_before_runtime_import(monkeypatch):
+    runner = _load("run.py", "ic_v1_cpu_export_rejected")
+    monkeypatch.setitem(sys.modules, "runtime", None)
+    with pytest.raises(ValueError, match="requires a target that includes VTA"):
+        runner.main(["--target", "c", "--export-workloads", "out.json"])
 
 
 def test_importing_cpu_runtime_does_not_load_vta_backend():
