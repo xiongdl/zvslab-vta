@@ -128,6 +128,20 @@ def _known_tuning_file(relative: Path) -> bool:
     return False
 
 
+def _known_resnet_v1_build_file(relative: Path) -> str | None:
+    """Classify known deployment and tuning files in ResNet V1 build output."""
+    parts = relative.parts
+    if parts == ("tune", "workloads.json"):
+        return "tuning-runs"
+    output_root = any(part in {"c", "llvm", "vta_c", "vta_llvm"} for part in parts[:-1])
+    if output_root:
+        if relative.name in _CACHE_FILES or (
+            "source" in parts and Path(relative.name).suffix in _SOURCE_SUFFIXES
+        ):
+            return "cache"
+    return None
+
+
 def _walk_owned(root: Path, allowed_root: Path, errors: list[str]) -> Iterable[Path]:
     """Yield files without following symlinks; report all symlink entries."""
     cursor = allowed_root
@@ -218,9 +232,11 @@ def inventory_artifacts(
                     else:
                         category = "tuning-runs"
             else:
-                if _known_cache_file(relative):
+                if owner == "image_classification_v1":
+                    category = _known_resnet_v1_build_file(relative)
+                if category is None and _known_cache_file(relative):
                     category = "cache"
-                elif _known_tuning_file(relative):
+                elif category is None and _known_tuning_file(relative):
                     category = "tuning-runs"
             resolved = path.resolve(strict=False)
             if category is None:
