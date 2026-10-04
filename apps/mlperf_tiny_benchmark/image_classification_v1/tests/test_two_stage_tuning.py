@@ -126,7 +126,7 @@ def test_tune_uses_workload_snapshot_without_loading_runtime(monkeypatch, tmp_pa
     assert observed["run"][1].layers == Snapshot.layers
 
 
-def test_zero_successful_fsim_candidates_publish_nothing(monkeypatch, tmp_path):
+def test_zero_successful_fsim_candidates_publish_nothing(monkeypatch, tmp_path, capsys):
     tune = _load("tune")
     measurement = importlib.import_module("measurement")
 
@@ -159,19 +159,164 @@ def test_zero_successful_fsim_candidates_publish_nothing(monkeypatch, tmp_path):
     })()
     workload_file = tmp_path / "workloads.json"
     workload_file.write_text("{}", encoding="utf-8")
+    output = tmp_path / "tune" / "fsim.tmp"
+    output.parent.mkdir()
+    old_files = {
+        output: b"old candidates",
+        output.with_suffix(".json"): b"old metadata",
+        output.parent / "best.log": b"old best",
+        output.parent / "best.json": b"old best metadata",
+    }
+    for path, contents in old_files.items():
+        path.write_bytes(contents)
     monkeypatch.setattr(tune, "_capture_layers", lambda snapshot: ((layer,), None))
     monkeypatch.setattr(measurement, "measure_candidate", lambda *a, **k: (_ for _ in ()).throw(TimeoutError("bounded")))
     args = tune._parser().parse_args([
         "--workloads", str(workload_file), "--simulator", "fsim",
         "--trial-batch", "1", "--min-successful", "1",
-        "--output-logs", str(tmp_path / "tune" / "fsim.tmp"),
+        "--output-logs", str(output),
     ])
     tune.validate_args(args)
     with pytest.raises(RuntimeError, match="no successful candidate"):
         tune.run_fsim(args, snapshot)
-    assert not (tmp_path / "tune" / "fsim.tmp").exists()
-    assert not (tmp_path / "tune" / "fsim.json").exists()
-    assert not (tmp_path / "tune" / "config.json").exists()
+    assert {path: path.read_bytes() for path in old_files} == old_files
+    assert "trials=2 successes=0 quota=1 termination=space_exhausted" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "quota, outcomes, expected_reason",
+    [
+        (1, [RuntimeError("native abort"), None], "quota_reached"),
+        (3, [RuntimeError("native abort"), None], "space_exhausted"),
+    ],
+)
+def test_fsim_continues_candidate_failures_and_reports_search_counts(
+    monkeypatch, tmp_path, capsys, quota, outcomes, expected_reason
+):
+    tune = _load("tune")
+    measurement = importlib.import_module("measurement")
+    import tuning
+    from types import SimpleNamespace
+
+    config_bytes = b'{"geometry":1}\n'
+    output = tmp_path / "tune" / "fsim.tmp"
+    output.parent.mkdir()
+    (output.parent / "config.json").write_bytes(config_bytes)
+    (output.parent / "config.sha256").write_text(
+        hashlib.sha256(config_bytes).hexdigest() + "\n", encoding="ascii"
+    )
+    workload_file = tmp_path / "workloads.json"
+    workload_file.write_text("{}", encoding="utf-8")
+    layer = SimpleNamespace(
+        occurrence=0, index=0, symbol="vta0", activation=object(), config_spaces=(),
+        compute_sha256="c" * 64, config_space_identity="s" * 64,
+    )
+    snapshot = SimpleNamespace(
+        layers=(layer,), model_sha256="m" * 64,
+        config_sha256=hashlib.sha256(config_bytes).hexdigest(),
+        geometry_sha256="g" * 64, config_bytes=config_bytes,
+    )
+    monkeypatch.setattr(tune, "_capture_layers", lambda _: ((layer,), None))
+    monkeypatch.setattr(tune, "_select_layers", lambda _, __: [layer])
+    monkeypatch.setattr(tuning, "candidate_indices", lambda *a, **k: iter([[0], [1]]))
+    monkeypatch.setattr(tuning, "configs_for_indices", lambda _, indices: [{"config": {"tile": indices[0]}}])
+    monkeypatch.setattr(tuning, "native_records", lambda *a: ["record"])
+    monkeypatch.setattr(tuning, "encode_candidate_log", lambda groups, identity: SimpleNamespace(
+        log_bytes=b"candidate log", sidecar_bytes=b"candidate metadata"
+    ))
+    monkeypatch.setattr(tuning, "decode_candidate_log", lambda *a, **k: [])
+
+    def measure(*_):
+        outcome = outcomes.pop(0)
+        if outcome is not None:
+            raise outcome
+        return {"config_identity": "i" * 64, "timestamp": 1.0, "duration_seconds": 0.1}
+
+    monkeypatch.setattr(measurement, "measure_candidate", measure)
+    args = tune._parser().parse_args([
+        "--workloads", str(workload_file), "--simulator", "fsim", "--workload", "0",
+        "--trial-batch", "1", "--min-successful", str(quota), "--output-logs", str(output),
+    ])
+
+    tune.run_fsim(args, snapshot)
+
+    assert output.read_bytes() == b"candidate log"
+    assert output.with_suffix(".json").read_bytes() == b"candidate metadata"
+    assert f"trials=2 successes=1 quota={quota} termination={expected_reason}" in capsys.readouterr().out
+
+
+def test_tsim_continues_after_native_candidate_failure(monkeypatch, tmp_path, capsys):
+    tune = _load("tune")
+    measurement = importlib.import_module("measurement")
+    import tuning
+    import schedule
+    from types import SimpleNamespace
+
+    config_bytes = b'{"geometry":1}\n'
+    output = tmp_path / "tune" / "best.log"
+    output.parent.mkdir()
+    (output.parent / "config.json").write_bytes(config_bytes)
+    (output.parent / "config.sha256").write_text(
+        hashlib.sha256(config_bytes).hexdigest() + "\n", encoding="ascii"
+    )
+    workload_file = tmp_path / "workloads.json"
+    workload_file.write_text("{}", encoding="utf-8")
+    input_logs = tmp_path / "fsim.tmp"
+    input_logs.write_bytes(b"candidates")
+    input_logs.with_suffix(".json").write_text("{}", encoding="utf-8")
+    layer = SimpleNamespace(
+        occurrence=0, index=0, symbol="vta0", activation=object(), config_spaces=(),
+        compute_sha256="c" * 64, config_space_identity="s" * 64,
+    )
+    snapshot = SimpleNamespace(
+        layers=(layer,), model_sha256="m" * 64,
+        config_sha256=hashlib.sha256(config_bytes).hexdigest(),
+        geometry_sha256="g" * 64, config_bytes=config_bytes,
+    )
+    groups = [
+        {"occurrence": 0, "symbol": "vta0", "candidate_id": "a" * 64,
+         "config_identity": "i" * 64},
+        {"occurrence": 0, "symbol": "vta0", "candidate_id": "b" * 64,
+         "config_identity": "j" * 64},
+    ]
+    outcomes = [RuntimeError("native candidate abort"), {
+        "config_identity": "j" * 64, "cycles": 12, "timestamp": 1.0,
+    }]
+    monkeypatch.setattr(tune, "_capture_layers", lambda _: ((layer,), None))
+    monkeypatch.setattr(tune, "_select_layers", lambda _, __: [layer])
+    monkeypatch.setattr(tuning, "decode_candidate_log", lambda *a, **k: groups)
+    monkeypatch.setattr(tune, "_candidate_record_indices", lambda group, _: [0])
+    monkeypatch.setattr(tune, "_deployment", lambda *a: object())
+    monkeypatch.setattr(tune, "_schedule_module", lambda: SimpleNamespace(
+        load_schedule_snapshot=lambda *a: None,
+    ))
+
+    def measure(*_):
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(measurement, "measure_candidate", measure)
+
+    def export(path, *_args, **_kwargs):
+        path.write_bytes(b"selected best")
+        path.with_suffix(".json").write_bytes(b"best metadata")
+
+    monkeypatch.setattr(schedule, "export_schedule_snapshot", export)
+    args = tune._parser().parse_args([
+        "--workloads", str(workload_file), "--workload", "0", "--simulator", "tsim",
+        "--input-logs", str(input_logs), "--output-logs", str(output),
+    ])
+
+    selected = tune.run_tsim(args, snapshot)
+
+    assert selected == {0: [0]}
+    assert output.read_bytes() == b"selected best"
+    assert output.with_suffix(".json").read_bytes() == b"best metadata"
+    report = capsys.readouterr().out
+    assert "TSIM occurrence 0 candidate " + "a" * 64 + " failed" in report
+    assert "trials=2 successes=1 candidates=2 termination=all_candidates_measured" in report
 
 
 @pytest.mark.parametrize("backend", ["fsim", "tsim"])

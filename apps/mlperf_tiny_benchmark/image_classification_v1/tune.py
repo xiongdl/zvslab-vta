@@ -214,6 +214,14 @@ def _base_identity(snapshot, workload_path):
     return _identity(snapshot, workload_path)
 
 
+def _report_fsim_search(occurrence, trials, successes, quota, termination):
+    print(
+        f"FSIM occurrence {occurrence}: trials={trials} successes={successes} "
+        f"quota={quota} termination={termination}",
+        flush=True,
+    )
+
+
 def run_fsim(args, snapshot):
     from measurement import MeasurementInfrastructureError, measure_candidate
     import tuning
@@ -262,6 +270,10 @@ def run_fsim(args, snapshot):
                     try:
                         result = measure_candidate(layer, item.activation, indices, "fsim", args.timeout)
                     except MeasurementInfrastructureError:
+                        _report_fsim_search(
+                            item.index, tried, successful, args.min_successful,
+                            "infrastructure_failure",
+                        )
                         raise
                     except Exception as error:
                         print(f"FSIM occurrence {item.index} candidate failed: {error}", flush=True)
@@ -297,14 +309,16 @@ def run_fsim(args, snapshot):
                         break
                 if successful < args.min_successful:
                     print(f"FSIM occurrence {item.index}: checked {tried} candidates", flush=True)
+            termination = "quota_reached" if successful >= args.min_successful else "space_exhausted"
+            _report_fsim_search(
+                item.index, tried, successful, args.min_successful, termination
+            )
             quotas[item.index] = successful
             if successful == 0:
-                raise RuntimeError(f"FSIM found no successful candidate for occurrence {item.index}; output was not changed")
-            if successful < args.min_successful:
-                print(
-                    f"FSIM occurrence {item.index}: configuration space exhausted at "
-                    f"{successful}/{args.min_successful} successful candidates",
-                    flush=True,
+                raise RuntimeError(
+                    f"FSIM found no successful candidate for occurrence {item.index}; "
+                    f"trials={tried}, quota={args.min_successful}, "
+                    f"termination={termination}; output was not changed"
                 )
 
         groups = tuning.merge_candidate_groups(
@@ -468,6 +482,12 @@ def _run_tsim_locked(args, snapshot):
             if result["config_identity"] != group.get("config_identity"):
                 raise ValueError(f"TSIM candidate identity differs at occurrence {item.index}")
             trials.append({**result, "indices": indices, "group": group})
+        print(
+            f"TSIM occurrence {item.index}: trials={len(groups_by_occurrence[item.index])} "
+            f"successes={len(trials)} candidates={len(groups_by_occurrence[item.index])} "
+            "termination=all_candidates_measured",
+            flush=True,
+        )
         if not trials:
             raise RuntimeError(
                 f"TSIM found no successful candidate for occurrence {item.index}; output was not changed"

@@ -1,6 +1,8 @@
 """Focused checks for actual-compute candidate validation and dispatch."""
 
 import importlib.util
+import multiprocessing
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +12,11 @@ import pytest
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _abort_after_candidate_start(function_json, activation, config_indices, backend, result_queue, phase):
+    phase.set()
+    os.abort()
 
 
 def _load_local(name):
@@ -104,6 +111,9 @@ def test_measure_candidate_stops_worker_when_queue_wait_fails(monkeypatch):
             self.queue = BrokenQueue()
             self.worker = None
 
+        def Event(self):
+            return SimpleNamespace(is_set=lambda: False)
+
         def Queue(self, maxsize):
             return self.queue
 
@@ -126,8 +136,8 @@ def test_measure_candidate_stops_worker_when_queue_wait_fails(monkeypatch):
     assert context.queue.joined
 
 
-@pytest.mark.parametrize("backend", ["fsim", "tsim"])
-def test_measure_candidate_detects_worker_exit_before_candidate_timeout(monkeypatch, backend):
+@pytest.mark.parametrize("candidate_started", [False, True])
+def test_measure_candidate_classifies_worker_exit_by_phase(monkeypatch, candidate_started):
     import queue
     import types
 
@@ -162,6 +172,13 @@ def test_measure_candidate_detects_worker_exit_before_candidate_timeout(monkeypa
             pass
 
     class SpawnContext:
+        class Phase:
+            def is_set(self):
+                return candidate_started
+
+        def Event(self):
+            return self.Phase()
+
         def Queue(self, maxsize):
             return EmptyQueue()
 
@@ -176,8 +193,47 @@ def test_measure_candidate_detects_worker_exit_before_candidate_timeout(monkeypa
         function=object(), inputs=(SimpleNamespace(shape=(1, 2), dtype="int8"),), config_spaces=()
     )
 
-    with pytest.raises(measurement.MeasurementInfrastructureError, match="worker exited without returning a result.*-6"):
-        measurement.measure_candidate(layer, np.zeros((1, 2), dtype="int8"), [], backend, 5)
+    error_type = RuntimeError if candidate_started else measurement.MeasurementInfrastructureError
+    with pytest.raises(error_type, match="worker exited without returning a result.*-6"):
+        measurement.measure_candidate(layer, np.zeros((1, 2), dtype="int8"), [], "fsim", 5)
+
+
+def test_real_candidate_worker_abort_is_reported_and_reaped(monkeypatch):
+    import types
+
+    measurement = _load_local("measurement")
+    context = multiprocessing.get_context("spawn")
+    workers = []
+
+    class TrackingContext:
+        def Event(self):
+            return context.Event()
+
+        def Queue(self, maxsize):
+            return context.Queue(maxsize=maxsize)
+
+        def Process(self, target, args):
+            worker = context.Process(target=target, args=args)
+            workers.append(worker)
+            return worker
+
+    monkeypatch.setattr(measurement.multiprocessing, "get_context", lambda name: TrackingContext())
+    monkeypatch.syspath_prepend(str(APP_ROOT.parent))
+    monkeypatch.setattr(measurement, "_worker", _abort_after_candidate_start)
+    monkeypatch.setitem(
+        sys.modules, "tvm", types.SimpleNamespace(ir=types.SimpleNamespace(save_json=lambda fn: "ir"))
+    )
+    layer = SimpleNamespace(
+        function=object(), inputs=(SimpleNamespace(shape=(1, 2), dtype="int8"),), config_spaces=()
+    )
+
+    with pytest.raises(RuntimeError, match="candidate worker exited without returning a result"):
+        measurement.measure_candidate(layer, np.zeros((1, 2), dtype="int8"), [], "fsim", 5)
+
+    assert len(workers) == 1
+    assert workers[0].exitcode == -6
+    assert not workers[0].is_alive()
+    assert workers[0] not in multiprocessing.active_children()
 
 
 @pytest.mark.parametrize(
@@ -234,6 +290,9 @@ def test_measure_candidate_decodes_worker_failure_envelope(monkeypatch, infrastr
             self.alive = False
 
     class SpawnContext:
+        def Event(self):
+            return SimpleNamespace(is_set=lambda: False)
+
         def Queue(self, maxsize):
             self.queue = ResultQueue()
             return self.queue

@@ -162,6 +162,16 @@ to deployment. TSIM output contains one cycle-minimum schedule for each selected
 occurrence and can be passed to `run.py --schedule`. Both logs have same-stem
 JSON metadata.
 
+FSIM continues after a candidate compile error, output mismatch, timeout, or
+native worker crash. For each occurrence it reports `trials`, correctness-
+verified `successes`, the requested `quota`, and `termination` (`quota_reached`
+or `space_exhausted`). Reaching the end of the configuration space with at
+least one successful candidate publishes the candidates even when the quota is
+short. If no candidate succeeds, tuning fails and keeps the previously saved
+files. Workload/configuration errors and compiler/runtime initialization
+failures stop the stage. TSIM reports how many input candidates it attempted
+and measured successfully; failed candidates do not enter the selected log.
+
 Tuning saves a raw `config.json` snapshot and `config.sha256` beside the
 published schedules. Replacing all occurrences can replace results under a
 changed configuration; updating one occurrence requires matching existing
