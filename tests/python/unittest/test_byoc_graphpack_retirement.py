@@ -31,7 +31,6 @@ from byoc_utils import make_qnn_conv2d_module
 
 VTA_ROOT = Path(__file__).resolve().parents[3]
 ACTIVE_RELAY_CONSUMERS = (
-    ("resnet-export", (VTA_ROOT / "apps" / "deploy" / "resnet_export.py",)),
     ("detection-tutorial", (VTA_ROOT / "tutorials" / "frontend" / "deploy_detection.py",)),
     (
         "mlperf-resnet",
@@ -51,7 +50,6 @@ ACTIVE_RELAY_CONSUMERS = (
 )
 ACTIVE_RELAY_DOCUMENTATION = (
     VTA_ROOT / "README.md",
-    VTA_ROOT / "apps" / "deploy" / "README.md",
     VTA_ROOT
     / "apps"
     / "mlperf_tiny_benchmark"
