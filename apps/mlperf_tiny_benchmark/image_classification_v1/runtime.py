@@ -26,7 +26,6 @@ from pathlib import Path
 
 import numpy as np
 import tvm
-import vta
 from tvm import relay
 from tvm.relay.backend import te_compiler
 from tvm.contrib import graph_executor
@@ -34,12 +33,7 @@ from tvm.contrib import graph_executor
 from graph_artifacts import export_graph_bundle
 from model_pipeline import MODEL_SHA256, load_sample, prepare_model
 from deployment_compute import capture_deployment_compute
-from deployment import (
-    cycles_within_strict_ten_percent,
-    lower_selected_deployment,
-    validate_occurrence_rows,
-    write_json_atomic,
-)
+from deployment import lower_selected_deployment
 from schedule import load_schedule_snapshot
 
 
@@ -47,8 +41,6 @@ APP_ROOT = Path(__file__).resolve().parent
 MODEL_PATH = APP_ROOT / "model" / "pretrainedResnet.tflite"
 MANIFEST_PATH = APP_ROOT / "samples" / "manifest.json"
 DEFAULT_OUTPUT_DIR = APP_ROOT / "build"
-REFERENCE_ARTIFACT_STEM = "mlperf_resnet_llvm"
-MIXED_ARTIFACT_STEM = "mlperf_resnet_vta"
 MODEL_ID = "image_classification_v1"
 INPUT_NAME = "input_1"
 REQUIRED_PROFILER_COUNTERS = ("gemm_counter", "wgt_load_nbytes", "out_store_nbytes")
@@ -231,6 +223,38 @@ class SimulatorSession:
         validate_profiler_stats(stats)
 
 
+@dataclass(frozen=True)
+class LayerMetrics:
+    """One logical convolution measurement row in a deployment report."""
+
+    name: str
+    device: str
+    operation: str
+    logical_macs: int
+    cycles: int | None
+    peak_macs_per_cycle: int | None
+    utilization: float | None
+
+
+@dataclass(frozen=True)
+class SelectedDeploymentResult:
+    """Result from compiling and running one selected target."""
+
+    target: str
+    simulator: str | None
+    model_path: Path
+    input_path: Path
+    model_sha256: str
+    input_sha256: str
+    schedule: Path | None
+    schedule_coverage: tuple
+    predicted_class: int
+    scores: np.ndarray
+    layers: tuple
+    whole_cycles: int | None
+    profiler_stats: dict | None
+
+
 def _simulator_session(simulator):
     if simulator == "fsim":
         return SimulatorSession(
@@ -331,6 +355,8 @@ def _matrix_artifact_root(output_dir, host_codegen, simulator="fsim"):
 
 
 def _mixed_target(host_codegen=DEFAULT_HOST_CODEGEN):
+    import vta
+
     _validate_host_codegen(host_codegen)
     environment = vta.get_env()
     host = environment.target_host if host_codegen == "llvm" else tvm.target.Target("c")
@@ -366,6 +392,8 @@ def build_host_artifacts(
     schedule=None,
 ):
     """Build, export, and reload both standard host libraries without simulator loading."""
+    import vta
+
     _validate_host_codegen(host_codegen)
     _simulator_session(simulator).validate_environment()
     if prepared.reference_module is not prepared.quantized_module:
@@ -469,6 +497,8 @@ def build_host_artifacts(
 
 
 def _build_mixed_factory(prepared, host_codegen):
+    import vta
+
     if host_codegen == "c":
         with tvm.transform.PassContext(config={"tir.disable_vectorize": True}):
             with vta.build_config(config={"tir.disable_vectorize": True}):
@@ -689,124 +719,280 @@ def deploy(output_dir=DEFAULT_OUTPUT_DIR, host_codegen=DEFAULT_HOST_CODEGEN, sim
     return DeploymentResult(prepared=prepared, artifacts=artifacts, execution=execution)
 
 
-def write_deployment_report(
-    result, report_path, *, schedule=None, validate_schedule_evidence=False
-):
-    """Save V1 sample, output, coverage and optional measured TSIM evidence."""
-    if validate_schedule_evidence and result.artifacts.simulator != "tsim":
-        raise ValueError("schedule evidence validation requires --simulator tsim")
-    schedule_path = None if schedule is None or str(schedule).lower() == "none" else Path(schedule)
-    coverage = getattr(result.artifacts, "schedule_coverage", ())
-    config_identities = dict(getattr(result.artifacts, "schedule_config_identities", ()))
-    report = {
-        "schema_version": 1,
-        "model": MODEL_ID,
-        "model_sha256": getattr(
-            getattr(result.prepared, "imported", None), "model_sha256", MODEL_SHA256
-        ),
-        "simulator": result.artifacts.simulator,
-        "host_codegen": result.artifacts.host_codegen,
-        "schedule": str(schedule_path.resolve()) if schedule_path else None,
-        "schedule_coverage": [
-            {"occurrence": occurrence, "symbol": symbol, "selected": selected}
-            for occurrence, symbol, selected in coverage
-        ],
-        "selected_config_identities": [
-            {"occurrence": occurrence, "sha256": config_identities[occurrence]}
-            for occurrence in sorted(config_identities)
-        ],
-        "sample_count": len(result.execution.comparisons),
-        "outputs_passed": len(result.execution.comparisons),
-        "profiler_stats": result.execution.profiler_stats,
-        "status": "passed",
-    }
-    if validate_schedule_evidence:
-        if schedule_path is None:
-            raise ValueError("schedule evidence validation requires a measured schedule snapshot")
-        deployment = capture_deployment_compute(
-            result.prepared.mixed_module, MODEL_ID, report["model_sha256"]
-        )
-        snapshot = load_schedule_snapshot(schedule_path, deployment)
-        if len(snapshot.selected) != len(deployment.layers):
-            raise ValueError("schedule evidence requires complete occurrence coverage")
-        if len(result.execution.comparisons) != 10:
-            raise RuntimeError("schedule evidence requires all ten committed output comparisons")
+def _conv_macs(call):
+    """Count logical MACs from inferred Relay dimensions, excluding packing."""
+    output = tuple(int(dim) for dim in call.checked_type.shape)
+    weight = tuple(int(dim) for dim in call.args[1].checked_type.shape)
+    layout = str(call.attrs.kernel_layout)
+    axes = {axis: weight[index] for index, axis in enumerate(layout)}
+    if len(output) != 4 or len(weight) != 4:
+        raise ValueError("ResNet-8 convolution tensors must have rank four")
+    # Kernel I already represents input channels per group.
+    return output[0] * output[1] * output[2] * output[3] * axes["H"] * axes["W"] * axes["I"]
 
+
+def _collect_conv_rows(function, name_prefix, device):
+    calls = []
+
+    def visit(node):
+        if isinstance(node, relay.Call) and isinstance(node.op, tvm.ir.Op):
+            if node.op.name == "nn.conv2d":
+                calls.append(node)
+
+    relay.analysis.post_order_visit(function.body, visit)
+    return [
+        (f"{name_prefix}.conv{index}", device, _conv_macs(call))
+        for index, call in enumerate(calls)
+    ]
+
+
+def _collect_non_mac_rows(function, name_prefix, device):
+    operations = []
+
+    def visit(node):
+        if (isinstance(node, relay.Call) and isinstance(node.op, tvm.ir.Op)
+                and node.op.name != "nn.conv2d"):
+            operations.append(node.op.name)
+
+    relay.analysis.post_order_visit(function.body, visit)
+    return [
+        (f"{name_prefix}.{operation}{index}", device, operation)
+        for index, operation in enumerate(operations)
+    ]
+
+
+def _selected_layer_metrics(prepared, target, simulator, measured_cycles):
+    rows = []
+    non_mac_rows = []
+    if target.startswith("vta,"):
+        for symbol in prepared.routing.symbols:
+            function = next(
+                function for function in prepared.mixed_module.functions.values()
+                if isinstance(function, relay.Function) and function.attrs is not None
+                and "Compiler" in function.attrs and function.attrs.get_str("Compiler") == "vta"
+                and function.attrs.get_str("global_symbol") == symbol
+            )
+            rows.extend(_collect_conv_rows(function, symbol, "vta"))
+            non_mac_rows.extend(_collect_non_mac_rows(function, symbol, "vta"))
+        rows.extend(_collect_conv_rows(prepared.mixed_module["main"], "cpu", "cpu"))
+        non_mac_rows.extend(_collect_non_mac_rows(prepared.mixed_module["main"], "cpu", "cpu"))
+    else:
+        rows.extend(_collect_conv_rows(prepared.quantized_module["main"], "cpu", "cpu"))
+        non_mac_rows.extend(_collect_non_mac_rows(prepared.quantized_module["main"], "cpu", "cpu"))
+
+    peak = None
+    if target.startswith("vta,"):
+        import vta
+
+        env = vta.get_env()
+        peak = int(env.BATCH) * int(env.BLOCK_IN) * int(env.BLOCK_OUT)
+    metrics = []
+    for name, device, macs in rows:
+        symbol = name.rsplit(".conv", 1)[0] if device == "vta" else None
+        cycles = measured_cycles.get(symbol) if symbol and simulator == "tsim" else None
+        metrics.append(LayerMetrics(
+            name, device, "nn.conv2d", macs, cycles, peak if device == "vta" else None,
+            macs / (cycles * peak) if cycles and peak else None,
+        ))
+    metrics.extend(
+        LayerMetrics(name, device, operation, 0, None, peak if device == "vta" else None, None)
+        for name, device, operation in non_mac_rows
+    )
+    return tuple(metrics)
+
+
+def _build_selected_factory(module, target, host_codegen, use_vta):
+    if use_vta:
+        import vta
+
+        if host_codegen == "c":
+            with tvm.transform.PassContext(config={"tir.disable_vectorize": True}):
+                with vta.build_config(config={"tir.disable_vectorize": True}):
+                    return relay.build(module, target=_mixed_target("c"))
+        with vta.build_config():
+            return relay.build(module, target=_mixed_target("llvm"))
+    if host_codegen == "c":
+        with tvm.transform.PassContext(config={"tir.disable_vectorize": True}):
+            return relay.build(module, target=target)
+    return relay.build(module, target=target)
+
+
+def run_selected(target="vta,llvm", simulator="fsim", schedule=None,
+                 output_dir=DEFAULT_OUTPUT_DIR, model_path=MODEL_PATH,
+                 input_path=None):
+    """Compile and run exactly one target using one image."""
+    if target not in {"c", "llvm", "vta,c", "vta,llvm"}:
+        raise ValueError(f"unsupported target {target!r}")
+    if simulator not in {"fsim", "tsim"}:
+        raise ValueError(f"unsupported simulator {simulator!r}")
+    use_vta = target.startswith("vta,")
+    if not use_vta:
+        schedule = None
+    model_path = Path(model_path).expanduser().resolve()
+    input_path = Path(input_path or APP_ROOT / "samples" / "00-airplane.png").expanduser().resolve()
+    output_dir = Path(output_dir).expanduser().resolve()
+    image = load_sample(input_path)
+    prepared = prepare_model(model_path, use_vta=use_vta)
+    host_codegen = target.split(",")[-1]
+    module = prepared.mixed_module if use_vta else prepared.quantized_module
+    selected = None
+    compute = None
+    if use_vta:
+        import vta
+        from deployment_compute import capture_deployment_compute
+
+        compute = capture_deployment_compute(module, MODEL_ID, prepared.imported.model_sha256)
+        selected = load_schedule_snapshot(schedule, compute)
+        config = vta.relay.transform.VTACompilerConfig.from_env(vta.get_env())
+        compiler = te_compiler.get()
+        if selected and selected.selected:
+            compiler.clear()
+            try:
+                with _selected_snapshot_lowering(compiler, compute, selected, config):
+                    factory = _build_selected_factory(module, _mixed_target(host_codegen), host_codegen, True)
+            finally:
+                compiler.clear()
+        else:
+            factory = _build_selected_factory(module, _mixed_target(host_codegen), host_codegen, True)
+    else:
+        factory = _build_selected_factory(
+            module, tvm.target.Target(host_codegen), host_codegen, False
+        )
+
+    role = "mixed" if use_vta else "reference"
+    symbols = prepared.routing.symbols if use_vta else ()
+    artifact_name = f"resnet8_{target.replace(',', '_')}_{simulator if use_vta else 'cpu'}"
+    bundle = export_graph_bundle(
+        factory, output_dir, target.replace(",", "_"), artifact_name=artifact_name,
+        artifact_role=role, model_sha256=prepared.imported.model_sha256,
+        host_codegen=host_codegen, simulator=simulator if use_vta else "cpu",
+        expected_vta_symbols=symbols,
+    )
+    if use_vta:
+        validate_mixed_symbols(bundle.module, symbols)
+        session, simulator_module = _load_simulator(simulator)
+    device = tvm.ext_dev(0) if use_vta else tvm.cpu(0)
+    graph = graph_executor.create(bundle.graph_json, bundle.module, device)
+    graph.load_params(bundle.params)
+    graph.set_input(INPUT_NAME, image)
+    profiler = None
+    cycles = None
+    if use_vta:
+        session.clear_and_validate(simulator_module)
+        graph.run()  # Excluded warmup.
+        session.clear_and_validate(simulator_module)
+    graph.run()
+    scores = graph.get_output(0).numpy()
+    if use_vta:
+        profiler = session.read_stats(simulator=simulator_module)
+        session.validate_activity(profiler)
+        if simulator == "tsim":
+            cycles = profiler["cycle_count"]
+
+    measured = {}
+    if use_vta and simulator == "tsim":
         from tvm.contrib.debugger import debug_executor
 
-        session, simulator = _load_simulator("tsim")
-        debug_graph = debug_executor.create(
-            result.artifacts.mixed.graph_json,
-            result.artifacts.mixed.module,
-            result.artifacts.mixed.device,
-        )
-        debug_graph.load_params(result.artifacts.mixed.params)
-        first = result.execution.comparisons[0]
-        debug_graph.set_input(INPUT_NAME, load_sample(first.sample_path))
-        session.clear_and_validate(simulator)
-        debug_graph._run_per_layer()
-        full_stats = session.read_stats(simulator=simulator)
-        session.validate_activity(full_stats)
-        compare_outputs(first.sample_path, first.reference, debug_graph.get_output(0).numpy())
-        graph_nodes = debug_graph.debug_datum.get_graph_nodes()
-        node_by_symbol = {
+        debug = debug_executor.create(bundle.graph_json, bundle.module, device)
+        debug.load_params(bundle.params)
+        debug.set_input(INPUT_NAME, image)
+        debug._run_per_layer()
+        nodes = debug.debug_datum.get_graph_nodes()
+        node_map = {
             node.get("attrs", {}).get("global_symbol"): index
-            for index, node in enumerate(graph_nodes)
+            for index, node in enumerate(nodes)
             if node.get("attrs", {}).get("global_symbol")
         }
-        rows = []
-        for layer in deployment.layers:
-            selected = snapshot.selected.get(layer.occurrence)
-            if selected is None or not selected.measured:
-                raise ValueError(f"occurrence {layer.occurrence} lacks measured schedule evidence")
-            measurement = selected.measurement
-            if (measurement.get("backend") != "tsim"
-                    or measurement.get("protocol") != "tsim_single_call_v1"
-                    or measurement.get("units") != "cycles"):
-                raise ValueError(
-                    f"occurrence {layer.occurrence} requires tsim_single_call_v1 cycle provenance"
-                )
-            costs = [cost for item in measurement["results"] for cost in item["costs"]]
-            if len(costs) != 1 or isinstance(costs[0], bool) or int(costs[0]) != costs[0]:
-                raise ValueError(f"occurrence {layer.occurrence} has invalid TSIM cycle evidence")
-            node_index = node_by_symbol.get(layer.symbol)
-            if node_index is None:
-                raise ValueError(f"debug deployment graph omitted VTA symbol {layer.symbol}")
-            session.clear_and_validate(simulator)
-            debug_graph._execute_node(node_index)
-            stats = session.read_stats(simulator=simulator)
+        for layer in compute.layers:
+            index = node_map.get(layer.symbol)
+            if index is None:
+                raise RuntimeError(f"TSIM debug graph omitted VTA symbol {layer.symbol}")
+            session.clear_and_validate(simulator_module)
+            debug._execute_node(index)
+            stats = session.read_stats(simulator=simulator_module)
             session.validate_activity(stats)
-            deployed_cycles, measured_cycles = stats["cycle_count"], int(costs[0])
-            rows.append({
-                "occurrence": layer.occurrence,
-                "symbol": layer.symbol,
-                "deployment_cycles": deployed_cycles,
-                "autotvm_cycles": measured_cycles,
-                "difference_percent": 100.0 * abs(deployed_cycles - measured_cycles) / measured_cycles,
-                "passed": cycles_within_strict_ten_percent(deployed_cycles, measured_cycles),
-                "graph_node": graph_nodes[node_index].get("name"),
-            })
-        try:
-            validate_occurrence_rows(rows, [
-                {"occurrence": layer.occurrence, "symbol": layer.symbol}
-                for layer in deployment.layers
-            ])
-        except ValueError:
-            report["status"] = "failed"
-            report["occurrences"] = rows
-            report["performance_sample_count"] = 1
-            report["performance_sample"] = first.sample_path.name
-            report["performance_stats"] = full_stats
-            write_json_atomic(Path(report_path).with_suffix(".failure.json"), report)
-            raise
-        report.update({
-            "geometry_sha256": snapshot.geometry_sha256,
-            "schedule_log_sha256": hashlib.sha256(schedule_path.read_bytes()).hexdigest(),
-            "measurement_protocol": "tsim_single_call_v1",
-            "performance_sample_count": 1,
-            "performance_sample": first.sample_path.name,
-            "performance_stats": full_stats,
-            "occurrences": rows,
-        })
-    write_json_atomic(report_path, report)
-    return report
+            measured[layer.symbol] = stats["cycle_count"]
+    layers = _selected_layer_metrics(prepared, target, simulator, measured)
+    result = SelectedDeploymentResult(
+        target=target, simulator=simulator if use_vta else None,
+        model_path=model_path, input_path=input_path,
+        model_sha256=prepared.imported.model_sha256,
+        input_sha256=hashlib.sha256(input_path.read_bytes()).hexdigest(),
+        schedule=Path(schedule).expanduser().resolve() if use_vta and schedule else None,
+        schedule_coverage=tuple(
+            (layer.occurrence, layer.symbol, layer.occurrence in selected.selected)
+            for layer in compute.layers
+        ) if use_vta else (),
+        predicted_class=int(np.argmax(scores, axis=1)[0]), scores=scores,
+        layers=layers, whole_cycles=cycles, profiler_stats=profiler,
+    )
+    print(f"Predicted CIFAR-10 class: {result.predicted_class} ({LABELS[result.predicted_class]})")
+    print("Raw output scores:", scores[0].tolist())
+    return result
+
+
+LABELS = ("airplane", "automobile", "bird", "cat", "deer", "dog", "frog", "horse", "ship", "truck")
+
+
+def __getattr__(name):
+    # Older focused tests and tuning helpers address runtime.vta explicitly.
+    # Import it only on demand so CPU CLI startup stays simulator-independent.
+    if name == "vta":
+        import vta
+
+        return vta
+    raise AttributeError(name)
+
+
+def write_deployment_report(result, report_path):
+    """Write UTF-8 Markdown with arithmetic and unavailable data stated plainly."""
+    report_path = Path(report_path).expanduser().resolve()
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    config_hash = "N/A"
+    if result.target.startswith("vta,"):
+        config_path = Path(__import__("os").environ["VTA_CONFIG_FILE"]).expanduser().resolve()
+        config_hash = hashlib.sha256(config_path.read_bytes()).hexdigest()
+    output = [
+        "# ResNet-8 deployment report", "", f"- Model: `{result.model_path}`",
+        f"- Model SHA-256: `{result.model_sha256}`", f"- Input: `{result.input_path}`",
+        f"- Input SHA-256: `{result.input_sha256}`", f"- Target: `{result.target}`",
+        f"- Simulator: `{result.simulator or 'N/A (CPU target)'}`",
+        f"- Config SHA-256: `{config_hash}`",
+        f"- Schedule: `{result.schedule or 'default'}`",
+        f"- Schedule coverage: {sum(bool(row[2]) for row in result.schedule_coverage)}/{len(result.schedule_coverage)} VTA layers selected",
+        f"- Predicted CIFAR-10 class: {result.predicted_class} ({LABELS[result.predicted_class]})", "",
+        "## Raw output scores", "", "```text",
+        " ".join(f"{float(value):.8g}" for value in result.scores[0]), "```", "",
+        "## Layer measurements", "",
+        "| Layer | Device | Operation | Logical MACs | Cycles | Peak MAC/cycle | MAC utilization |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: |",
+    ]
+    for layer in result.layers:
+        cycles = f"{layer.cycles:,}" if layer.cycles is not None else "N/A"
+        peak = f"{layer.peak_macs_per_cycle:,}" if layer.peak_macs_per_cycle is not None else "N/A"
+        utilization = f"{100 * layer.utilization:.2f}%" if layer.utilization is not None else "N/A"
+        output.append(
+            f"| {layer.name} | {layer.device} | {layer.operation} | {layer.logical_macs:,} | {cycles} | {peak} | {utilization} |"
+        )
+    output.extend(["", "## Whole model", ""])
+    if result.whole_cycles is None:
+        reason = "CPU target" if result.simulator is None else "FSIM does not provide cycle counts"
+        output.extend([
+            f"- Whole-model cycles: N/A ({reason}).",
+            "- Whole-model MAC utilization: N/A (cycle count is unavailable).",
+        ])
+    else:
+        peak = next((row.peak_macs_per_cycle for row in result.layers if row.device == "vta"), None)
+        total_macs = sum(row.logical_macs for row in result.layers if row.device == "vta")
+        utilization = total_macs / (result.whole_cycles * peak) if peak else None
+        layer_cycles = sum(row.cycles or 0 for row in result.layers if row.device == "vta")
+        output.extend([
+            f"- Whole-model TSIM cycles: {result.whole_cycles:,} (one counted invocation after an excluded warmup).",
+            f"- VTA logical MACs: {total_macs:,}; divided by whole-model TSIM cycles.",
+            f"- Whole-model VTA MAC utilization: {100 * utilization:.2f}%" if utilization is not None else "- Whole-model VTA MAC utilization: N/A.",
+            f"- Sum of measured VTA layer cycles: {layer_cycles:,}; residual against whole-model cycles: {result.whole_cycles - layer_cycles:,}.",
+        ])
+    if result.profiler_stats:
+        output.extend(["", "## Simulator counters", "", "```json", json.dumps(result.profiler_stats, indent=2, sort_keys=True), "```"])
+    report_path.write_text("\n".join(output) + "\n", encoding="utf-8")
+    return report_path

@@ -424,25 +424,20 @@ def test_all_reference_runs_finish_before_fsim_load_and_mixed_execution(
     assert summary.profiler_stats == {name: 1 for name in REQUIRED_PROFILER_COUNTERS}
 
 
-def test_cli_has_only_the_operational_output_directory_option(
-    deployment_runtime, monkeypatch, tmp_path
-):
+def test_cli_executes_exactly_one_selected_target(deployment_runtime, monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "runtime", deployment_runtime)
     run_module = _load_module(RUN_PATH, "mlperf_resnet_run")
     calls = []
 
-    def fake_deploy(output_dir):
-        calls.append(Path(output_dir))
-        return SimpleNamespace(
-            execution=SimpleNamespace(comparisons=tuple(range(10)), profiler_stats={})
-        )
+    def fake_run_selected(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace()
 
-    monkeypatch.setattr(run_module, "deploy", fake_deploy)
+    monkeypatch.setattr(deployment_runtime, "run_selected", fake_run_selected)
 
-    assert run_module.main(["--output-dir", str(tmp_path)]) == 0
-    assert calls == [tmp_path]
-    with pytest.raises(SystemExit):
-        run_module.main(["--target", "c"])
+    assert run_module.main(["--target", "llvm", "--output-dir", str(tmp_path)]) == 0
+    assert calls[0]["target"] == "llvm"
+    assert calls[0]["output_dir"] == tmp_path
 
 
 @pytest.mark.parametrize("host_codegens", [(), ("c", "llvm"), ("llvm", "llvm"), ("llvm", "cuda")])
@@ -484,12 +479,13 @@ def test_fsim_matrix_result_records_simulator_and_is_frozen(deployment_runtime, 
         result.simulator = "tsim"
 
 
-def test_cli_exposes_llvm_c_and_all_matrix_modes(deployment_runtime, monkeypatch, tmp_path):
+def test_cli_exposes_four_selected_target_modes(deployment_runtime, monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "runtime", deployment_runtime)
     run_module = _load_module(RUN_PATH, "mlperf_resnet_run_matrix")
-    assert run_module._parser().parse_args([]).host_codegen == "llvm"
-    assert run_module._parser().parse_args(["--host-codegen", "c"]).host_codegen == "c"
-    assert run_module._parser().parse_args(["--host-codegen", "all"]).host_codegen == "all"
+    parser = run_module._parser()
+    assert parser.parse_args([]).target == "vta,llvm"
+    for target in ("c", "llvm", "vta,c", "vta,llvm"):
+        assert parser.parse_args(["--target", target]).target == target
 
 
 def test_application_sources_use_only_the_approved_host_flow():

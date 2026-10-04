@@ -74,14 +74,18 @@ def model_pipeline():
     return module
 
 
-def test_import_rejects_any_change_to_the_committed_model_bytes(model_pipeline, tmp_path):
-    changed_model = tmp_path / "changed.tflite"
-    contents = bytearray(MODEL_PATH.read_bytes())
-    contents[-1] ^= 1
-    changed_model.write_bytes(contents)
+def test_custom_model_path_accepts_same_supported_float_resnet8(model_pipeline, tmp_path):
+    custom_model = tmp_path / "custom-resnet8.tflite"
+    custom_model.write_bytes(MODEL_PATH.read_bytes())
+    imported = model_pipeline.import_float_model(custom_model)
+    assert imported.model_sha256 == MODEL_SHA256
 
-    with pytest.raises(ValueError, match="model SHA-256"):
-        model_pipeline.import_float_model(changed_model)
+
+def test_import_rejects_malformed_flatbuffer(model_pipeline, tmp_path):
+    invalid_model = tmp_path / "invalid.tflite"
+    invalid_model.write_bytes(b"not a flatbuffer")
+    with pytest.raises(ValueError, match="valid TFLite FlatBuffer"):
+        model_pipeline.import_float_model(invalid_model)
 
 
 def test_import_asserts_exact_float_resnet8_flatbuffer_and_relay_contract(model_pipeline):

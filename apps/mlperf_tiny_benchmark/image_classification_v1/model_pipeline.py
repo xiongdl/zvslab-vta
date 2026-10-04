@@ -25,7 +25,6 @@ from pathlib import Path
 import numpy as np
 import tflite
 import tvm
-import vta
 from PIL import Image
 from tvm import relay
 
@@ -170,16 +169,16 @@ def _relay_operator_names(function):
 
 
 def import_float_model(model_path):
-    """Verify and import the exact committed floating ResNet-8 artifact."""
+    """Validate and import a supported floating ResNet-8 FlatBuffer."""
     model_path = Path(model_path)
     model_bytes = model_path.read_bytes()
     model_sha256 = hashlib.sha256(model_bytes).hexdigest()
-    if model_sha256 != MODEL_SHA256:
-        raise ValueError(
-            f"model SHA-256 mismatch: expected {MODEL_SHA256}, received {model_sha256}"
-        )
-
-    model, operator_names, convolution_channels = _flatbuffer_contract(model_bytes)
+    try:
+        model, operator_names, convolution_channels = _flatbuffer_contract(model_bytes)
+    except ValueError:
+        raise
+    except Exception as error:
+        raise ValueError("model is not a valid TFLite FlatBuffer") from error
     module, params = relay.frontend.from_tflite(
         model,
         shape_dict={INPUT_NAME: INPUT_SHAPE},
@@ -302,17 +301,22 @@ def inspect_partitioning(reference_module, mixed_module):
     return summary
 
 
-def prepare_model(model_path):
-    """Import, quantize once, and fork reference and mixed graphs."""
+def prepare_model(model_path, *, use_vta=True):
+    """Import and quantize once, optionally partitioning the graph for VTA."""
     imported = import_float_model(model_path)
     quantized_module = quantize_model(imported)
-    reference_module = quantized_module
-    mixed_module = vta.relay.partition_for_vta(quantized_module, mod_name="mlperf_resnet")
-    routing = inspect_partitioning(reference_module, mixed_module)
+    if use_vta:
+        import vta
+
+        mixed_module = vta.relay.partition_for_vta(quantized_module, mod_name="mlperf_resnet")
+        routing = inspect_partitioning(quantized_module, mixed_module)
+    else:
+        mixed_module = None
+        routing = None
     return PreparedModel(
         imported=imported,
         quantized_module=quantized_module,
-        reference_module=reference_module,
+        reference_module=quantized_module,
         mixed_module=mixed_module,
         routing=routing,
     )
@@ -325,3 +329,12 @@ def load_sample(sample_path):
             raise ValueError(f"sample must be 32x32 pixels, received {image.size}")
         pixels = np.asarray(image.convert("RGB"), dtype="uint8")
     return pixels.astype("float32")[None, ...]
+
+
+def __getattr__(name):
+    # Retain the historical test seam without importing VTA for CPU users.
+    if name == "vta":
+        import vta
+
+        return vta
+    raise AttributeError(name)
