@@ -168,7 +168,8 @@ def _evaluate_candidate(function_json, activation, config_indices, backend):
 
 def _worker(function_json, activation, config_indices, backend, result_queue):
     try:
-        result_queue.put((True, _evaluate_candidate(function_json, activation, config_indices, backend)))
+        result = _evaluate_candidate(function_json, activation, config_indices, backend)
+        result_queue.put((True, False, result))
     except BaseException as error:
         result_queue.put((False, isinstance(error, MeasurementInfrastructureError), traceback.format_exc()))
 
@@ -210,14 +211,29 @@ def measure_candidate(layer, activation, config_indices, backend, timeout=None):
     try:
         process.start()
         started = True
-        try:
-            succeeded, value = result_queue.get(timeout=timeout)
-        except queue.Empty as error:
-            raise TimeoutError(f"{backend.upper()} candidate worker exceeded {timeout} seconds") from error
-        except Exception as error:
-            raise MeasurementInfrastructureError(
-                f"{backend.upper()} candidate worker result wait failed: {error}"
-            ) from error
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"{backend.upper()} candidate worker exceeded {timeout} seconds")
+            try:
+                succeeded, infrastructure, value = result_queue.get(timeout=min(0.1, remaining))
+                break
+            except queue.Empty as error:
+                if process.is_alive():
+                    continue
+                try:
+                    succeeded, infrastructure, value = result_queue.get(timeout=0.1)
+                    break
+                except queue.Empty:
+                    raise RuntimeError(
+                        f"{backend.upper()} candidate worker exited without returning a result "
+                        f"(status {process.exitcode})"
+                    ) from error
+            except Exception as error:
+                raise MeasurementInfrastructureError(
+                    f"{backend.upper()} candidate worker result wait failed: {error}"
+                ) from error
         process.join(timeout=5)
         if process.is_alive():
             raise MeasurementInfrastructureError("candidate worker did not exit after returning its result")
@@ -226,12 +242,11 @@ def measure_candidate(layer, activation, config_indices, backend, timeout=None):
                 f"candidate worker exited abnormally with status {process.exitcode}"
             )
         if not succeeded:
-            infrastructure, detail = value
             if infrastructure:
                 raise MeasurementInfrastructureError(
-                    f"candidate worker infrastructure failure:\n{detail}"
+                    f"candidate worker infrastructure failure:\n{value}"
                 )
-            raise RuntimeError(f"candidate worker failed:\n{detail}")
+            raise RuntimeError(f"candidate worker failed:\n{value}")
         return value
     finally:
         if started:

@@ -126,6 +126,137 @@ def test_measure_candidate_stops_worker_when_queue_wait_fails(monkeypatch):
     assert context.queue.joined
 
 
+def test_measure_candidate_detects_worker_exit_before_candidate_timeout(monkeypatch):
+    import queue
+    import types
+
+    measurement = _load_local("measurement")
+
+    class EmptyQueue:
+        def get(self, timeout):
+            raise queue.Empty
+
+        def close(self):
+            pass
+
+        def join_thread(self):
+            pass
+
+    class AbortedWorker:
+        exitcode = -6
+
+        def __init__(self, target, args):
+            pass
+
+        def start(self):
+            pass
+
+        def is_alive(self):
+            return False
+
+        def join(self, timeout=None):
+            pass
+
+        def terminate(self):
+            pass
+
+    class SpawnContext:
+        def Queue(self, maxsize):
+            return EmptyQueue()
+
+        def Process(self, target, args):
+            return AbortedWorker(target, args)
+
+    monkeypatch.setattr(measurement.multiprocessing, "get_context", lambda name: SpawnContext())
+    monkeypatch.setitem(
+        sys.modules, "tvm", types.SimpleNamespace(ir=types.SimpleNamespace(save_json=lambda fn: "ir"))
+    )
+    layer = SimpleNamespace(
+        function=object(), inputs=(SimpleNamespace(shape=(1, 2), dtype="int8"),), config_spaces=()
+    )
+
+    with pytest.raises(RuntimeError, match="worker exited without returning a result.*-6"):
+        measurement.measure_candidate(layer, np.zeros((1, 2), dtype="int8"), [], "fsim", 5)
+
+
+@pytest.mark.parametrize(
+    "infrastructure",
+    [False, True],
+)
+def test_measure_candidate_decodes_worker_failure_envelope(monkeypatch, infrastructure):
+    import types
+
+    measurement = _load_local("measurement")
+    if infrastructure:
+        worker_error = measurement.MeasurementInfrastructureError("compiler initialization failed")
+        expected_error = measurement.MeasurementInfrastructureError
+        expected_message = "candidate worker infrastructure failure"
+    else:
+        worker_error = ValueError("invalid candidate")
+        expected_error = RuntimeError
+        expected_message = "candidate worker failed"
+
+    class ResultQueue:
+        def __init__(self):
+            self.value = None
+
+        def put(self, value):
+            self.value = value
+
+        def get(self, timeout):
+            return self.value
+
+        def close(self):
+            pass
+
+        def join_thread(self):
+            pass
+
+    class Worker:
+        exitcode = 0
+
+        def __init__(self, target, args):
+            self.target = target
+            self.args = args
+            self.alive = False
+
+        def start(self):
+            self.target(*self.args)
+
+        def join(self, timeout=None):
+            pass
+
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            self.alive = False
+
+    class SpawnContext:
+        def Queue(self, maxsize):
+            self.queue = ResultQueue()
+            return self.queue
+
+        def Process(self, target, args):
+            return Worker(target, args)
+
+    monkeypatch.setattr(measurement.multiprocessing, "get_context", lambda name: SpawnContext())
+    monkeypatch.setattr(
+        measurement,
+        "_evaluate_candidate",
+        lambda *args: (_ for _ in ()).throw(worker_error),
+    )
+    monkeypatch.setitem(
+        sys.modules, "tvm", types.SimpleNamespace(ir=types.SimpleNamespace(save_json=lambda fn: "ir"))
+    )
+    layer = SimpleNamespace(
+        function=object(), inputs=(SimpleNamespace(shape=(1, 2), dtype="int8"),), config_spaces=()
+    )
+
+    with pytest.raises(expected_error, match=expected_message):
+        measurement.measure_candidate(layer, np.zeros((1, 2), dtype="int8"), [], "fsim", 5)
+
+
 def test_deployment_and_measurement_share_occurrence_config_dispatch():
     import tvm
     from tvm import autotvm
