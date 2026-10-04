@@ -45,6 +45,16 @@ def _sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def _active_config_sha256():
+    config_path = os.environ.get("VTA_CONFIG_FILE")
+    if not config_path:
+        raise ValueError("VTA_CONFIG_FILE must identify the active geometry config")
+    try:
+        return _sha256(Path(config_path).expanduser().resolve(strict=True).read_bytes())
+    except OSError as error:
+        raise ValueError(f"active VTA config cannot be read: {config_path}") from error
+
+
 def _canonical_json(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
@@ -247,6 +257,7 @@ def export_schedule_snapshot(path, deployment, selections, *, measurements=None,
         "schema_version": SCHEMA_VERSION,
         "model_id": deployment.model_id,
         "model_sha256": deployment.model_sha256,
+        "config_sha256": _active_config_sha256(),
         "geometry_sha256": _geometry_identity(deployment),
         "log_sha256": _sha256(log_bytes),
         "occurrences": occurrences,
@@ -323,6 +334,8 @@ def load_schedule_snapshot(path, deployment):
         raise ValueError("schedule model identity does not match the prepared deployment")
     if metadata.get("model_sha256") != deployment.model_sha256:
         raise ValueError("schedule model content hash does not match the prepared deployment")
+    if metadata.get("config_sha256") != _active_config_sha256():
+        raise ValueError("schedule geometry config content hash does not match VTA_CONFIG_FILE")
     if metadata.get("geometry_sha256") != _geometry_identity(deployment):
         raise ValueError("schedule geometry identity does not match the active VTA geometry")
     if metadata.get("log_sha256") != _sha256(log_bytes):

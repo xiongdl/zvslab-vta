@@ -15,6 +15,10 @@ import numpy as np
 DEFAULT_TIMEOUT_SECONDS = {"fsim": 60, "tsim": 120}
 
 
+class MeasurementInfrastructureError(RuntimeError):
+    """The worker could not initialize the requested compiler/backend."""
+
+
 def _selection(layer, config_indices):
     tunable = [
         (position, entry)
@@ -76,22 +80,27 @@ def _evaluate_candidate(function_json, activation, config_indices, backend):
     if backend not in DEFAULT_TIMEOUT_SECONDS:
         raise ValueError(f"unsupported backend {backend!r}; expected fsim or tsim")
     os.environ["VTA_BACKEND"] = backend
-    import tvm
-    import vta
-    import vta.relay
-    from tvm import relay
-    from tvm.contrib import graph_executor
-    from tvm.relay.backend import te_compiler
-    from vta.relay import transform
-    from vta.testing import simulator
+    try:
+        import tvm
+        import vta
+        import vta.relay
+        from tvm import relay
+        from tvm.contrib import graph_executor
+        from tvm.relay.backend import te_compiler
+        from vta.relay import transform
+        from vta.testing import simulator
 
-    function = tvm.ir.load_json(function_json)
-    compiler_config = transform.VTACompilerConfig.from_env(vta.get_env())
-    from deployment_compute import _capture_layer
+        function = tvm.ir.load_json(function_json)
+        compiler_config = transform.VTACompilerConfig.from_env(vta.get_env())
+        from deployment_compute import _capture_layer
 
-    layer = _capture_layer(0, function, compiler_config)
+        layer = _capture_layer(0, function, compiler_config)
+        simulator.load_backend(backend)
+    except BaseException as error:
+        raise MeasurementInfrastructureError(
+            f"could not initialize {backend.upper()} compiler/runtime: {error}"
+        ) from error
     selected, identity = _selection(layer, config_indices)
-    simulator.load_backend(backend)
     compiler = te_compiler.get()
     compiler.clear()
     try:
@@ -116,7 +125,9 @@ def _evaluate_candidate(function_json, activation, config_indices, backend):
             f"got {activation.shape} and {activation.dtype}"
         )
     executor.set_input(input_name, tvm.nd.array(activation, device))
+    start = time.monotonic()
     executor.run()
+    duration_seconds = max(time.monotonic() - start, 1e-9)
     output = executor.get_output(0).numpy()
     cycles = None
     protocol = None
@@ -150,14 +161,15 @@ def _evaluate_candidate(function_json, activation, config_indices, backend):
         "config_identity": identity,
         "worker_pid": os.getpid(),
         "timestamp": time.time(),
+        "duration_seconds": duration_seconds,
     }
 
 
 def _worker(function_json, activation, config_indices, backend, result_queue):
     try:
         result_queue.put((True, _evaluate_candidate(function_json, activation, config_indices, backend)))
-    except BaseException:
-        result_queue.put((False, traceback.format_exc()))
+    except BaseException as error:
+        result_queue.put((False, isinstance(error, MeasurementInfrastructureError), traceback.format_exc()))
 
 
 def measure_candidate(layer, activation, config_indices, backend, timeout=None):
@@ -199,11 +211,18 @@ def measure_candidate(layer, activation, config_indices, backend, timeout=None):
         if process.is_alive():
             process.terminate()
             process.join()
-            raise RuntimeError("candidate worker did not exit after returning its result")
+            raise MeasurementInfrastructureError("candidate worker did not exit after returning its result")
         if process.exitcode != 0:
-            raise RuntimeError(f"candidate worker exited with status {process.exitcode}")
+            raise MeasurementInfrastructureError(
+                f"candidate worker exited abnormally with status {process.exitcode}"
+            )
         if not succeeded:
-            raise RuntimeError(f"candidate worker failed:\n{value}")
+            infrastructure, detail = value
+            if infrastructure:
+                raise MeasurementInfrastructureError(
+                    f"candidate worker infrastructure failure:\n{detail}"
+                )
+            raise RuntimeError(f"candidate worker failed:\n{detail}")
         return value
     finally:
         result_queue.close()

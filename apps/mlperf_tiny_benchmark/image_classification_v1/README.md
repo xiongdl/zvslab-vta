@@ -77,15 +77,52 @@ VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$APP/run.py" \
   --export-workloads "$APP/build/workloads.json"
 ```
 
-## Tuning during the transition
+## Tuning
 
-The current tuning entry point still uses the prior intermediate interface.
-Checkpoint C3 replaces it with workloads exported by deployment; do not use
-these commands as the new tuning workflow:
+Tuning consumes the exact pre-schedule VTA functions and real activations
+exported by deployment. It does not reopen the model or input image. Run the
+two stages in separate processes with matching `VTA_BACKEND` values:
 
 ```bash
-VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$APP/tune.py" --seed --all
+# Export the model's actual VTA workloads during normal deployment.
+VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$APP/run.py" \
+  --target vta,llvm --simulator fsim \
+  --export-workloads "$APP/build/workloads.json"
+
+# Search all occurrences in FSIM and retain every successful native schedule.
+VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$APP/tune.py" \
+  --workloads "$APP/build/workloads.json" --workload -1 \
+  --simulator fsim --trial-batch 100 --min-successful 20 \
+  --timeout 60 --output-logs "$APP/tune/vta_64mac/fsim.tmp"
+
+# Measure only those FSIM candidates in TSIM and choose minimum cycles per layer.
+VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$APP/tune.py" \
+  --workloads "$APP/build/workloads.json" --workload -1 \
+  --simulator tsim --input-logs "$APP/tune/vta_64mac/fsim.tmp" \
+  --timeout 120 --output-logs "$APP/tune/vta_64mac/best.log"
+
+# Replay the selected schedules in normal model deployment.
+VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$APP/run.py" \
+  --target vta,llvm --simulator tsim \
+  --schedule "$APP/tune/vta_64mac/best.log"
 ```
 
-Historical evidence is retained under `tune/` and is not a fresh measurement
-of the new single-image deployment path.
+`--workload -1` selects all VTA occurrences; a non-negative value selects one
+occurrence, for example `--workload 0`. FSIM defaults are
+`--trial-batch 100`, `--min-successful 20`, and `--timeout 60`; TSIM defaults
+to `--timeout 120` and requires `--input-logs`. FSIM output contains grouped
+successful candidates in native AutoTVM format and must not be passed directly
+to deployment. TSIM output contains one cycle-minimum schedule for each selected
+occurrence and can be passed to `run.py --schedule`. Both logs have same-stem
+JSON metadata.
+
+Tuning saves a raw `config.json` snapshot and `config.sha256` beside the
+published schedules. Replacing all occurrences can replace results under a
+changed configuration; updating one occurrence requires matching existing
+identities and preserves other occurrences. Re-tuning a selected occurrence
+invalidates its previous best while retaining other best selections. Files are
+staged and validated before publication, and ordinary write failures restore
+the previous validated set. Do not run concurrent writers in one tune folder.
+
+Historical evidence remains under `tune/` as legacy data and is not a fresh
+measurement of this single-image deployment path.
