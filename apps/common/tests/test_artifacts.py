@@ -96,6 +96,7 @@ def test_resnet_v1_inventory_limits_deployment_files_to_known_output_layouts(tmp
     matrix = _touch(build / "llvm-tsim" / "mixed" / "model.dylib")
     source = _touch(build / "vta_c" / "source" / "host.c")
     archived = _touch(build / "archive" / "llvm" / "graph.json")
+    archived_reference = _touch(build / "archive" / "reference" / "graph.json")
     nested = _touch(build / "vta_llvm" / "archive" / "graph.json")
     unknown_source = _touch(build / "llvm-tsim" / "mixed" / "source" / "notes.md")
 
@@ -105,5 +106,5 @@ def test_resnet_v1_inventory_limits_deployment_files_to_known_output_layouts(tmp
         current.resolve(), matrix.resolve(), source.resolve()
     }
     assert set(result.unknown_paths) == {
-        archived.resolve(), nested.resolve(), unknown_source.resolve()
+        archived.resolve(), archived_reference.resolve(), nested.resolve(), unknown_source.resolve()
     }

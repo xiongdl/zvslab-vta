@@ -257,9 +257,11 @@ def inventory_artifacts(
             else:
                 if owner == "image_classification_v1":
                     category = _known_resnet_v1_build_file(relative)
-                if category is None and _known_cache_file(relative):
+                    if category is None and _known_tuning_file(relative):
+                        category = "tuning-runs"
+                elif _known_cache_file(relative):
                     category = "cache"
-                elif category is None and _known_tuning_file(relative):
+                elif _known_tuning_file(relative):
                     category = "tuning-runs"
             resolved = path.resolve(strict=False)
             if category is None:
