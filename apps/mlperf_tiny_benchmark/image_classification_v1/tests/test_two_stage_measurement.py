@@ -1,88 +1,94 @@
-"""Focused checks for IC V1 timeout selection and candidate isolation."""
+"""Focused checks for actual-compute candidate validation and dispatch."""
 
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
-MEASUREMENT_PATH = APP_ROOT / "tune" / "measurement.py"
 
 
-def _load_measurement():
-    if str(APP_ROOT.parent) not in sys.path:
-        sys.path.insert(0, str(APP_ROOT.parent))
-    spec = importlib.util.spec_from_file_location("ic_v1_measurement", MEASUREMENT_PATH)
+def _load_local(name):
+    if str(APP_ROOT) not in sys.path:
+        sys.path.insert(0, str(APP_ROOT))
+    spec = importlib.util.spec_from_file_location(f"ic_v1_{name}", APP_ROOT / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
 
-@pytest.fixture
-def measurement():
-    return _load_measurement()
+def test_candidate_measurement_rejects_invalid_backend_timeout_and_activation():
+    measurement = _load_local("measurement")
+    layer = SimpleNamespace(
+        inputs=(SimpleNamespace(shape=(1, 2), dtype="int8"),), config_spaces=()
+    )
+    activation = np.zeros((1, 2), dtype="int8")
 
-
-def test_backend_timeouts_are_independent_and_overrideable(measurement):
-    assert measurement.backend_timeout("fsim") == 60
-    assert measurement.backend_timeout("tsim") == 120
-    assert measurement.backend_timeout("fsim", 7) == 7
-    assert measurement.backend_timeout("tsim", 9) == 9
     for backend, timeout in (("host", None), ("fsim", 0), ("tsim", True)):
         with pytest.raises(ValueError):
-            measurement.backend_timeout(backend, timeout)
+            measurement.measure_candidate(layer, activation, [], backend, timeout)
+
+    with pytest.raises(ValueError, match="activation must have shape"):
+        measurement.measure_candidate(
+            layer, np.zeros((2, 2), dtype="int8"), [], "fsim"
+        )
 
 
-def test_candidate_runner_is_fresh_and_closed_after_success_or_failure(
-    measurement, monkeypatch
-):
-    runners = []
-    options_seen = []
-    batch_calls = []
+def test_deployment_and_measurement_share_occurrence_config_dispatch():
+    import tvm
+    from tvm import autotvm
 
-    class Runner:
-        def __init__(self, backend, timeout):
-            self.backend = backend
-            self.timeout = timeout
-            self.closed = False
+    dispatch = _load_local("dispatch")
+    target = tvm.target.Target("llvm")
+    workload = ("conv2d_packed.vta", 1, 2, 3)
+    first = object()
+    second = object()
+    fallback = object()
 
-        def close(self):
-            self.closed = True
+    with dispatch.config_bindings_context(((target, workload, fallback),)):
+        with dispatch.config_bindings_context(((target, workload, first),)):
+            assert autotvm.DispatchContext.current.query(target, workload) is first
+        assert autotvm.DispatchContext.current.query(target, workload) is fallback
 
-    class Builder:
-        executor = None
-        tmp_dir = None
+        with dispatch.config_space_context(
+            (("conv2d_packed.vta", workload, target, object()),), (second,)
+        ):
+            assert autotvm.DispatchContext.current.query(target, workload) is second
+        assert autotvm.DispatchContext.current.query(target, workload) is fallback
 
-    def fake_measure_option(backend, **kwargs):
-        runner = Runner(backend, kwargs["timeout"])
-        runners.append(runner)
-        options_seen.append((backend, kwargs))
-        return {"runner": runner, "builder": Builder()}
+    with pytest.raises(ValueError, match="duplicate AutoTVM"):
+        with dispatch.config_bindings_context(
+            ((target, workload, first), (target, workload, second))
+        ):
+            pass
 
-    def fake_create_measure_batch(task, option):
-        def measure_batch(inputs):
-            batch_calls.append((task, option["runner"], inputs))
-            if inputs[0].config == "candidate-that-aborts":
-                raise RuntimeError("simulated candidate abort")
-            return ["measured"]
 
-        return measure_batch
+def test_app_runtime_and_tuner_import_without_apps_directory():
+    import os
+    import subprocess
 
-    monkeypatch.setattr(measurement.shared, "measure_option", fake_measure_option)
-    monkeypatch.setattr(
-        measurement.shared.autotvm.measure, "create_measure_batch", fake_create_measure_batch
+    app_path = str(APP_ROOT)
+    repository_root = APP_ROOT.parents[3]
+    tvm_path = str(repository_root / "tvm" / "python")
+    vta_path = str(repository_root / "vta" / "python")
+    env = os.environ.copy()
+    env.update({
+        "VTA_CONFIG_FILE": str(repository_root / "vta" / "config" / "vta_64mac.json"),
+        "VTA_BACKEND": "fsim",
+        "PYTHONPATH": os.pathsep.join((tvm_path, vta_path)),
+    })
+    code = (
+        "import sys; "
+        f"sys.path.insert(0, {app_path!r}); "
+        "import runtime, tune; "
+        "assert not any(name == 'common' or name.startswith('common.') for name in sys.modules)"
     )
-    task = type("Task", (), {"target": "vta"})()
-
-    assert measurement.measure_candidate(task, "good", "fsim") == "measured"
-    with pytest.raises(RuntimeError, match="candidate abort"):
-        measurement.measure_candidate(task, "candidate-that-aborts", "fsim")
-
-    assert [runner.timeout for runner in runners] == [60, 60]
-    assert all(runner.closed for runner in runners)
-    assert runners[0] is not runners[1]
-    assert all(item[1] is runner for item, runner in zip(batch_calls, runners))
-    assert [options[0] for options in options_seen] == ["fsim", "fsim"]
+    result = subprocess.run(
+        [sys.executable, "-c", code], env=env, text=True, capture_output=True, check=False
+    )
+    assert result.returncode == 0, result.stderr

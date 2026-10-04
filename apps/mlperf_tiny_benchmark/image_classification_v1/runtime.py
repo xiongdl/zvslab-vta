@@ -33,14 +33,14 @@ from tvm.contrib import graph_executor
 
 from graph_artifacts import export_graph_bundle
 from model_pipeline import MODEL_SHA256, load_sample, prepare_model
-from common.deployment_compute import capture_deployment_compute
-from common.deployment import (
+from deployment_compute import capture_deployment_compute
+from deployment import (
     cycles_within_strict_ten_percent,
     lower_selected_deployment,
     validate_occurrence_rows,
     write_json_atomic,
 )
-from common.schedule import load_schedule_snapshot
+from schedule import load_schedule_snapshot
 
 
 APP_ROOT = Path(__file__).resolve().parent

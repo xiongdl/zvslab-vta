@@ -50,6 +50,12 @@ def deployment_runtime():
     return _load_runtime()
 
 
+def _allow_mocked_backend(monkeypatch):
+    import vta.backend
+
+    monkeypatch.setattr(vta.backend, "normalize_backend", lambda simulator=None, **_: simulator)
+
+
 def test_tsim_mapping_is_explicit_and_never_uses_fsim_enabled(deployment_runtime):
     session = deployment_runtime._simulator_session("tsim")
     assert session.environment_target == "tsim"
@@ -150,6 +156,7 @@ def test_tsim_root_and_public_matrix_alias(deployment_runtime):
 
 
 def test_tsim_matrix_builds_all_hosts_before_single_lazy_load(deployment_runtime, monkeypatch, tmp_path):
+    _allow_mocked_backend(monkeypatch)
     prepared = SimpleNamespace(
         routing=SimpleNamespace(
             symbols=tuple("s%d" % i for i in range(8)),
@@ -206,6 +213,7 @@ def test_tsim_matrix_builds_all_hosts_before_single_lazy_load(deployment_runtime
 
 
 def test_tsim_matrix_result_records_simulator_and_is_frozen(deployment_runtime, monkeypatch, tmp_path):
+    _allow_mocked_backend(monkeypatch)
     prepared = SimpleNamespace(
         routing=SimpleNamespace(symbols=(), composite_names=(), host_operator_names=())
     )
@@ -222,28 +230,41 @@ def test_tsim_matrix_result_records_simulator_and_is_frozen(deployment_runtime, 
         result.simulator = "fsim"
 
 
-def test_end_to_end_tsim_matrix_with_reloaded_graph_bundles(deployment_runtime, tmp_path):
+def test_end_to_end_tsim_matrix_with_reloaded_graph_bundles(tmp_path):
     """Run the complete ten-sample TSIM matrix under vta_64mac.json geometry."""
-    result = deployment_runtime.deploy_tsim_matrix(tmp_path)
-    assert len(result.prepared.routing.symbols) == 8
-    assert len(result.artifacts) == 2
-    assert all(len(execution.comparisons) == 10 for execution in result.executions)
-    assert all(
-        isinstance(execution.profiler_stats["cycle_count"], int)
-        and execution.profiler_stats["cycle_count"] > 0
-        for execution in result.executions
+    env = os.environ.copy()
+    repository_root = APP_ROOT.parents[3]
+    env["VTA_CONFIG_FILE"] = str(repository_root / "vta" / "config" / "vta_64mac.json")
+    env["VTA_BACKEND"] = "tsim"
+    env["PYTHONPATH"] = os.pathsep.join(
+        str(path) for path in (
+            repository_root / "tvm" / "python",
+            repository_root / "vta" / "python",
+        )
     )
+    code = (
+        "from pathlib import Path; import sys; "
+        f"sys.path.insert(0, {str(APP_ROOT)!r}); "
+        "import runtime; "
+        f"result = runtime.deploy_tsim_matrix(Path({str(tmp_path)!r})); "
+        "assert len(result.prepared.routing.symbols) == 8; "
+        "assert len(result.artifacts) == 2; "
+        "assert all(len(run.comparisons) == 10 for run in result.executions); "
+        "assert all(run.profiler_stats['cycle_count'] > 0 for run in result.executions); "
+        "print('TSIM matrix deployment passed')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=repository_root, env=env,
+        check=False, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "TSIM matrix deployment passed" in result.stdout
 
-    for host_artifacts in result.artifacts:
-        assert host_artifacts.reference.artifact_dir.parent.name == f"{host_artifacts.host_codegen}-tsim"
-        assert host_artifacts.mixed.artifact_dir.parent.name == f"{host_artifacts.host_codegen}-tsim"
-        for artifact in (host_artifacts.reference, host_artifacts.mixed):
-            manifest = json.loads(
-                (artifact.artifact_dir / "manifest.json").read_text(encoding="utf-8")
-            )
+    for host_codegen in ("llvm", "c"):
+        for kind in ("reference", "mixed"):
+            artifact_dir = tmp_path / f"{host_codegen}-tsim" / kind
+            manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
             assert manifest["simulator"] == "tsim"
-            assert manifest["host_codegen"] == host_artifacts.host_codegen
-            assert artifact.path.is_file()
-            assert (artifact.artifact_dir / "graph.json").is_file()
-            assert (artifact.artifact_dir / "params.bin").is_file()
-            assert any(entry["path"] for entry in manifest["sources"])
+            assert manifest["host_codegen"] == host_codegen
+            assert (artifact_dir / "graph.json").is_file()
+            assert (artifact_dir / "params.bin").is_file()

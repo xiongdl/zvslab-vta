@@ -12,6 +12,8 @@ TUNE_PATH = APP_ROOT / "tune.py"
 
 
 def _load_tune():
+    if str(APP_ROOT) not in sys.path:
+        sys.path.insert(0, str(APP_ROOT))
     spec = importlib.util.spec_from_file_location("ic_v1_actual_tune", TUNE_PATH)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -78,7 +80,7 @@ def test_tune_cli_rejects_conflicting_export_modes(monkeypatch):
 
 
 def test_resume_manifest_rejects_foreign_compute(tmp_path):
-    from common.tuning import create_ledger, load_ledger, save_ledger
+    from tuning import create_ledger, load_ledger, save_ledger
 
     identity = {
         "model_id": "image_classification_v1", "model_sha256": "m" * 64,

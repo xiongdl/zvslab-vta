@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Tune actual IC V2 deployment occurrences through shared VTA lowering."""
+"""Tune actual IC V1 deployment occurrences through shared VTA lowering."""
 
 import argparse
 import hashlib
@@ -29,14 +29,12 @@ from pathlib import Path
 
 
 APP_ROOT = Path(__file__).resolve().parent
-APPS_ROOT = APP_ROOT.parent.parent
 DEFAULT_BUILD_ROOT = APP_ROOT / "build" / "actual_compute_tuning"
 
 
 def _load_runtime():
-    for path in (str(APPS_ROOT), str(APP_ROOT)):
-        if path not in sys.path:
-            sys.path.insert(0, path)
+    if str(APP_ROOT) not in sys.path:
+        sys.path.insert(0, str(APP_ROOT))
     import runtime
 
     return runtime
@@ -77,7 +75,7 @@ def _prepare_actual_compute(runtime, backend):
     """Capture normal prepared layers and each real graph-resident activation."""
     from tvm.contrib.debugger import debug_executor
 
-    from common.deployment_compute import capture_deployment_compute
+    from deployment_compute import capture_deployment_compute
 
     prepared = runtime.prepare_model(runtime.MODEL_PATH)
     model_sha256 = getattr(
@@ -155,8 +153,8 @@ def create_seed_snapshot(*, output_log=None):
     if _active_backend() != "tsim":
         raise ValueError("--seed requires VTA_BACKEND=tsim for schedule-alignment evidence")
     _, compute, activations = _prepare_actual_compute(runtime, "tsim")
-    from common.measurement import measure_candidate
-    from common.schedule import export_schedule_snapshot
+    from measurement import measure_candidate
+    from schedule import export_schedule_snapshot
 
     selections = {}
     measurements = {}
@@ -223,8 +221,8 @@ def _search(args):
         raise ValueError("search requires --alignment-report from a passing unified TSIM seed deployment")
     _validate_positive_options(args)
     prepared, compute, activations = _prepare_actual_compute(runtime, "fsim")
-    from common import tuning
-    from common.schedule import (
+    import tuning
+    from schedule import (
         _geometry_identity,
         _portable_config_space_identity,
         load_schedule_snapshot,
@@ -311,7 +309,7 @@ def _search(args):
         }
         _write_json_atomic(manifest_path, manifest)
 
-    from common.tuning import search_layer
+    from tuning import search_layer
 
     ledger_statuses = []
     ledger_objects = {}
@@ -402,9 +400,9 @@ def _export_snapshot(args):
     if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
         raise ValueError("unsupported or missing search resume manifest schema")
 
-    from common.deployment_compute import capture_deployment_compute
-    from common.schedule import _geometry_identity, _portable_config_space_identity
-    from common.tuning import export_best_snapshot, export_candidate_snapshot, load_ledger
+    from deployment_compute import capture_deployment_compute
+    from schedule import _geometry_identity, _portable_config_space_identity
+    from tuning import export_best_snapshot, export_candidate_snapshot, load_ledger
 
     prepared = runtime.prepare_model(runtime.MODEL_PATH)
     model_sha = getattr(getattr(prepared, "imported", None), "model_sha256", runtime.MODEL_SHA256)

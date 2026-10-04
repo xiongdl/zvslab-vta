@@ -14,6 +14,8 @@ MODEL_PATH = APP_ROOT / "model" / "pretrainedResnet.tflite"
 
 @pytest.fixture(scope="module")
 def captured():
+    if str(APP_ROOT) not in sys.path:
+        sys.path.insert(0, str(APP_ROOT))
     import vta.relay  # Register the VTA compiler hooks before preparing the graph.
 
     spec = importlib.util.spec_from_file_location(
@@ -23,7 +25,7 @@ def captured():
     sys.modules[spec.name] = pipeline
     spec.loader.exec_module(pipeline)
     prepared = pipeline.prepare_model(MODEL_PATH)
-    from common.deployment_compute import capture_deployment_compute
+    from deployment_compute import capture_deployment_compute
 
     compute = capture_deployment_compute(
         prepared.mixed_module,
