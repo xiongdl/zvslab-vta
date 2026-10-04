@@ -52,7 +52,8 @@ points in measured whole-model MAC utilization. Host work is excluded from the
 VTA MAC numerator; the model identity remains metadata so the calculator stays
 model-independent.
 
-The versioned deployment and utilization data are in `deployment-c4-full.json`
-and `mac-utilization-c4-full.json`. Selected configurations and self-contained
-native records are under `optimal/c4-full/`. Candidate failures, counts and
-resume state remain under `../build/two_stage_tuning/c4-full/`.
+The versioned deployment and utilization data are in this directory as
+`deployment-c4-full.json` and `mac-utilization-c4-full.json`. Selected
+configurations and self-contained native records are also in this directory.
+Candidate failures, counts and
+resume state remain under `../../../build/two_stage_tuning/c4-full/`.

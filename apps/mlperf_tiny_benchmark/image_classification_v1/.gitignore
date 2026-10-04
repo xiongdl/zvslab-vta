@@ -1,0 +1,6 @@
+# Saved schedule logs and their JSON sidecars are versioned deliverables.
+!tune/
+!tune/*/
+!tune/*/*.json
+!tune/*/*.log
+!tune/*/*.tmp

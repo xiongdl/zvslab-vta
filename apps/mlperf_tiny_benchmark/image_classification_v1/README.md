@@ -62,6 +62,25 @@ cycles, peak MAC/cycle, and the documented whole-graph and layer-cycle scopes.
 The graph bundle still validates exported library, graph, parameters, source
 files, and required VTA symbols before publication and after reload.
 
+The local Makefile wraps deployment and sets the matching simulator backend:
+
+```bash
+make deploy
+make deploy TARGET=llvm
+make deploy TARGET=vta,c SIMULATOR=tsim
+make deploy MODEL='models/custom resnet.tflite' INPUT='images/cat one.png' \
+  SCHEDULE=tune/vta_64mac/best.log REPORT=build/deployment-report.md
+```
+
+Run `make deploy` from this directory, or use `make -C` from another
+directory. Explicit relative paths are resolved from Make's working directory;
+defaults remain relative to the model directory. Variables are `MODEL`,
+`INPUT`, `TARGET`, `SIMULATOR`, `SCHEDULE`, `OUTPUT_DIR`, `REPORT`,
+`EXPORT_WORKLOADS`, and `CONFIG`. `CONFIG` defaults to the repository's
+`vta/config/vta_64mac.json`. The Makefile requires the prebuilt project Python
+and TVM/VTA libraries; it does not create environments, install packages, or
+build libraries.
+
 `--export-workloads PATH` optionally saves the actual outlined VTA Relay
 functions, their constants, deployment input activations, and hardware/config
 provenance as a validated JSON snapshot. It requires a VTA target. The export
@@ -78,6 +97,33 @@ VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$APP/run.py" \
 ```
 
 ## Tuning
+
+The Makefile provides individual stages and the full sequence:
+
+```bash
+# Export workloads during deployment, then run each stage explicitly.
+make deploy EXPORT_WORKLOADS=build/workloads.json
+make tune-fsim WORKLOADS=build/workloads.json WORKLOAD=0 \
+  TRIAL_BATCH=1 MIN_SUCCESSFUL=1
+make tune-tsim WORKLOADS=build/workloads.json \
+  INPUT_LOGS=tune/vta_64mac/fsim.tmp WORKLOAD=0
+
+# Or export, search and select in one command.
+make tune
+make tune WORKLOAD=0
+make tune WORKLOADS=build/workloads.json
+```
+
+`tune-fsim` requires `WORKLOADS` and defaults to all occurrences, 100 trials
+per batch, 20 successful candidates, and a 60-second timeout. `tune-tsim`
+requires `WORKLOADS` and `INPUT_LOGS`, and defaults to a 120-second timeout.
+Both stages accept `OUTPUT_LOGS`; defaults are the configuration's
+`tune/<config-name>/fsim.tmp` and `best.log`. `make tune` accepts `MODEL`,
+`INPUT`, `WORKLOAD`, `TRIAL_BATCH`, `MIN_SUCCESSFUL`, `FSIM_TIMEOUT`,
+`TSIM_TIMEOUT`, `OUTPUT_DIR`, optional `WORKLOADS`, and `CONFIG`. `OUTPUT_DIR`
+contains only generated build intermediates. The persistent schedules remain
+under the tracked configuration directory. Full tuning stops after TSIM and
+does not automatically deploy the winner.
 
 Tuning consumes the exact pre-schedule VTA functions and real activations
 exported by deployment. It does not reopen the model or input image. Run the
@@ -124,5 +170,5 @@ invalidates its previous best while retaining other best selections. Files are
 staged and validated before publication, and ordinary write failures restore
 the previous validated set. Do not run concurrent writers in one tune folder.
 
-Historical evidence remains under `tune/` as legacy data and is not a fresh
-measurement of this single-image deployment path.
+Historical evidence is preserved under `tune/legacy/c4-full/`; it predates
+this single-image deployment path and is not a fresh measurement.
