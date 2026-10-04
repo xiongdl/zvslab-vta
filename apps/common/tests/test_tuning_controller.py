@@ -30,7 +30,43 @@ def _tuner(model_id):
 
 @pytest.mark.parametrize("model_id", MODEL_IDS)
 def test_model_tuner_exposes_seed_search_resume_and_export_contract(model_id):
-    parser = _tuner(model_id)._parser()
+    module = _tuner(model_id)
+    parser = module._parser()
+    if model_id == "image_classification_v1":
+        fsim = module.validate_args(
+            parser.parse_args(
+                [
+                    "--workloads", "workloads.json", "--workload", "2",
+                    "--output-logs", "fsim.tmp",
+                ]
+            )
+        )
+        assert fsim.workloads == Path("workloads.json")
+        assert fsim.workload == 2
+        assert fsim.simulator == "fsim"
+        assert fsim.output_logs == Path("fsim.tmp")
+        assert fsim.timeout == 60
+        assert fsim.trial_batch == 100
+        assert fsim.min_successful == 20
+
+        tsim = module.validate_args(
+            parser.parse_args(
+                [
+                    "--workloads", "workloads.json", "--workload", "-1",
+                    "--simulator", "tsim", "--input-logs", "fsim.tmp",
+                    "--output-logs", "best.log",
+                ]
+            )
+        )
+        assert tsim.workload == -1
+        assert tsim.simulator == "tsim"
+        assert tsim.input_logs == Path("fsim.tmp")
+        assert tsim.output_logs == Path("best.log")
+        assert tsim.timeout == 120
+        assert tsim.trial_batch is None
+        assert tsim.min_successful is None
+        return
+
     search = parser.parse_args(["--all", "--alignment-report", "seed-report.json"])
 
     assert search.all is True
@@ -63,6 +99,18 @@ def test_model_tuner_exposes_seed_search_resume_and_export_contract(model_id):
 @pytest.mark.parametrize("model_id", MODEL_IDS)
 def test_seed_is_an_all_occurrence_measurement_option(model_id):
     parser = _tuner(model_id)._parser()
+    if model_id == "image_classification_v1":
+        args = parser.parse_args(
+            [
+                "--workloads", "workloads.json", "--workload", "-1",
+                "--output-logs", "fsim.tmp",
+            ]
+        )
+        assert args.workload == -1
+        assert args.workloads == Path("workloads.json")
+        assert args.output_logs == Path("fsim.tmp")
+        return
+
     args = parser.parse_args(["--seed", "--all", "--output-log", "seed.log"])
 
     assert args.seed is True
