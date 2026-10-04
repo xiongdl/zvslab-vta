@@ -226,7 +226,7 @@ def measure_candidate(layer, activation, config_indices, backend, timeout=None):
                     succeeded, infrastructure, value = result_queue.get(timeout=0.1)
                     break
                 except queue.Empty:
-                    raise RuntimeError(
+                    raise MeasurementInfrastructureError(
                         f"{backend.upper()} candidate worker exited without returning a result "
                         f"(status {process.exitcode})"
                     ) from error

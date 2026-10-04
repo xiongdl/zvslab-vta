@@ -174,6 +174,64 @@ def test_zero_successful_fsim_candidates_publish_nothing(monkeypatch, tmp_path):
     assert not (tmp_path / "tune" / "config.json").exists()
 
 
+@pytest.mark.parametrize("backend", ["fsim", "tsim"])
+def test_native_worker_exit_aborts_tuning_stage(monkeypatch, tmp_path, backend):
+    tune = _load("tune")
+    import measurement
+    import tuning
+    from types import SimpleNamespace
+
+    config_bytes = b'{"geometry":1}\n'
+    workload_file = tmp_path / "workloads.json"
+    workload_file.write_text("{}", encoding="utf-8")
+    layer = SimpleNamespace(
+        occurrence=0, index=0, symbol="vta0", activation=object(),
+        compute_sha256="c" * 64, config_space_identity="s" * 64,
+        config_spaces=(),
+    )
+    snapshot = SimpleNamespace(
+        layers=(layer,), model_sha256="m" * 64,
+        config_sha256=hashlib.sha256(config_bytes).hexdigest(),
+        geometry_sha256="g" * 64, config_bytes=config_bytes,
+    )
+    monkeypatch.setattr(tune, "_capture_layers", lambda _: ((layer,), None))
+    monkeypatch.setattr(tune, "_select_layers", lambda _, __: [layer])
+    monkeypatch.setattr(
+        measurement, "measure_candidate",
+        lambda *args: (_ for _ in ()).throw(
+            measurement.MeasurementInfrastructureError("worker exited without a result")
+        ),
+    )
+    output = tmp_path / "tune" / ("fsim.tmp" if backend == "fsim" else "best.log")
+    command = [
+        "--workloads", str(workload_file), "--workload", "0",
+        "--simulator", backend, "--output-logs", str(output),
+    ]
+    if backend == "fsim":
+        command.extend(["--trial-batch", "1", "--min-successful", "1"])
+        monkeypatch.setattr(tuning, "candidate_indices", lambda *args, **kwargs: iter([[0]]))
+        monkeypatch.setattr(tuning, "configs_for_indices", lambda *args: [])
+    else:
+        candidates = tmp_path / "input.tmp"
+        candidates.write_text("candidate", encoding="utf-8")
+        candidates.with_suffix(".json").write_text("{}", encoding="utf-8")
+        command.extend(["--input-logs", str(candidates)])
+        monkeypatch.setattr(tuning, "decode_candidate_log", lambda *args, **kwargs: ({
+            "occurrence": 0, "symbol": "vta0", "candidate_id": "d" * 64,
+            "configs": [], "config_identity": "i" * 64,
+        },))
+        monkeypatch.setattr(tune, "_candidate_record_indices", lambda *args: [0])
+    args = tune._parser().parse_args(command)
+
+    runner = tune.run_fsim if backend == "fsim" else tune.run_tsim
+    with pytest.raises(
+        measurement.MeasurementInfrastructureError, match="worker exited without a result"
+    ):
+        runner(args, snapshot)
+    assert not output.exists()
+    assert not output.with_suffix(".json").exists()
+
+
 def test_candidate_log_groups_multiple_native_records_by_occurrence_and_candidate(monkeypatch):
     tuning = _load("tuning")
     monkeypatch.setattr(tuning.autotvm.record, "decode", lambda row: object())

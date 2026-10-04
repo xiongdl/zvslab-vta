@@ -117,7 +117,7 @@ def test_measure_candidate_stops_worker_when_queue_wait_fails(monkeypatch):
         ir=types.SimpleNamespace(save_json=lambda function: "function-json")
     ))
 
-    with pytest.raises(RuntimeError, match="result wait failed: queue transport failed"):
+    with pytest.raises(measurement.MeasurementInfrastructureError, match="result wait failed: queue transport failed"):
         measurement.measure_candidate(layer, activation, [], "fsim", 5)
 
     assert context.worker.terminated
@@ -126,7 +126,8 @@ def test_measure_candidate_stops_worker_when_queue_wait_fails(monkeypatch):
     assert context.queue.joined
 
 
-def test_measure_candidate_detects_worker_exit_before_candidate_timeout(monkeypatch):
+@pytest.mark.parametrize("backend", ["fsim", "tsim"])
+def test_measure_candidate_detects_worker_exit_before_candidate_timeout(monkeypatch, backend):
     import queue
     import types
 
@@ -175,8 +176,8 @@ def test_measure_candidate_detects_worker_exit_before_candidate_timeout(monkeypa
         function=object(), inputs=(SimpleNamespace(shape=(1, 2), dtype="int8"),), config_spaces=()
     )
 
-    with pytest.raises(RuntimeError, match="worker exited without returning a result.*-6"):
-        measurement.measure_candidate(layer, np.zeros((1, 2), dtype="int8"), [], "fsim", 5)
+    with pytest.raises(measurement.MeasurementInfrastructureError, match="worker exited without returning a result.*-6"):
+        measurement.measure_candidate(layer, np.zeros((1, 2), dtype="int8"), [], backend, 5)
 
 
 @pytest.mark.parametrize(
