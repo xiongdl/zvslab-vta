@@ -29,7 +29,10 @@ def test_candidate_measurement_rejects_invalid_backend_timeout_and_activation():
     )
     activation = np.zeros((1, 2), dtype="int8")
 
-    for backend, timeout in (("host", None), ("fsim", 0), ("tsim", True)):
+    for backend, timeout in (
+        ("host", None), ("fsim", 0), ("tsim", True), ("fsim", float("nan")),
+        ("fsim", float("inf")),
+    ):
         with pytest.raises(ValueError):
             measurement.measure_candidate(layer, activation, [], backend, timeout)
 
@@ -37,6 +40,90 @@ def test_candidate_measurement_rejects_invalid_backend_timeout_and_activation():
         measurement.measure_candidate(
             layer, np.zeros((2, 2), dtype="int8"), [], "fsim"
         )
+
+
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf")])
+def test_tune_cli_rejects_non_finite_timeout(timeout):
+    tune = _load_local("tune")
+    args = tune._parser().parse_args([
+        "--workloads", "workloads.json", "--timeout", str(timeout),
+        "--output-logs", "out.tmp",
+    ])
+
+    with pytest.raises(ValueError, match="finite positive"):
+        tune.validate_args(args)
+
+
+def test_measure_candidate_stops_worker_when_queue_wait_fails(monkeypatch):
+    import types
+    measurement = _load_local("measurement")
+
+    layer = SimpleNamespace(
+        function=object(), inputs=(SimpleNamespace(shape=(1, 2), dtype="int8"),),
+        config_spaces=(),
+    )
+    activation = np.zeros((1, 2), dtype="int8")
+
+    class BrokenQueue:
+        closed = False
+        joined = False
+
+        def get(self, timeout):
+            raise OSError("queue transport failed")
+
+        def close(self):
+            self.closed = True
+
+        def join_thread(self):
+            self.joined = True
+
+    class Worker:
+        alive = False
+        terminated = False
+        joined = False
+
+        def __init__(self, target, args):
+            self.target, self.args = target, args
+            self.exitcode = None
+
+        def start(self):
+            self.alive = True
+
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            self.terminated = True
+            self.alive = False
+
+        def join(self, timeout=None):
+            self.joined = True
+
+    class SpawnContext:
+        def __init__(self):
+            self.queue = BrokenQueue()
+            self.worker = None
+
+        def Queue(self, maxsize):
+            return self.queue
+
+        def Process(self, target, args):
+            self.worker = Worker(target, args)
+            return self.worker
+
+    context = SpawnContext()
+    monkeypatch.setattr(measurement.multiprocessing, "get_context", lambda name: context)
+    monkeypatch.setitem(sys.modules, "tvm", types.SimpleNamespace(
+        ir=types.SimpleNamespace(save_json=lambda function: "function-json")
+    ))
+
+    with pytest.raises(RuntimeError, match="result wait failed: queue transport failed"):
+        measurement.measure_candidate(layer, activation, [], "fsim", 5)
+
+    assert context.worker.terminated
+    assert context.worker.joined
+    assert context.queue.closed
+    assert context.queue.joined
 
 
 def test_deployment_and_measurement_share_occurrence_config_dispatch():

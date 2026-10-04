@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 import multiprocessing
 import os
 import queue
@@ -181,8 +182,14 @@ def measure_candidate(layer, activation, config_indices, backend, timeout=None):
     if backend not in DEFAULT_TIMEOUT_SECONDS:
         raise ValueError(f"unsupported backend {backend!r}; expected fsim or tsim")
     timeout = DEFAULT_TIMEOUT_SECONDS[backend] if timeout is None else timeout
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
-        raise ValueError("timeout must be positive")
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        raise ValueError("timeout must be finite positive seconds")
+    try:
+        finite_timeout = math.isfinite(timeout)
+    except OverflowError:
+        finite_timeout = False
+    if not finite_timeout or timeout <= 0:
+        raise ValueError("timeout must be finite positive seconds")
     _, _ = _selection(layer, config_indices)
     activation = np.asarray(activation)
     expected = layer.inputs[0]
@@ -199,18 +206,20 @@ def measure_candidate(layer, activation, config_indices, backend, timeout=None):
         target=_worker,
         args=(tvm.ir.save_json(layer.function), activation, list(config_indices), backend, result_queue),
     )
-    process.start()
+    started = False
     try:
+        process.start()
+        started = True
         try:
             succeeded, value = result_queue.get(timeout=timeout)
         except queue.Empty as error:
-            process.terminate()
-            process.join()
             raise TimeoutError(f"{backend.upper()} candidate worker exceeded {timeout} seconds") from error
+        except Exception as error:
+            raise MeasurementInfrastructureError(
+                f"{backend.upper()} candidate worker result wait failed: {error}"
+            ) from error
         process.join(timeout=5)
         if process.is_alive():
-            process.terminate()
-            process.join()
             raise MeasurementInfrastructureError("candidate worker did not exit after returning its result")
         if process.exitcode != 0:
             raise MeasurementInfrastructureError(
@@ -225,5 +234,9 @@ def measure_candidate(layer, activation, config_indices, backend, timeout=None):
             raise RuntimeError(f"candidate worker failed:\n{detail}")
         return value
     finally:
+        if started:
+            if process.is_alive():
+                process.terminate()
+            process.join()
         result_queue.close()
         result_queue.join_thread()

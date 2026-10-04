@@ -43,6 +43,13 @@ _CACHE_ROOTS = {
 }
 _CACHE_FILES = {"model.dylib", "graph.json", "manifest.json", "params.bin"}
 _SOURCE_SUFFIXES = {".ll", ".c", ".cc", ".cpp", ".h", ".o", ".a", ".dylib", ".so"}
+_RESNET_V1_DEPLOYMENT_ROOTS = {"c", "llvm", "vta_c", "vta_llvm"}
+_RESNET_V1_MATRIX_ROOTS = {
+    f"{host}-{simulator}"
+    for host in ("c", "llvm")
+    for simulator in ("fsim", "tsim")
+}
+_GRAPH_BUNDLE_ROLES = {"reference", "mixed"}
 
 
 @dataclass(frozen=True)
@@ -133,12 +140,28 @@ def _known_resnet_v1_build_file(relative: Path) -> str | None:
     parts = relative.parts
     if parts == ("tune", "workloads.json"):
         return "tuning-runs"
-    output_root = any(part in {"c", "llvm", "vta_c", "vta_llvm"} for part in parts[:-1])
-    if output_root:
-        if relative.name in _CACHE_FILES or (
-            "source" in parts and Path(relative.name).suffix in _SOURCE_SUFFIXES
-        ):
-            return "cache"
+    if parts[:2] == ("tune", "deploy"):
+        parts = parts[2:]
+
+    if len(parts) >= 2 and parts[0] in _RESNET_V1_DEPLOYMENT_ROOTS:
+        bundle_parts = parts[1:]
+    elif len(parts) >= 3 and parts[0] in _RESNET_V1_MATRIX_ROOTS:
+        if parts[1] not in _GRAPH_BUNDLE_ROLES:
+            return None
+        bundle_parts = parts[2:]
+    elif len(parts) >= 2 and parts[0] in _GRAPH_BUNDLE_ROLES:
+        bundle_parts = parts[1:]
+    else:
+        return None
+
+    if len(bundle_parts) == 1 and bundle_parts[0] in _CACHE_FILES:
+        return "cache"
+    if (
+        len(bundle_parts) == 2
+        and bundle_parts[0] == "source"
+        and Path(bundle_parts[1]).suffix in _SOURCE_SUFFIXES
+    ):
+        return "cache"
     return None
 
 

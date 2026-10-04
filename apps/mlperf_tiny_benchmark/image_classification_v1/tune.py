@@ -20,6 +20,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 import tempfile
 from itertools import islice
@@ -47,8 +48,8 @@ def validate_args(args):
         raise ValueError("--workload must be -1 or a non-negative occurrence index")
     if args.timeout is None:
         args.timeout = 60 if args.simulator == "fsim" else 120
-    if args.timeout <= 0:
-        raise ValueError("--timeout must be positive seconds")
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        raise ValueError("--timeout must be finite positive seconds")
     if args.simulator == "fsim":
         if args.input_logs is not None:
             raise ValueError("--input-logs is only valid for TSIM")

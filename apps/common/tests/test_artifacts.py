@@ -87,3 +87,23 @@ def test_inventory_does_not_follow_symlinked_build_root(tmp_path):
 
     assert payload.resolve() not in {item.path for item in result.items}
     assert result.errors
+
+
+def test_resnet_v1_inventory_limits_deployment_files_to_known_output_layouts(tmp_path):
+    benchmark = tmp_path / "mlperf_tiny_benchmark"
+    build = benchmark / "image_classification_v1" / "build"
+    current = _touch(build / "vta_llvm" / "graph.json")
+    matrix = _touch(build / "llvm-tsim" / "mixed" / "model.dylib")
+    source = _touch(build / "vta_c" / "source" / "host.c")
+    archived = _touch(build / "archive" / "llvm" / "graph.json")
+    nested = _touch(build / "vta_llvm" / "archive" / "graph.json")
+    unknown_source = _touch(build / "llvm-tsim" / "mixed" / "source" / "notes.md")
+
+    result = inventory_artifacts(benchmark, model=MODEL_IDS[0], tracked_paths=set())
+
+    assert {item.path for item in result.items} == {
+        current.resolve(), matrix.resolve(), source.resolve()
+    }
+    assert set(result.unknown_paths) == {
+        archived.resolve(), nested.resolve(), unknown_source.resolve()
+    }
