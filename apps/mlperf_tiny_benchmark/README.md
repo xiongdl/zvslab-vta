@@ -1,7 +1,7 @@
 # MLPerf Tiny VTA applications
 
-The benchmark contains six model applications. `image_classification_v1` is
-the read-only deployment template. `image_classification_v2`,
+The benchmark contains five standalone migrated applications and a separate
+read-only deployment template. `image_classification_v2`,
 `visual_wake_words_v1`, and `keyword_spotting_v1` own standalone deployment
 workflows with model preparation kept local to each application. Anomaly
 Detection V1 and Streaming Wakeword V1 now follow the standalone selected
@@ -32,13 +32,6 @@ currently have no real VTA partitions; each README explains CPU fallback and
 rejected tuning requests. Each standalone application README contains
 independent prerequisites, commands, expected results and a full manual
 acceptance procedure.
-
-## Existing application interfaces
-
-The remaining applications retain their current interfaces and model assets
-until their migration tasks complete:
-
-- [Image classification V1](image_classification_v1/README.md)
 
 Repository setup and simulator build instructions remain in
 [`scripts/README.md`](../../../scripts/README.md).
