@@ -12,39 +12,38 @@ import pytest
 ROOT = Path(__file__).resolve().parents[4]
 APP_ROOT = ROOT / "vta" / "apps" / "mlperf_tiny_benchmark"
 ARTIFACTS = {
-    "streaming_wakeword_v1": "streaming_wakeword_v1/tune/optimal/20261001T205934.834798Z/best-manifest.json",
+    "anomaly_detection_v1": "anomaly_detection_v1/tune/optimal/20261001T174411.872234Z/best-manifest.json",
 }
 DEPLOYMENT_REPORTS = {
-    "streaming_wakeword_v1": "streaming_wakeword_v1/tune/deployment-full.json",
+    "anomaly_detection_v1": "anomaly_detection_v1/tune/deployment-full.json",
 }
 
 
 def _capture(model_id):
-    from mlperf_tiny_benchmark.model_registry import MODEL_PIPELINES
-
-    directory, subdirectory, filename = MODEL_PIPELINES[model_id]
-    app = APP_ROOT / directory
+    app = APP_ROOT / model_id
     vta_python = str(ROOT / "vta" / "python")
     sys.path.insert(0, vta_python)
     if getattr(sys.modules.get("vta"), "__file__", None) is None:
         sys.modules.pop("vta", None)
     import vta.relay
 
-    for name in ("model_pipeline", "graph_artifacts"):
-        sys.modules.pop(name, None)
+    for name in tuple(sys.modules):
+        if name == "python" or name.startswith("python."):
+            sys.modules.pop(name, None)
     sys.path.insert(0, str(app))
     try:
-        pipeline = importlib.import_module("model_pipeline")
-        prepared = pipeline.prepare_model(app / subdirectory / filename)
-        from common.deployment_compute import capture_deployment_compute
+        deployment = importlib.import_module("python.deployment")
+        from python.vta_workload import capture_deployment_compute
 
+        prepared = deployment.prepare_model(deployment.MODEL_PATH, use_vta=True)
         return capture_deployment_compute(
             prepared.mixed_module, model_id, prepared.imported.model_sha256
         )
     finally:
         sys.path.pop(0)
-        for name in ("model_pipeline", "graph_artifacts"):
-            sys.modules.pop(name, None)
+        for name in tuple(sys.modules):
+            if name == "python" or name.startswith("python."):
+                sys.modules.pop(name, None)
         sys.path.remove(vta_python)
 
 
@@ -83,7 +82,7 @@ def test_committed_full_fusion_artifacts_migrate_only_for_actual_layer_identitie
 def test_historical_migration_rejects_missing_single_call_protocol(tmp_path):
     from common.schedule import migrate_legacy_full_fusion
 
-    source = APP_ROOT / ARTIFACTS["streaming_wakeword_v1"]
+    source = APP_ROOT / ARTIFACTS["anomaly_detection_v1"]
     value = json.loads(source.read_text(encoding="utf-8"))
     value.pop("measurement_protocol")
     missing_protocol = tmp_path / "best-manifest.json"
@@ -91,14 +90,14 @@ def test_historical_migration_rejects_missing_single_call_protocol(tmp_path):
 
     with pytest.raises(ValueError, match="single-call TSIM measurement protocol is missing"):
         migrate_legacy_full_fusion(
-            missing_protocol, _capture("streaming_wakeword_v1"), tmp_path / "out.log"
+            missing_protocol, _capture("anomaly_detection_v1"), tmp_path / "out.log"
         )
 
 
 def test_historical_migration_rejects_foreign_occurrence_before_reading_records(tmp_path):
     from common.schedule import migrate_legacy_full_fusion
 
-    source = APP_ROOT / ARTIFACTS["streaming_wakeword_v1"]
+    source = APP_ROOT / ARTIFACTS["anomaly_detection_v1"]
     value = json.loads(source.read_text(encoding="utf-8"))
     value["entries"][0]["symbol"] = "foreign_layer"
     tampered = tmp_path / "best-manifest.json"
@@ -106,14 +105,14 @@ def test_historical_migration_rejects_foreign_occurrence_before_reading_records(
 
     with pytest.raises(ValueError, match="legacy fusion identity does not match actual layer"):
         migrate_legacy_full_fusion(
-            tampered, _capture("streaming_wakeword_v1"), tmp_path / "out.log"
+            tampered, _capture("anomaly_detection_v1"), tmp_path / "out.log"
         )
 
 
 def test_historical_migration_rejects_a_tampered_fusion_constant(tmp_path):
     from common.schedule import migrate_legacy_full_fusion
 
-    source = APP_ROOT / ARTIFACTS["streaming_wakeword_v1"]
+    source = APP_ROOT / ARTIFACTS["anomaly_detection_v1"]
     manifest = json.loads(source.read_text(encoding="utf-8"))
     entry = manifest["entries"][0]
     result_path = source.parent / entry["result_json"]
@@ -125,14 +124,14 @@ def test_historical_migration_rejects_a_tampered_fusion_constant(tmp_path):
 
     with pytest.raises(ValueError, match="legacy fusion identity does not match actual layer"):
         migrate_legacy_full_fusion(
-            tampered, _capture("streaming_wakeword_v1"), tmp_path / "out.log"
+            tampered, _capture("anomaly_detection_v1"), tmp_path / "out.log"
         )
 
 
 def test_historical_migration_rejects_a_config_that_differs_from_native_record(tmp_path):
     from common.schedule import migrate_legacy_full_fusion
 
-    source = APP_ROOT / ARTIFACTS["streaming_wakeword_v1"]
+    source = APP_ROOT / ARTIFACTS["anomaly_detection_v1"]
     manifest = json.loads(source.read_text(encoding="utf-8"))
     entry = manifest["entries"][0]
     result_path = source.parent / entry["result_json"]
@@ -147,7 +146,7 @@ def test_historical_migration_rejects_a_config_that_differs_from_native_record(t
 
     with pytest.raises(ValueError, match="config differs from its native record"):
         migrate_legacy_full_fusion(
-            tampered, _capture("streaming_wakeword_v1"), tmp_path / "out.log"
+            tampered, _capture("anomaly_detection_v1"), tmp_path / "out.log"
         )
 
 
@@ -156,7 +155,7 @@ def test_historical_migration_rejects_tampered_native_record_without_touching_so
 ):
     from common.schedule import migrate_legacy_full_fusion
 
-    source = APP_ROOT / ARTIFACTS["streaming_wakeword_v1"]
+    source = APP_ROOT / ARTIFACTS["anomaly_detection_v1"]
     source_value = json.loads(source.read_text(encoding="utf-8"))
     temp_manifest = tmp_path / "best-manifest.json"
     entry = source_value["entries"][0]
@@ -169,6 +168,6 @@ def test_historical_migration_rejects_tampered_native_record_without_touching_so
 
     with pytest.raises(ValueError, match="native record hash mismatch"):
         migrate_legacy_full_fusion(
-            temp_manifest, _capture("streaming_wakeword_v1"), tmp_path / "out.log"
+            temp_manifest, _capture("anomaly_detection_v1"), tmp_path / "out.log"
         )
     assert (source.parent / entry["native_record"]).read_bytes() == original_native

@@ -1,202 +1,185 @@
-# MLPerf Tiny streaming wakeword v1 deployment
+# Streaming Wakeword V1
 
-This directory is a fixed deployment example for the committed MLPerf Tiny
-v1.4 streaming wakeword model. It is not an MLPerf benchmark run and makes no
-claim about MLPerf accuracy, performance, energy, or submission results.
-
-## Model and samples
-
-The immutable model is `model/str_ww_ref_model.tflite`, copied from the MLPerf
-Tiny v1.4 streaming wakeword training model. Its SHA-256 is
-`3af8550895ba7d5c584277102b5075c52dcfa63ba9d2b2240f37c4e6abd5dd2b`.
-The model input is an int8 `(1, 30, 1, 40)` log-mel tensor and its output is
-an int8 `(1, 3)` tensor. Output indices are fixed as follows:
-
-| Index | Class |
-| ---: | --- |
-| 0 | Marvin |
-| 1 | Silence |
-| 2 | Unknown |
-
-The repository owns exactly three deterministic mono, signed 16-bit, 16 kHz
-WAV samples in `samples/`, one for each class. `Marvin` and `Unknown` are the
-selected source utterances; `Silence` is a deterministic one-second segment
-from the selected background recording. `samples/manifest.json` records the
-source-relative provenance, byte lengths, and SHA-256 hashes. Runtime execution
-uses these committed files and does not read the local environment or download
-a dataset.
+This directory owns one standalone deployment and tuning workflow for the
+MLPerf Tiny streaming wakeword model. It prepares one mono, 16-bit, 16 kHz WAV
+as one `[1, 30, 1, 40]` int8 input, runs the model without carrying state, and
+prints the winning class index (`Marvin`, `Silence`, or `Unknown`) with its raw
+int8 scores. The default model and sample are the committed files under
+`model/` and `samples/`.
 
 ## Prerequisites
 
-Run all commands from the repository root with the pinned environment. The two
-assignment lines construct its repository-local path without making that
-environment an application asset:
-
-```bash
-export PYTHONPATH="$PWD/tvm/python:$PWD/vta/python"
-PINNED_ENV="$PWD/."
-PINNED_ENV="${PINNED_ENV}envs/tvm-vta-env"
-PYTHON="$PINNED_ENV/bin/python"
-```
-
-The focused tests need the checked-out TVM/VTA Python trees and the packages
-in the pinned environment. HOST and FSIM also need a built TVM and VTA runtime;
-FSIM needs `libvta_fsim`, and TSIM needs the hardware/TSIM build
-(`libvta_hw`). Build the required library when it is unavailable:
+Run commands from the repository root. Use the existing `.envs/tvm-vta-env`
+Python environment and initialized `tvm/` and `vta/` submodules. CPU targets
+need the TVM runtime and libraries. A VTA request also needs a built VTA
+extension, an absolute geometry file, and matching `VTA_BACKEND` and
+`--simulator` values. Build FSIM and TSIM with the repository instructions in
+[`scripts/README.md`](../../../../scripts/README.md).
 
 ```bash
 bash scripts/build_tvm_lib_macos.sh
-bash scripts/build_vta_lib.sh \
-  --config "$PWD/vta/config/vta_64mac.json" --backend all
+bash scripts/build_vta_lib.sh --config "$PWD/vta/config/vta_64mac.json" --backend all
 ```
 
-Generated graph artifacts are written below the application `build/`
-directory by default, or below `--output-dir`, and are not source assets.
+## Selected deployment
 
-The active contract is the shared absolute `VTA_CONFIG_FILE` plus
-`VTA_BACKEND=fsim|tsim`. The build script uses `--backend fsim|tsim|all` and
-this runner uses `--simulator host|fsim|tsim`; HOST is CPU reference execution,
-while `fsim` and `tsim` must match `VTA_BACKEND`. `TARGET=sim`, `TARGET=tsim`,
-and `--target libvta_*` are retired. FPGA backends such as `pynq` and `zcu104`
-remain deferred.
-
-## HOST
-
-HOST builds and reloads the reference and mixed bundles but executes only the
-CPU reference bundle; it does not initialize a simulator:
+The Makefile defaults to `TARGET=vta,llvm`, `SIMULATOR=fsim`, and the committed
+model and Marvin WAV. Each command builds and runs only its selected target.
 
 ```bash
+APP=vta/apps/mlperf_tiny_benchmark/streaming_wakeword_v1
+make -C "$APP" deploy TARGET=c
+make -C "$APP" deploy TARGET=llvm
+make -C "$APP" deploy TARGET=vta,c SIMULATOR=fsim
+make -C "$APP" deploy TARGET=vta,llvm SIMULATOR=fsim
+```
+
+For CPU-only use, remove VTA selectors from the environment:
+
+```bash
+env -u VTA_BACKEND -u VTA_CONFIG_FILE make -C "$APP" deploy TARGET=llvm
+```
+
+The direct CLI accepts the same four targets. Relative model, input, report,
+output, schedule, and workload paths resolve from the directory where the
+command is run.
+
+```bash
+PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/$APP" \
+  .envs/tvm-vta-env/bin/python "$APP/deploy.py" \
+  --model "$APP/model/str_ww_ref_model.tflite" \
+  --input "$APP/samples/silence-doing_the_dishes-00000000.wav" \
+  --target llvm --output-dir "$APP/build/custom" \
+  --deployment-report "$APP/build/custom/report.md"
+```
+
+A completed deployment prints the class index and label, then the three raw
+int8 scores. The Markdown report records model and input hashes, selected and
+actual execution targets, CPU/VTA placement, logical MAC counts, schedule
+coverage, raw output, and available measurements. CPU and FSIM cycle counts
+are reported as N/A.
+
+The VTA request currently finds **zero real VTA partitions** after exact QNN
+canonicalization. It runs the selected CPU fallback without loading an FSIM or
+TSIM simulator, reports zero VTA coverage and N/A cycles, and does not claim
+that model computation ran on VTA. Exact imported QNN and canonicalized CPU
+outputs match on all three committed WAVs. Per-axis multipliers, shifts, zero
+points, and output additions remain in the original canonicalized arithmetic;
+no neutral VTA probe is attached.
+
+## Workload export and tuning
+
+The workload interface is ready for snapshots containing actual outlined VTA
+functions and their captured int8 activations. This model currently produces
+no such functions. Consequently, workload export and schedule replay stop with
+`no real VTA workloads` before publishing a workload or schedule. There is no
+FSIM candidate log, TSIM winner, or replay result for this model today.
+
+Run these commands to verify the supported rejection paths:
+
+```bash
+CONFIG="$PWD/vta/config/vta_64mac.json" \
 VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  "$PYTHON" \
-  vta/apps/mlperf_tiny_benchmark/streaming_wakeword_v1/run.py \
-  --simulator host --host-codegen llvm
-```
+  make -C "$APP" deploy TARGET=vta,llvm SIMULATOR=fsim \
+  EXPORT_WORKLOADS="$APP/build/workloads.json"
 
-Use `--host-codegen c` for the C host variant. `--host-codegen all` is a
-matrix option for FSIM and TSIM; HOST is intentionally reference-only.
-
-## FSIM
-
-FSIM builds LLVM and C host variants in that order when `all` is selected,
-then executes the reference and VTA-partitioned bundles for all three samples
-with strict elementwise int8 output comparison:
-
-```bash
+CONFIG="$PWD/vta/config/vta_64mac.json" \
 VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  "$PYTHON" \
-  vta/apps/mlperf_tiny_benchmark/streaming_wakeword_v1/run.py \
-  --simulator fsim --host-codegen all
+  make -C "$APP" deploy TARGET=vta,llvm SIMULATOR=fsim \
+  SCHEDULE="$APP/tune/vta_64mac/best.log"
+
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+  make -C "$APP" tune
 ```
 
-The command reports each sample's reference and mixed top-1 class, artifact
-bundle paths, and positive FSIM profiler counters. A nonzero exit means a
-contract failed; output comparison is never approximate and errors are not
-swallowed. The current validated state is that HOST and the real FSIM
-LLVM/C matrix both pass: each host variant builds one non-empty VTA partition,
-all three committed samples compare elementwise equal, and profiler activity
-is positive for both variants. The earlier FSIM mismatch evidence is obsolete
-and must not be used to interpret a current run.
+Each command exits with an explicit `no real VTA workloads` error. The full
+`make tune` path stops during deployment workload export before FSIM search or
+TSIM selection. The separate `tune-fsim` and `tune-tsim` targets require a
+workload snapshot; a missing or empty snapshot is rejected by the loader. The
+standalone `tune.py` interface is:
 
-## TSIM
-
-TSIM must run in a fresh process with the TSIM configuration and requires the
-hardware/TSIM VTA library:
-
-```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  "$PYTHON" \
-  vta/apps/mlperf_tiny_benchmark/streaming_wakeword_v1/run.py \
-  --simulator tsim --host-codegen all
+```text
+--workloads PATH --workload -1|INDEX --simulator fsim|tsim
+--timeout SECONDS --output-logs PATH
+FSIM: --trial-batch N --min-successful N
+TSIM: --input-logs PATH
 ```
 
-TSIM validates the active VTA target, required registry functions, and a
-zeroed profiler before dispatch. It executes all three samples for each host
-variant and requires a positive integer `cycle_count`. Missing libraries or
-registries fail with an actionable diagnostic; they are not treated as a
-successful deployment.
+FSIM searches exported occurrences; TSIM measures those candidates and
+selects a schedule. Neither stage reloads a model or source WAV. Because no
+real VTA occurrence is available, no positive tuning invocation is valid for
+the committed model. Do not create empty logs or a synthetic winner to bypass
+the rejection.
 
-## Output interpretation
+## Manual acceptance
 
-Each successful single-codegen run prints three sample records, reference and
-mixed top-1 indices, profiler statistics, and the two authenticated artifact
-bundle paths. HOST reports `mixed top-1: not-run` and an empty profiler record.
-FSIM and TSIM report `mixed top-1` only after strict output equality and
-positive simulator activity have been verified. These records demonstrate
-reproducible graph construction and execution contracts only; they are not
-benchmark accuracy or performance measurements.
+From the repository root, execute the commands below. VTA build prerequisites
+are described above; all deployments use the committed default model unless a
+custom path is supplied.
 
-## Actual-deployment schedule tuning
+1. Verify both CPU code generators work without VTA environment variables:
 
-`run.py` is the only deployment entry point. It accepts one `--schedule PATH`
-native AutoTVM log; it automatically finds the same-stem JSON metadata. Omit
-`--schedule` or pass `none` for the default schedule. Partial snapshots apply
-to their covered actual occurrences, and other occurrences remain on defaults;
-coverage is printed. Schedule metadata binds model, geometry, prepared
-computation, occurrence, workload/configuration, and native-record hashes.
-Damaged or mismatched artifacts fail before execution. `--deployment-report
-PATH` writes provenance, coverage, output checks, and any measured evidence.
-On TSIM, `--validate-schedule-evidence` requires complete measured coverage
-and the strict per-layer cycle gate.
+   ```bash
+   env -u VTA_BACKEND -u VTA_CONFIG_FILE make -C "$APP" deploy TARGET=c
+   env -u VTA_BACKEND -u VTA_CONFIG_FILE make -C "$APP" deploy TARGET=llvm
+   ```
 
-The fixed model contract remains the three committed mono signed-16-bit 16 kHz
-WAV samples (`Marvin`, `Silence`, `Unknown`) and int8 `(1, 30, 1, 40)` input to
-int8 `(1, 3)` output. FSIM and TSIM require exact output equality with the CPU
-reference and positive simulator counters. Each run starts without carried
-recurrent state; schedule tuning does not change streaming state or input
-chunk boundaries.
+   Each command prints a class index and label plus three raw int8 scores.
 
-```bash
-MODEL_DIR=vta/apps/mlperf_tiny_benchmark/streaming_wakeword_v1
-export MODEL_DIR
-export VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json"
-export PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps"
+2. Verify both VTA host code generators and both backend selections use the
+   truthful CPU fallback. These four commands do not load simulator libraries:
 
-VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/run.py" \
-  --simulator fsim --schedule none
+   ```bash
+   for backend in fsim tsim; do
+     for host in c llvm; do
+       VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND="$backend" \
+         make -C "$APP" deploy TARGET="vta,$host" SIMULATOR="$backend" \
+         REPORT="$APP/build/$backend-$host.md"
+     done
+   done
+   ```
 
-VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/run.py" \
-  --simulator tsim --schedule /path/to/snapshot.log \
-  --deployment-report /tmp/wakeword-deployment.json
-```
+   Each report says `VTA coverage: 0`, identifies the selected host codegen as
+   the actual execution target, gives the fallback reason, and reports N/A
+   cycles. No simulator activity or VTA measurements are claimed.
 
-## Tune actual deployment occurrences
+3. Verify workload export and schedule replay reject the zero-workload model:
 
-`tune.py` captures actual prepared VTA layers and searches their schedule spaces
-through shared lowering. On TSIM, seed all default configurations, then apply
-that complete snapshot with `run.py` to create the alignment report. Search
-requires the passing report:
+   ```bash
+   VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+     make -C "$APP" deploy TARGET=vta,llvm SIMULATOR=fsim \
+     EXPORT_WORKLOADS="$APP/build/workloads.json"
+   VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+     make -C "$APP" deploy TARGET=vta,llvm SIMULATOR=fsim \
+     SCHEDULE="$APP/tune/vta_64mac/best.log"
+   ```
 
-```bash
-VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune.py" --seed --all
-VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/run.py" \
-  --simulator tsim \
-  --schedule "$MODEL_DIR/build/actual_compute_tuning/seed/seed.log" \
-  --validate-schedule-evidence \
-  --deployment-report "$MODEL_DIR/build/actual_compute_tuning/seed/deployment.json"
+   Both commands exit nonzero with `no real VTA workloads`; no workload file,
+   candidate log, schedule, or winner is published.
 
-VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune.py" \
-  --all --alignment-report "$MODEL_DIR/build/actual_compute_tuning/seed/deployment.json"
-```
+4. Verify the full tuning sequence stops at export, before search or selection:
 
-The seed snapshot is a `.log` and same-stem `.json` in
-`build/actual_compute_tuning/seed/`. Search defaults to 100 distinct
-configurations per batch, 20 successful candidates per selected occurrence,
-and 60/120-second FSIM/TSIM timeouts. It stops when the quota is met or the
-space is exhausted. Use `--workload-index N` or `--max-workloads N` for bounded
-search. Resume with `--resume-manifest PATH`, the same alignment report, and
-unchanged model, geometry, computation, occurrence selection, and options.
-Search ledgers and resume state are under
-`build/actual_compute_tuning/<run-id>/`.
+   ```bash
+   VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+     make -C "$APP" tune
+   ```
 
-Successful search runs export `best.log` plus same-stem metadata. Explicit
-exports use `--resume-manifest PATH --output-log PATH`; choose
-`--export-candidate CANDIDATE --workload-index OCCURRENCE` or `--export-best`.
-Candidate and best snapshots both use `run.py --schedule PATH`, and a
-single-occurrence candidate uses defaults elsewhere. Candidate measurement
-status is retained. Compatible saved complete-fusion manifests can be migrated
-with `common.schedule.migrate_legacy_full_fusion` after model, geometry, actual
-compute, configuration, native record, and historical TSIM protocol checks.
-No measurements are fabricated.
+   It exits nonzero with the same explicit reason and produces no tuning
+   result. A positive FSIM/TSIM/replay sequence cannot be demonstrated until
+   the compiler supports at least one real operation while preserving the
+   model's fixed-point arithmetic.
+
+5. Verify cleanup is repeatable and retains persistent assets and tune history:
+
+   ```bash
+   make -C "$APP" clean
+   make -C "$APP" clean
+   test -f "$APP/model/str_ww_ref_model.tflite"
+   test -f "$APP/samples/marvin-00176480_nohash_0.wav"
+   test -f "$APP/LICENSE.mlperf-tiny"
+   test -f "$APP/tune/REPORT-FULL.md"
+   test ! -e "$APP/build"
+   ```
+
+`clean` removes local build output and Python caches only. It keeps model,
+samples, license, and persistent tuning evidence.

@@ -8,9 +8,6 @@ from mlperf_tiny_benchmark.model_registry import MODEL_PIPELINES
 def test_registry_lists_exact_model_assets_in_application_order():
     expected = {
         "image_classification_v1": ("image_classification_v1", "model", "pretrainedResnet.tflite"),
-        "streaming_wakeword_v1": (
-            "streaming_wakeword_v1", "model", "str_ww_ref_model.tflite"
-        ),
     }
 
     assert MODEL_PIPELINES == expected

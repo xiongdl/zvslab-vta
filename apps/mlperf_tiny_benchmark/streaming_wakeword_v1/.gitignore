@@ -3,3 +3,10 @@ __pycache__/
 tests/__pycache__/
 *.py[cod]
 !samples/manifest.json
+
+# Saved schedule logs and their JSON sidecars are persistent tuning outputs.
+!tune/
+!tune/*/
+!tune/*/*.json
+!tune/*/*.log
+!tune/*/*.tmp

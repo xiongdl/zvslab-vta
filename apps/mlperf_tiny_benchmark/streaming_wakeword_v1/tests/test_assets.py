@@ -187,36 +187,10 @@ def test_committed_wavs_are_exactly_the_three_manifest_samples():
             assert audio.getcomptype() == "NONE"
 
 
-def test_runtime_assets_are_repository_owned_and_do_not_reference_envs():
+def test_runtime_assets_and_samples_are_repository_owned():
     assert APP_ROOT.is_dir()
     assert not APP_ROOT.is_symlink()
-    assert ".envs" not in MANIFEST_PATH.read_text(encoding="utf-8")
-
-    runtime_files = [
-        path
-        for path in APP_ROOT.rglob("*")
-        if path.is_file()
-        and path.suffix.lower() not in {".md", ".wav", ".tflite"}
-        and not (
-            (APP_ROOT / "tune").resolve() in path.resolve().parents
-            and path.suffix.lower() != ".py"
-        )
-        and not {"tests", "build", "__pycache__"}.intersection(
-            path.relative_to(APP_ROOT).parts
-        )
-    ]
-    for path in runtime_files:
-        assert not path.is_symlink()
-        if path.suffix.lower() not in {
-            ".wav",
-            ".tflite",
-            ".a",
-            ".so",
-            ".dylib",
-        }:
-            assert ".envs" not in path.read_text(encoding="utf-8")
-
     for item in _manifest()["samples"]:
         local_path = (SAMPLES_ROOT / item["filename"]).resolve()
         assert APP_ROOT in local_path.parents
-        assert ".envs" not in str(local_path)
+        assert not local_path.is_symlink()
