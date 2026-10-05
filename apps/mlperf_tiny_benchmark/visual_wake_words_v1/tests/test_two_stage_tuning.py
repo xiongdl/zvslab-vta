@@ -645,5 +645,4 @@ def test_real_fsim_tsim_schedule_replay_and_cycle_alignment(actual_workloads, wo
         assert row_symbols == set(report_cycles)
     for row in rows.values():
         standalone = int(row["measurement"]["results"][0]["costs"][0])
-        if workload == 0:
-            assert cycles_within_strict_ten_percent(report_cycles[row["symbol"]], standalone)
+        assert cycles_within_strict_ten_percent(report_cycles[row["symbol"]], standalone)

@@ -555,7 +555,10 @@ def run_selected(target="vta,llvm", simulator="fsim", schedule=None,
             for index, node in enumerate(nodes)
             if node.get("attrs", {}).get("global_symbol")
         }
-        for layer in compute.layers:
+        ordered_layers = sorted(
+            compute.layers, key=lambda layer: node_map.get(layer.symbol, len(nodes))
+        )
+        for layer in ordered_layers:
             index = node_map.get(layer.symbol)
             if index is None:
                 raise RuntimeError(f"TSIM debug graph omitted VTA symbol {layer.symbol}")
