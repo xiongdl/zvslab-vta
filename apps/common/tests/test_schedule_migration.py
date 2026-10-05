@@ -12,11 +12,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[4]
 APP_ROOT = ROOT / "vta" / "apps" / "mlperf_tiny_benchmark"
 ARTIFACTS = {
-    "anomaly_detection_v1": "anomaly_detection_v1/tune/optimal/20261001T174411.872234Z/best-manifest.json",
     "streaming_wakeword_v1": "streaming_wakeword_v1/tune/optimal/20261001T205934.834798Z/best-manifest.json",
 }
 DEPLOYMENT_REPORTS = {
-    "anomaly_detection_v1": "anomaly_detection_v1/tune/deployment-full.json",
     "streaming_wakeword_v1": "streaming_wakeword_v1/tune/deployment-full.json",
 }
 

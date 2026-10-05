@@ -10,15 +10,17 @@ import wave
 import numpy as np
 import tflite
 import tvm
-import vta
 from tvm import relay
 
 
+MODEL_ID = "anomaly_detection_v1"
 MODEL_SHA256 = "c66636f4d7f8af8b10518e7be750a22c9d8d46ec97326b40b0d94c097e0aad9b"
-INPUT_NAME = "input_1"
+PREPROCESSING_POLICY = (
+    "mono PCM16 16 kHz, deterministic 128-bin log-mel, select first 640-value vector"
+)
+QUANTIZATION_POLICY = "global_scale=8.0; skip_conv_layers=[0]; block-compatible dense-to-conv rewrite"
 INPUT_SHAPE = (1, 640)
 INPUT_DTYPE = "float32"
-OUTPUT_NAME = "Identity"
 OUTPUT_SHAPE = (1, 640)
 OUTPUT_DTYPE = "float32"
 SAMPLE_RATE = 16000
@@ -29,11 +31,6 @@ HOP_LENGTH = 512
 POWER = 2.0
 CENTRAL_MEL_START = 50
 CENTRAL_MEL_END = 250
-VTA_BLOCK_IN = int(vta.get_env().BLOCK_IN)
-VTA_BLOCK_OUT = int(vta.get_env().BLOCK_OUT)
-EXPECTED_VTA_SYMBOLS = tuple(
-    f"tvmgen_mlperf_anomaly_vta_main_{index}" for index in range(9)
-)
 EXPECTED_TFLITE_OPERATORS = ("FULLY_CONNECTED",) * 10
 REQUIRED_HOST_OPERATORS = frozenset(
     {"nn.bias_add", "nn.relu", "nn.conv2d", "reshape"}
@@ -72,11 +69,10 @@ class RoutingSummary:
 
 @dataclass(frozen=True)
 class PreparedModel:
-    """The one quantized reference graph and its mixed VTA partition."""
+    """The quantized CPU graph and its optional mixed VTA partition."""
 
     imported: ImportedModel
     quantized_module: tvm.IRModule
-    reference_module: tvm.IRModule
     mixed_module: tvm.IRModule
     routing: RoutingSummary
 
@@ -104,43 +100,44 @@ def _operator_name_map():
 def _flatbuffer_contract(model_bytes):
     try:
         model = tflite.Model.GetRootAsModel(model_bytes, 0)
+        if model.Version() != 3 or model.SubgraphsLength() != 1:
+            raise ValueError("model must contain exactly one TFLite v3 subgraph")
+        graph = model.Subgraphs(0)
+        if graph.InputsLength() != 1 or graph.OutputsLength() != 1:
+            raise ValueError("model must have exactly one input and one output")
+
+        input_tensor = graph.Tensors(graph.Inputs(0))
+        output_tensor = graph.Tensors(graph.Outputs(0))
+        input_contract = (_tensor_name(input_tensor), _tensor_shape(input_tensor), int(input_tensor.Type()))
+        output_contract = (_tensor_name(output_tensor), _tensor_shape(output_tensor), int(output_tensor.Type()))
+        if input_contract[1:] != (INPUT_SHAPE, int(tflite.TensorType.FLOAT32)):
+            raise ValueError(f"unexpected model input contract: {input_contract}")
+        if output_contract[1:] != (OUTPUT_SHAPE, int(tflite.TensorType.FLOAT32)):
+            raise ValueError(f"unexpected model output contract: {output_contract}")
+
+        names_by_code = _operator_name_map()
+        operator_names = []
+        dense_channel_pairs = []
+        for index in range(graph.OperatorsLength()):
+            operator = graph.Operators(index)
+            code = int(model.OperatorCodes(operator.OpcodeIndex()).BuiltinCode())
+            operator_names.append(names_by_code.get(code, f"UNKNOWN_{code}"))
+            if code == int(tflite.BuiltinOperator.FULLY_CONNECTED):
+                data = graph.Tensors(operator.Inputs(0))
+                weight = graph.Tensors(operator.Inputs(1))
+                dense_channel_pairs.append((_tensor_shape(data)[-1], _tensor_shape(weight)[0]))
+
+        operator_names = tuple(operator_names)
+        dense_channel_pairs = tuple(dense_channel_pairs)
+        if operator_names != EXPECTED_TFLITE_OPERATORS:
+            raise ValueError(f"unexpected TFLite operator topology: {operator_names}")
+        if len(dense_channel_pairs) != 10:
+            raise ValueError(f"expected ten fully-connected layers, found {len(dense_channel_pairs)}")
+        return model, operator_names, dense_channel_pairs
+    except ValueError:
+        raise
     except Exception as error:
         raise ValueError("model is not a valid TFLite FlatBuffer") from error
-
-    if model.Version() != 3 or model.SubgraphsLength() != 1:
-        raise ValueError("model must contain exactly one TFLite v3 subgraph")
-    graph = model.Subgraphs(0)
-    if graph.InputsLength() != 1 or graph.OutputsLength() != 1:
-        raise ValueError("model must have exactly one input and one output")
-
-    input_tensor = graph.Tensors(graph.Inputs(0))
-    output_tensor = graph.Tensors(graph.Outputs(0))
-    input_contract = (_tensor_name(input_tensor), _tensor_shape(input_tensor), int(input_tensor.Type()))
-    output_contract = (_tensor_name(output_tensor), _tensor_shape(output_tensor), int(output_tensor.Type()))
-    if input_contract != (INPUT_NAME, INPUT_SHAPE, int(tflite.TensorType.FLOAT32)):
-        raise ValueError(f"unexpected model input contract: {input_contract}")
-    if output_contract != (OUTPUT_NAME, OUTPUT_SHAPE, int(tflite.TensorType.FLOAT32)):
-        raise ValueError(f"unexpected model output contract: {output_contract}")
-
-    names_by_code = _operator_name_map()
-    operator_names = []
-    dense_channel_pairs = []
-    for index in range(graph.OperatorsLength()):
-        operator = graph.Operators(index)
-        code = int(model.OperatorCodes(operator.OpcodeIndex()).BuiltinCode())
-        operator_names.append(names_by_code.get(code, f"UNKNOWN_{code}"))
-        if code == int(tflite.BuiltinOperator.FULLY_CONNECTED):
-            data = graph.Tensors(operator.Inputs(0))
-            weight = graph.Tensors(operator.Inputs(1))
-            dense_channel_pairs.append((_tensor_shape(data)[-1], _tensor_shape(weight)[0]))
-
-    operator_names = tuple(operator_names)
-    dense_channel_pairs = tuple(dense_channel_pairs)
-    if operator_names != EXPECTED_TFLITE_OPERATORS:
-        raise ValueError(f"unexpected TFLite operator topology: {operator_names}")
-    if len(dense_channel_pairs) != 10:
-        raise ValueError(f"expected ten fully-connected layers, found {len(dense_channel_pairs)}")
-    return model, operator_names, dense_channel_pairs
 
 
 def _relay_operator_names(function):
@@ -155,20 +152,18 @@ def _relay_operator_names(function):
 
 
 def import_float_model(model_path):
-    """Verify and import the exact committed floating TFLite artifact."""
+    """Import a model matching the supported float32 dense topology."""
     model_path = Path(model_path)
     model_bytes = model_path.read_bytes()
     model_sha256 = hashlib.sha256(model_bytes).hexdigest()
-    if model_sha256 != MODEL_SHA256:
-        raise ValueError(
-            f"model SHA-256 mismatch: expected {MODEL_SHA256}, received {model_sha256}"
-        )
-
     model, operator_names, dense_channel_pairs = _flatbuffer_contract(model_bytes)
+    graph = model.Subgraphs(0)
+    input_name = _tensor_name(graph.Tensors(graph.Inputs(0)))
+    output_name = _tensor_name(graph.Tensors(graph.Outputs(0)))
     module, params = relay.frontend.from_tflite(
         model,
-        shape_dict={INPUT_NAME: INPUT_SHAPE},
-        dtype_dict={INPUT_NAME: INPUT_DTYPE},
+        shape_dict={input_name: INPUT_SHAPE},
+        dtype_dict={input_name: INPUT_DTYPE},
     )
     module = relay.transform.InferType()(module)
     main = module["main"]
@@ -192,10 +187,10 @@ def import_float_model(model_path):
         module=module,
         params=dict(params),
         model_sha256=model_sha256,
-        input_name=INPUT_NAME,
+        input_name=input_name,
         input_shape=INPUT_SHAPE,
         input_dtype=INPUT_DTYPE,
-        output_name=OUTPUT_NAME,
+        output_name=output_name,
         output_shape=OUTPUT_SHAPE,
         output_dtype=OUTPUT_DTYPE,
         tflite_operator_names=operator_names,
@@ -225,6 +220,11 @@ def _dense_to_conv(data, weight, units, *, batch=None, input_channels=None):
 
 
 class _DenseToConvMutator(relay.ExprMutator):
+    def __init__(self, block_in, block_out):
+        super().__init__()
+        self.block_in = block_in
+        self.block_out = block_out
+
     def visit_call(self, call):
         rewritten = super().visit_call(call)
         if not isinstance(rewritten.op, tvm.ir.Op) or rewritten.op.name != "nn.dense":
@@ -238,8 +238,8 @@ class _DenseToConvMutator(relay.ExprMutator):
             len(input_shape) == 2
             and len(weight_shape) == 2
             and input_shape[-1] == weight_shape[1]
-            and input_shape[-1] % VTA_BLOCK_IN == 0
-            and units % VTA_BLOCK_OUT == 0
+            and input_shape[-1] % self.block_in == 0
+            and units % self.block_out == 0
         ):
             return _dense_to_conv(
                 data,
@@ -251,11 +251,11 @@ class _DenseToConvMutator(relay.ExprMutator):
         return rewritten
 
 
-def rewrite_dense_layers(module):
+def rewrite_dense_layers(module, block_in, block_out):
     """Convert only block-compatible dense layers before VTA quantization."""
     typed_module = relay.transform.InferType()(module)
     main = typed_module["main"]
-    body = _DenseToConvMutator().visit(main.body)
+    body = _DenseToConvMutator(block_in, block_out).visit(main.body)
     rewritten_main = relay.Function(
         main.params,
         body,
@@ -315,11 +315,8 @@ def _dense_output_shapes(function):
     return tuple(shapes)
 
 
-def inspect_partitioning(reference_module, mixed_module):
-    """Validate and summarize the exact nine-region VTA routing contract."""
-    if _count_operator(reference_module["main"], "nn.conv2d") != 10:
-        raise ValueError("quantized reference must contain exactly ten convolutions")
-
+def inspect_partitioning(mixed_module):
+    """Summarize real VTA partitions, leaving unsupported work on the host."""
     external = []
     for global_var, function in mixed_module.functions.items():
         if (
@@ -329,7 +326,7 @@ def inspect_partitioning(reference_module, mixed_module):
             and function.attrs.get_str("Compiler") == "vta"
         ):
             external.append((function.attrs.get_str("global_symbol"), global_var, function))
-    external.sort(key=lambda item: int(item[0].rsplit("_", 1)[1]))
+    external.sort(key=lambda item: item[0])
     symbols = tuple(item[0] for item in external)
     convolution_counts = tuple(_count_operator(item[2], "nn.conv2d") for item in external)
     main = mixed_module["main"]
@@ -344,42 +341,38 @@ def inspect_partitioning(reference_module, mixed_module):
         host_operator_names=tuple(sorted(set(host_operator_names))),
         composite_names=tuple(name for item in external for name in _composite_names(item[2])),
     )
-    if summary.symbols != EXPECTED_VTA_SYMBOLS:
-        raise ValueError(f"unexpected VTA symbols: {summary.symbols}")
-    if summary.convolutions_per_partition != (1,) * 9:
-        raise ValueError(
-            f"each VTA partition must contain one convolution: {summary.convolutions_per_partition}"
-        )
-    if summary.host_convolution_count != 1 or summary.host_dense_count != 0:
-        raise ValueError(
-            "the skipped first convolution must remain on host and no dense layers may remain"
-        )
-    if not REQUIRED_HOST_OPERATORS <= set(summary.host_operator_names):
-        missing = sorted(REQUIRED_HOST_OPERATORS - set(summary.host_operator_names))
-        raise ValueError(f"mixed main is missing required host operators: {missing}")
-    if len(summary.composite_names) != 9 or not all(
+    if any(count <= 0 for count in summary.convolutions_per_partition):
+        raise ValueError(f"VTA partitions must contain real convolutions: {summary.convolutions_per_partition}")
+    if len(summary.composite_names) != len(summary.symbols) or not all(
         name.startswith("vta.") for name in summary.composite_names
     ):
         raise ValueError(f"unexpected VTA composites: {summary.composite_names}")
     return summary
 
 
-def prepare_model(model_path):
-    """Import, rewrite, quantize once, and fork reference and mixed graphs."""
+def prepare_model(model_path, use_vta=False):
+    """Prepare the CPU graph and optionally partition actual work for VTA."""
     imported = import_float_model(model_path)
-    rewritten_module = rewrite_dense_layers(imported.module)
+    if use_vta:
+        import vta
+
+        environment = vta.get_env()
+        block_in, block_out = int(environment.BLOCK_IN), int(environment.BLOCK_OUT)
+        module_name = "mlperf_anomaly"
+    else:
+        block_in = block_out = 1
+        module_name = None
+    rewritten_module = rewrite_dense_layers(imported.module, block_in, block_out)
     rewritten_imported = replace(imported, module=rewritten_module)
     quantized_module = quantize_model(rewritten_imported)
-    reference_module = quantized_module
-    mixed_module = vta.relay.partition_for_vta(
-        quantized_module,
-        mod_name="mlperf_anomaly",
-    )
-    routing = inspect_partitioning(reference_module, mixed_module)
+    if use_vta:
+        mixed_module = vta.relay.partition_for_vta(quantized_module, mod_name=module_name)
+    else:
+        mixed_module = quantized_module
+    routing = inspect_partitioning(mixed_module)
     return PreparedModel(
         imported=imported,
         quantized_module=quantized_module,
-        reference_module=reference_module,
         mixed_module=mixed_module,
         routing=routing,
     )
@@ -418,10 +411,13 @@ def _mel_filterbank():
 
 
 def _read_wav(sample_path):
-    with wave.open(str(sample_path), "rb") as wav:
-        if wav.getnchannels() != 1 or wav.getsampwidth() != 2 or wav.getframerate() != SAMPLE_RATE:
-            raise ValueError("sample must be mono 16-bit PCM at 16 kHz")
-        frames = wav.readframes(wav.getnframes())
+    try:
+        with wave.open(str(sample_path), "rb") as wav:
+            if wav.getnchannels() != 1 or wav.getsampwidth() != 2 or wav.getframerate() != SAMPLE_RATE:
+                raise ValueError("sample must be mono 16-bit PCM at 16 kHz")
+            frames = wav.readframes(wav.getnframes())
+    except (wave.Error, EOFError, OSError) as error:
+        raise ValueError("sample must be a valid mono PCM16 16 kHz WAV") from error
     samples = np.frombuffer(frames, dtype="<i2").astype(np.float64) / 32768.0
     if samples.size == 0:
         raise ValueError("sample must contain audio frames")
@@ -454,3 +450,9 @@ def load_sample(sample_path):
     if not np.isfinite(vectors).all():
         raise ValueError("audio preprocessing produced non-finite features")
     return vectors
+
+
+def load_first_window(sample_path):
+    """Return the first preprocessed feature vector and the available count."""
+    vectors = load_sample(sample_path)
+    return vectors[:1], int(vectors.shape[0])

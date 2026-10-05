@@ -1,1 +1,12 @@
-!samples/manifest.json
+# Deployment artifacts and Python caches are local build output.
+/build/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# Saved schedule logs and their JSON sidecars are versioned deliverables.
+!tune/
+!tune/*/
+!tune/*/*.json
+!tune/*/*.log
+!tune/*/*.tmp
