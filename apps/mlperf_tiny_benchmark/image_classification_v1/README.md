@@ -101,6 +101,13 @@ defaults remain relative to the model directory. Variables are `MODEL`,
 and TVM/VTA libraries; it does not create environments, install packages, or
 build libraries.
 
+`make clean` removes only this app's `build/`, `__pycache__/` directories, and
+`.pyc`/`.pyo` files. It preserves `tune/`, `model/`, and `samples/`; a custom
+`OUTPUT_DIR` outside this app remains untouched. It does not need the project
+Python, TVM/VTA libraries, configuration, or model files, and can be run more
+than once. Directory symlinks are not followed when removing caches; a `build/`
+symlink is unlinked without deleting its external target.
+
 `--export-workloads PATH` optionally saves the actual outlined VTA Relay
 functions, their constants, deployment input activations, and hardware/config
 provenance as a validated JSON snapshot. It requires a VTA target. The export

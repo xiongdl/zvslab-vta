@@ -82,6 +82,11 @@ run_tsim() {
 }
 
 case "${1:-}" in
+    clean)
+        rm -rf -- "$app_dir/build"
+        find -P "$app_dir" -type d -name __pycache__ -prune -exec rm -rf -- {} +
+        find -P "$app_dir" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+        ;;
     deploy)
         output_dir="${OUTPUT_DIR:-${app_dir}/build}"
         output_dir="$(absolute_path "$output_dir")"

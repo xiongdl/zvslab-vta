@@ -39,4 +39,7 @@ tune-tsim:
 tune:
 	@$(APP_DIR)/scripts/make_tasks.sh tune
 
-.PHONY: deploy tune-fsim tune-tsim tune
+clean:
+	@$(APP_DIR)/scripts/make_tasks.sh clean
+
+.PHONY: deploy tune-fsim tune-tsim tune clean
