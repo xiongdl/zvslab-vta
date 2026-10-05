@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-app_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+app_dir="$(cd -- "${script_dir}/.." && pwd -P)"
 repo_dir="$(cd -- "${app_dir}/../../../../" && pwd -P)"
 invocation_dir="$PWD"
 python_bin="${PYTHON:-${repo_dir}/.envs/tvm-vta-env/bin/python}"
@@ -102,7 +103,7 @@ case "${1:-}" in
         if [[ -n "${SCHEDULE:-}" ]]; then args+=(--schedule "$(absolute_path "$SCHEDULE")"); fi
         if [[ -n "${REPORT:-}" ]]; then args+=(--deployment-report "$(absolute_path "$REPORT")"); fi
         if [[ -n "${EXPORT_WORKLOADS:-}" ]]; then args+=(--export-workloads "$(absolute_path "$EXPORT_WORKLOADS")"); fi
-        run_python "$backend" "$app_dir/run.py" "${args[@]}"
+        run_python "$backend" "$app_dir/deploy.py" "${args[@]}"
         ;;
     tune-fsim)
         require_vta_runtime
@@ -130,7 +131,7 @@ case "${1:-}" in
         best_logs="${output_logs}/best.log"
         if [[ -z "${WORKLOADS:-}" ]]; then
             mkdir -p "${output_dir}/deploy"
-            run_python fsim "$app_dir/run.py" \
+            run_python fsim "$app_dir/deploy.py" \
                 --model "$model" --input "$input_image" \
                 --target vta,llvm --simulator fsim \
                 --output-dir "${output_dir}/deploy" --export-workloads "$workloads"

@@ -50,7 +50,7 @@ class MakeWorkflowTests(unittest.TestCase):
         result = self.invoke("deploy", cwd=APP_DIR, TARGET="llvm")
         self.assertEqual(result.returncode, 0, result.stderr)
         [call] = self.records()
-        self.assertIn(str(APP_DIR / "run.py"), call["args"])
+        self.assertIn(str(APP_DIR / "deploy.py"), call["args"])
         self.assertEqual(call["backend"], None)
         self.assertIn("--target", call["args"])
         self.assertIn("llvm", call["args"])
@@ -122,7 +122,7 @@ class MakeWorkflowTests(unittest.TestCase):
         self.assertEqual(len(calls), 3)
         export, fsim, tsim = calls
         self.assertEqual([call["backend"] for call in calls], ["fsim", "fsim", "tsim"])
-        self.assertIn(str(APP_DIR / "run.py"), export["args"])
+        self.assertIn(str(APP_DIR / "deploy.py"), export["args"])
         self.assertIn("--export-workloads", export["args"])
         self.assertIn(str(output_dir / "workloads.json"), export["args"])
         self.assertIn(str(APP_DIR / "tune" / "vta_64mac" / "fsim.tmp"), fsim["args"])
@@ -138,7 +138,7 @@ class MakeWorkflowTests(unittest.TestCase):
         self.assertFalse(self.record.exists())
 
     def test_full_tune_stops_when_workload_export_fails(self):
-        self.fail_on = "run.py"
+        self.fail_on = "deploy.py"
         result = self.invoke("tune", cwd=APP_DIR, OUTPUT_DIR=self.root / "failed run")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Error 19", result.stderr)

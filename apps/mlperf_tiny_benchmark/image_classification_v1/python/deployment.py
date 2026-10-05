@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Build and execute one selected MLPerf Tiny ResNet-8 target."""
+"""Compile, execute, and report one selected ResNet-8 deployment."""
 
 import json
 import hashlib
@@ -31,14 +31,14 @@ from tvm import relay
 from tvm.relay.backend import te_compiler
 from tvm.contrib import graph_executor
 
-from graph_artifacts import export_graph_bundle
-from model_pipeline import load_sample, prepare_model
-from deployment_compute import capture_deployment_compute
-from deployment import lower_selected_deployment
-from schedule import load_schedule_snapshot
+from .graph_artifacts import export_graph_bundle
+from .model import load_sample, prepare_model
+from .vta_workload import capture_deployment_compute
+from .schedule_io import load_schedule_snapshot
+from .autotvm_dispatch import config_space_context
 
 
-APP_ROOT = Path(__file__).resolve().parent
+APP_ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = APP_ROOT / "model" / "pretrainedResnet.tflite"
 DEFAULT_OUTPUT_DIR = APP_ROOT / "build"
 MODEL_ID = "image_classification_v1"
@@ -364,7 +364,7 @@ def _export_pre_schedule_workloads(prepared, compute, image, input_path,
     """Capture true VTA activations from a temporary default-schedule graph."""
     import vta
     from tvm.contrib.debugger import debug_executor
-    from workloads import (
+    from .vta_workload import (
         make_document,
         make_layer_record,
         portable_config_space_identity,
@@ -465,7 +465,7 @@ def run_selected(target="vta,llvm", simulator="fsim", schedule=None,
     compute = None
     if use_vta:
         import vta
-        from deployment_compute import capture_deployment_compute
+        from .vta_workload import capture_deployment_compute
 
         compute = capture_deployment_compute(module, MODEL_ID, prepared.imported.model_sha256)
         selected = load_schedule_snapshot(schedule, compute)
@@ -618,3 +618,62 @@ def write_deployment_report(result, report_path):
         output.extend(["", "## Simulator counters", "", "```json", json.dumps(result.profiler_stats, indent=2, sort_keys=True), "```"])
     report_path.write_text("\n".join(output) + "\n", encoding="utf-8")
     return report_path
+
+
+def cycles_within_strict_ten_percent(deployed_cycles, autotvm_cycles):
+    """Return whether positive integer cycle counts differ by strictly under 10%."""
+    for label, value in (("deployment", deployed_cycles), ("AutoTVM", autotvm_cycles)):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{label} cycle count must be a positive integer")
+    return 10 * abs(deployed_cycles - autotvm_cycles) < autotvm_cycles
+
+
+def occurrence_config_context(layer, selected):
+    """Install selected config entities for a layer, restoring dispatch on exit."""
+    return config_space_context(layer.config_spaces, selected.configs)
+
+
+def lower_selected_deployment(module, deployment, snapshot, compiler, compiler_config):
+    """Lower each outlined real Relay function under its occurrence config.
+
+    A fresh dispatch context is used per occurrence so repeated AutoTVM
+    workloads can carry different configs without leaking between layers.
+    Unselected occurrences use VTA's ordinary default dispatch.
+    """
+    from tvm import relay
+
+    from vta.relay import transform
+
+    functions = transform._collect_vta_relay_functions(module)
+    for function in functions:
+        transform._validate_vta_function(function, compiler_config)
+    if not functions:
+        raise ValueError("prepared module has no VTA functions to lower")
+
+    outlined = relay.transform.OutlineCompilerFunctionsWithExistingGlobalSymbols("vta")(module)
+    rows = transform._global_vta_relay_functions(outlined)
+    global_handles = {function.handle.value for _, function in rows}
+    nested = [
+        function for function in transform._collect_vta_relay_functions(outlined)
+        if function.handle.value not in global_handles
+    ]
+    if nested:
+        raise ValueError("all nested Compiler='vta' functions must be directly outlineable")
+    if len(rows) != len(deployment.layers):
+        raise ValueError("prepared VTA occurrence count changed after schedule validation")
+    for occurrence, ((global_var, function), layer) in enumerate(zip(rows, deployment.layers)):
+        symbol = function.attrs.get_str("global_symbol")
+        if symbol != layer.symbol or layer.occurrence != occurrence:
+            raise ValueError("prepared VTA occurrence order changed after schedule validation")
+        compiler.clear()
+        selected = snapshot.selected.get(occurrence)
+        try:
+            if selected is None:
+                primfunc = transform.lower_vta_function(function, compiler_config)
+            else:
+                with occurrence_config_context(layer, selected):
+                    primfunc = transform.lower_vta_function(function, compiler_config)
+            outlined.update_func(global_var, primfunc)
+        finally:
+            compiler.clear()
+    return outlined

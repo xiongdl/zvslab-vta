@@ -28,7 +28,7 @@ import pytest
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
-ARTIFACTS_PATH = APP_ROOT / "graph_artifacts.py"
+ARTIFACTS_PATH = APP_ROOT / "python" / "graph_artifacts.py"
 
 
 @pytest.fixture(scope="module")

@@ -15,15 +15,11 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_workloads():
-    sys.path.insert(0, str(APP_ROOT))
-    try:
-        spec = importlib.util.spec_from_file_location("ic_v1_workloads", APP_ROOT / "workloads.py")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
-        return module
-    finally:
-        sys.path.pop(0)
+    if str(APP_ROOT) not in sys.path:
+        sys.path.insert(0, str(APP_ROOT))
+    import importlib
+
+    return importlib.import_module("python.vta_workload")
 
 
 def test_relay_function_and_activation_roundtrip_without_model_or_image(tmp_path):
@@ -108,11 +104,9 @@ def test_real_fsim_export_recovers_all_layers_without_model_or_image(tmp_path):
 
     sys.path.insert(0, str(APP_ROOT))
     try:
-        spec = importlib.util.spec_from_file_location("ic_v1_workload_runtime", APP_ROOT / "runtime.py")
-        runtime = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = runtime
-        spec.loader.exec_module(runtime)
-        from deployment_compute import capture_deployment_compute
+        import importlib
+        runtime = importlib.import_module("python.deployment")
+        from python.vta_workload import capture_deployment_compute
 
         prepared = runtime.prepare_model(runtime.MODEL_PATH)
         original = capture_deployment_compute(
@@ -148,7 +142,7 @@ def test_real_fsim_export_recovers_all_layers_without_model_or_image(tmp_path):
         [str(APP_ROOT.parents[3] / "tvm" / "python"), str(APP_ROOT.parents[2] / "python"), str(APP_ROOT)]
     )
     code = (
-        "from workloads import load_workloads; "
+        "from python.vta_workload import load_workloads; "
         f"snapshot = load_workloads({str(path)!r}); "
         "assert len(snapshot.layers) == 8"
     )

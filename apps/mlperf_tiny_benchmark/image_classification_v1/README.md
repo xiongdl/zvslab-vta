@@ -6,6 +6,19 @@ and runs one image. It prints a CIFAR-10 class and raw output scores. Scores are
 not calibrated probabilities, and this example does not claim an official
 MLPerf result.
 
+## Code layout
+
+`deploy.py` and `tune.py` are the command-line boundaries. The `python/` package
+contains the implementation: `model.py` owns model import, quantization,
+partitioning, and image input; `deployment.py` owns compile/run/reporting;
+`vta_workload.py` owns workload capture and serialization;
+`autotvm_dispatch.py` binds occurrence-specific schedules; `tuning.py` owns
+FSIM/TSIM orchestration and candidate logs; `measurement.py` isolates candidate
+measurements; `schedule_io.py` validates schedule snapshots;
+`tuning_storage.py` publishes tuning files transactionally; and
+`graph_artifacts.py` owns compiled graph bundles. `scripts/make_tasks.sh` owns
+Makefile orchestration.
+
 ## Requirements
 
 The application code, ResNet-8 model, and default input image are contained in
@@ -34,14 +47,14 @@ APP=vta/apps/mlperf_tiny_benchmark/image_classification_v1
 
 ```bash
 # CPU-only deployment; no VTA_BACKEND is needed.
-env -u VTA_BACKEND ./.envs/tvm-vta-env/bin/python "$APP/run.py" --target llvm
+env -u VTA_BACKEND ./.envs/tvm-vta-env/bin/python "$APP/deploy.py" --target llvm
 
 # Choose one VTA plus CPU target and backend.
-VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$APP/run.py" \
+VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$APP/deploy.py" \
   --target vta,llvm --simulator fsim
 
 # C host codegen with TSIM and a selected schedule.
-VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$APP/run.py" \
+VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$APP/deploy.py" \
   --target vta,c --simulator tsim --schedule "$APP/tune/vta_64mac/best.log" \
   --deployment-report "$APP/build/deployment-report.md"
 ```
@@ -80,7 +93,7 @@ make deploy MODEL='models/custom resnet.tflite' INPUT='images/cat one.png' \
 ```
 
 Run `make deploy` from this directory, or use `make -C` from another
-directory. Explicit relative paths are resolved from Make's working directory;
+directory. The Makefile delegates shell orchestration to `scripts/make_tasks.sh`. Explicit relative paths are resolved from Make's working directory;
 defaults remain relative to the model directory. Variables are `MODEL`,
 `INPUT`, `TARGET`, `SIMULATOR`, `SCHEDULE`, `OUTPUT_DIR`, `REPORT`,
 `EXPORT_WORKLOADS`, and `CONFIG`. `CONFIG` defaults to the repository's
@@ -98,7 +111,7 @@ model or image. The loader checks the snapshot, hardware geometry, and current
 VTA config spaces before use. For example:
 
 ```bash
-VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$APP/run.py" \
+VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$APP/deploy.py" \
   --target vta,llvm --simulator fsim \
   --export-workloads "$APP/build/workloads.json"
 ```
@@ -138,7 +151,7 @@ two stages in separate processes with matching `VTA_BACKEND` values:
 
 ```bash
 # Export the model's actual VTA workloads during normal deployment.
-VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$APP/run.py" \
+VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$APP/deploy.py" \
   --target vta,llvm --simulator fsim \
   --export-workloads "$APP/build/workloads.json"
 
@@ -155,7 +168,7 @@ VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$APP/tune.py" \
   --timeout 120 --output-logs "$APP/tune/vta_64mac/best.log"
 
 # Replay the selected schedules in normal model deployment.
-VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$APP/run.py" \
+VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$APP/deploy.py" \
   --target vta,llvm --simulator tsim \
   --schedule "$APP/tune/vta_64mac/best.log"
 ```
@@ -166,7 +179,7 @@ occurrence, for example `--workload 0`. FSIM defaults are
 to `--timeout 120` and requires `--input-logs`. FSIM output contains grouped
 successful candidates in native AutoTVM format and must not be passed directly
 to deployment. TSIM output contains one cycle-minimum schedule for each selected
-occurrence and can be passed to `run.py --schedule`. Both logs have same-stem
+occurrence and can be passed to `deploy.py --schedule`. Both logs have same-stem
 JSON metadata.
 
 FSIM continues after a candidate compile error, output mismatch, timeout, or

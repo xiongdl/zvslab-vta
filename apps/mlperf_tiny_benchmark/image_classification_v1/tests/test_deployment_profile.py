@@ -15,17 +15,16 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 def _load(path, name):
     sys.path.insert(0, str(APP_ROOT))
     try:
-        spec = importlib.util.spec_from_file_location(name, APP_ROOT / path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        spec.loader.exec_module(module)
-        return module
+        import importlib
+        module_name = "python.deployment" if path in ("python/deployment.py",) else "deploy"
+        return importlib.import_module(module_name)
     finally:
         sys.path.pop(0)
 
 
+
 def test_markdown_report_documents_cpu_and_fsim_unavailable_measurements(tmp_path):
-    runtime = _load("runtime.py", "ic_v1_profile_runtime")
+    runtime = _load("python/deployment.py", "ic_v1_profile_runtime")
     result = SimpleNamespace(
         target="vta,c", simulator="fsim", model_path=Path("resnet.tflite"),
         input_path=Path("image.png"), model_sha256="a" * 64, input_sha256="b" * 64,
@@ -48,7 +47,7 @@ def test_markdown_report_documents_cpu_and_fsim_unavailable_measurements(tmp_pat
 
 
 def test_tsim_report_calculates_layer_and_whole_model_utilization(tmp_path, monkeypatch):
-    runtime = _load("runtime.py", "ic_v1_tsim_profile_runtime")
+    runtime = _load("python/deployment.py", "ic_v1_tsim_profile_runtime")
     monkeypatch.setenv("VTA_CONFIG_FILE", str(APP_ROOT.parents[2] / "config" / "vta_64mac.json"))
     result = SimpleNamespace(
         target="vta,llvm", simulator="tsim", model_path=Path("resnet.tflite"),
@@ -67,7 +66,7 @@ def test_tsim_report_calculates_layer_and_whole_model_utilization(tmp_path, monk
 
 
 def test_conv_mac_count_uses_per_group_kernel_input_extent():
-    runtime = _load("runtime.py", "ic_v1_mac_arithmetic_runtime")
+    runtime = _load("python/deployment.py", "ic_v1_mac_arithmetic_runtime")
     call = SimpleNamespace(
         checked_type=SimpleNamespace(shape=(1, 8, 8, 16)),
         args=(None, SimpleNamespace(checked_type=SimpleNamespace(shape=(3, 3, 4, 16)))),
@@ -77,7 +76,7 @@ def test_conv_mac_count_uses_per_group_kernel_input_extent():
 
 
 def test_parser_accepts_four_targets_and_rejects_retired_flags():
-    runner = _load("run.py", "ic_v1_cli_contract")
+    runner = _load("deploy.py", "ic_v1_cli_contract")
     parser = runner._parser()
     assert parser.parse_args([]).target == "vta,llvm"
     for target in ("c", "llvm", "vta,c", "vta,llvm"):
@@ -88,16 +87,16 @@ def test_parser_accepts_four_targets_and_rejects_retired_flags():
 
 
 def test_cpu_entrypoint_needs_no_vta_backend():
-    runner = _load("run.py", "ic_v1_cpu_entrypoint")
+    runner = _load("deploy.py", "ic_v1_cpu_entrypoint")
     result = SimpleNamespace()
     calls = []
     runtime = SimpleNamespace(
         run_selected=lambda **kwargs: calls.append(kwargs) or result,
         write_deployment_report=lambda *_: None,
     )
-    sys.modules["runtime"] = runtime
+    sys.modules["python"].deployment = runtime
     try:
         assert runner.main(["--target", "llvm"]) == 0
     finally:
-        sys.modules.pop("runtime", None)
+        del sys.modules["python"].deployment
     assert calls[0]["target"] == "llvm"

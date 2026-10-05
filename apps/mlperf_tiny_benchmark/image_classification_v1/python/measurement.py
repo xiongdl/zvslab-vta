@@ -56,7 +56,7 @@ def _selection(layer, config_indices):
     return tuple(selected), digest
 
 
-from dispatch import config_bindings_context
+from .autotvm_dispatch import config_bindings_context
 
 
 def _single_layer_module(function):
@@ -93,7 +93,7 @@ def _evaluate_candidate(function_json, activation, config_indices, backend, cand
 
         function = tvm.ir.load_json(function_json)
         compiler_config = transform.VTACompilerConfig.from_env(vta.get_env())
-        from deployment_compute import _capture_layer
+        from .vta_workload import _capture_layer
 
         layer = _capture_layer(0, function, compiler_config)
         simulator.load_backend(backend)

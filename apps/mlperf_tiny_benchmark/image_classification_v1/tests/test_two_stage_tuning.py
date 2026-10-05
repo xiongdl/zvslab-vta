@@ -18,11 +18,20 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 def _load(name):
     if str(APP_ROOT) not in sys.path:
         sys.path.insert(0, str(APP_ROOT))
-    spec = importlib.util.spec_from_file_location(f"ic_v1_{name}", APP_ROOT / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    if name == "tune":
+        spec = importlib.util.spec_from_file_location("ic_v1_tune_cli", APP_ROOT / "tune.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+    module_name = {
+        "deployment": "python.deployment", "runtime": "python.deployment",
+        "model_pipeline": "python.model", "measurement": "python.measurement",
+        "tuning": "python.tuning", "workflow": "python.tuning",
+        "schedule": "python.schedule_io", "publication": "python.tuning_storage",
+        "workloads": "python.vta_workload", "dispatch": "python.autotvm_dispatch",
+    }[name]
+    return importlib.import_module(module_name)
 
 
 @pytest.fixture(scope="module")
@@ -40,7 +49,7 @@ def actual_workloads(tmp_path_factory):
         )),
     })
     completed = subprocess.run([
-        str(python), str(APP_ROOT / "run.py"), "--target", "vta,llvm",
+        str(python), str(APP_ROOT / "deploy.py"), "--target", "vta,llvm",
         "--simulator", "fsim", "--export-workloads", str(workloads),
         "--output-dir", str(path / "export"),
     ], cwd=root, env=env, capture_output=True, text=True, check=False)
@@ -89,17 +98,17 @@ def test_fsim_rejects_tsim_input_and_tsim_rejects_search_controls():
     tune = _load("tune")
     common = ["--workloads", "workloads.json", "--output-logs", "out.log"]
     with pytest.raises(ValueError, match="only valid for TSIM"):
-        tune.validate_args(tune._parser().parse_args(common + [
+        _load("tune").validate_args(_load("tune")._parser().parse_args(common + [
             "--simulator", "fsim", "--input-logs", "in.tmp",
         ]))
     with pytest.raises(ValueError, match="only valid for FSIM"):
-        tune.validate_args(tune._parser().parse_args(common + [
+        _load("tune").validate_args(_load("tune")._parser().parse_args(common + [
             "--simulator", "tsim", "--input-logs", "in.tmp", "--trial-batch", "2",
         ]))
 
 
 def test_tune_uses_workload_snapshot_without_loading_runtime(monkeypatch, tmp_path):
-    tune = _load("tune")
+    tune = _load("workflow")
     observed = {}
 
     class Snapshot:
@@ -116,19 +125,19 @@ def test_tune_uses_workload_snapshot_without_loading_runtime(monkeypatch, tmp_pa
         tune, "run_fsim",
         lambda args, snapshot: (observed.update(run=(args, snapshot)) or {1: True}),
     )
-    args = tune._parser().parse_args([
+    args = _load("tune")._parser().parse_args([
         "--workloads", str(tmp_path / "workloads.json"), "--simulator", "fsim",
         "--output-logs", str(tmp_path / "candidates.tmp"), "--workload", "1",
         "--trial-batch", "1", "--min-successful", "1",
     ])
-    assert tune.main(args) == {1: True}
+    assert tune.run(args) == {1: True}
     assert observed["path"] == args.workloads
     assert observed["run"][1].layers == Snapshot.layers
 
 
 def test_zero_successful_fsim_candidates_publish_nothing(monkeypatch, tmp_path, capsys):
-    tune = _load("tune")
-    measurement = importlib.import_module("measurement")
+    tune = _load("workflow")
+    measurement = importlib.import_module("python.measurement")
 
     class Config:
         def valid(self):
@@ -171,12 +180,12 @@ def test_zero_successful_fsim_candidates_publish_nothing(monkeypatch, tmp_path, 
         path.write_bytes(contents)
     monkeypatch.setattr(tune, "_capture_layers", lambda snapshot: ((layer,), None))
     monkeypatch.setattr(measurement, "measure_candidate", lambda *a, **k: (_ for _ in ()).throw(TimeoutError("bounded")))
-    args = tune._parser().parse_args([
+    args = _load("tune")._parser().parse_args([
         "--workloads", str(workload_file), "--simulator", "fsim",
         "--trial-batch", "1", "--min-successful", "1",
         "--output-logs", str(output),
     ])
-    tune.validate_args(args)
+    _load("tune").validate_args(args)
     with pytest.raises(RuntimeError, match="no successful candidate"):
         tune.run_fsim(args, snapshot)
     assert {path: path.read_bytes() for path in old_files} == old_files
@@ -193,9 +202,9 @@ def test_zero_successful_fsim_candidates_publish_nothing(monkeypatch, tmp_path, 
 def test_fsim_continues_candidate_failures_and_reports_search_counts(
     monkeypatch, tmp_path, capsys, quota, outcomes, expected_reason
 ):
-    tune = _load("tune")
-    measurement = importlib.import_module("measurement")
-    import tuning
+    tune = _load("workflow")
+    measurement = importlib.import_module("python.measurement")
+    from python import tuning
     from types import SimpleNamespace
 
     config_bytes = b'{"geometry":1}\n'
@@ -233,7 +242,7 @@ def test_fsim_continues_candidate_failures_and_reports_search_counts(
         return {"config_identity": "i" * 64, "timestamp": 1.0, "duration_seconds": 0.1}
 
     monkeypatch.setattr(measurement, "measure_candidate", measure)
-    args = tune._parser().parse_args([
+    args = _load("tune")._parser().parse_args([
         "--workloads", str(workload_file), "--simulator", "fsim", "--workload", "0",
         "--trial-batch", "1", "--min-successful", str(quota), "--output-logs", str(output),
     ])
@@ -246,10 +255,10 @@ def test_fsim_continues_candidate_failures_and_reports_search_counts(
 
 
 def test_tsim_continues_after_native_candidate_failure(monkeypatch, tmp_path, capsys):
-    tune = _load("tune")
-    measurement = importlib.import_module("measurement")
-    import tuning
-    import schedule
+    tune = _load("workflow")
+    measurement = importlib.import_module("python.measurement")
+    from python import tuning
+    from python import schedule_io as schedule
     from types import SimpleNamespace
 
     config_bytes = b'{"geometry":1}\n'
@@ -304,7 +313,7 @@ def test_tsim_continues_after_native_candidate_failure(monkeypatch, tmp_path, ca
         path.with_suffix(".json").write_bytes(b"best metadata")
 
     monkeypatch.setattr(schedule, "export_schedule_snapshot", export)
-    args = tune._parser().parse_args([
+    args = _load("tune")._parser().parse_args([
         "--workloads", str(workload_file), "--workload", "0", "--simulator", "tsim",
         "--input-logs", str(input_logs), "--output-logs", str(output),
     ])
@@ -321,9 +330,9 @@ def test_tsim_continues_after_native_candidate_failure(monkeypatch, tmp_path, ca
 
 @pytest.mark.parametrize("backend", ["fsim", "tsim"])
 def test_native_worker_exit_aborts_tuning_stage(monkeypatch, tmp_path, backend):
-    tune = _load("tune")
-    import measurement
-    import tuning
+    tune = _load("workflow")
+    from python import measurement
+    from python import tuning
     from types import SimpleNamespace
 
     config_bytes = b'{"geometry":1}\n'
@@ -366,7 +375,7 @@ def test_native_worker_exit_aborts_tuning_stage(monkeypatch, tmp_path, backend):
             "configs": [], "config_identity": "i" * 64,
         },))
         monkeypatch.setattr(tune, "_candidate_record_indices", lambda *args: [0])
-    args = tune._parser().parse_args(command)
+    args = _load("tune")._parser().parse_args(command)
 
     runner = tune.run_fsim if backend == "fsim" else tune.run_tsim
     with pytest.raises(
@@ -509,7 +518,7 @@ def test_schedule_snapshot_rejects_a_different_raw_geometry_config(tmp_path, mon
 
 
 def test_loaded_schedule_measurements_expand_default_fallback_slots():
-    tune = _load("tune")
+    tune = _load("workflow")
     layer = type("Layer", (), {
         "occurrence": 3,
         "config_spaces": (("add.vta", ("add.vta",), "vta", [0]),
@@ -545,7 +554,7 @@ def test_cycle_alignment_gate_is_strictly_less_than_ten_percent():
 @pytest.mark.parametrize("workload", [0, -1], ids=["one-occurrence", "all-occurrences"])
 def test_real_fsim_tsim_schedule_replay_and_cycle_alignment(actual_workloads, workload):
     root, python, base_env, workloads, output_root = actual_workloads
-    from deployment import cycles_within_strict_ten_percent
+    from python.deployment import cycles_within_strict_ten_percent
 
     tag = "one" if workload == 0 else "all"
     result_dir = output_root / tag
@@ -569,7 +578,7 @@ def test_real_fsim_tsim_schedule_replay_and_cycle_alignment(actual_workloads, wo
     report = result_dir / "deployment.md"
     env = dict(base_env, VTA_BACKEND="tsim")
     completed = subprocess.run([
-        str(python), str(APP_ROOT / "run.py"), "--target", "vta,llvm",
+        str(python), str(APP_ROOT / "deploy.py"), "--target", "vta,llvm",
         "--simulator", "tsim", "--schedule", str(best),
         "--deployment-report", str(report), "--output-dir", str(result_dir / "replay"),
     ], cwd=output_root, env=env, capture_output=True, text=True, check=False)

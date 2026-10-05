@@ -29,7 +29,7 @@ import pytest
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
-MODEL_PIPELINE_PATH = APP_ROOT / "model_pipeline.py"
+MODEL_PIPELINE_PATH = APP_ROOT / "python" / "model.py"
 MODEL_PATH = APP_ROOT / "model" / "pretrainedResnet.tflite"
 SAMPLE_PATH = APP_ROOT / "samples" / "00-airplane.png"
 MODEL_SHA256 = "b5c0046d6e0328b4956afd6baa29555a29b1f1c65bdd45aaed75b7cd484d9f79"

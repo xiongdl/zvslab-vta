@@ -22,11 +22,20 @@ def _abort_after_candidate_start(function_json, activation, config_indices, back
 def _load_local(name):
     if str(APP_ROOT) not in sys.path:
         sys.path.insert(0, str(APP_ROOT))
-    spec = importlib.util.spec_from_file_location(f"ic_v1_{name}", APP_ROOT / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    if name == "tune":
+        spec = importlib.util.spec_from_file_location("ic_v1_tune_cli", APP_ROOT / "tune.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+    module_name = {
+        "deployment": "python.deployment", "runtime": "python.deployment",
+        "model_pipeline": "python.model", "measurement": "python.measurement",
+        "tuning": "python.tuning", "workflow": "python.tuning",
+        "schedule": "python.schedule_io", "publication": "python.tuning_storage",
+        "workloads": "python.vta_workload", "dispatch": "python.autotvm_dispatch",
+    }[name]
+    return importlib.import_module(module_name)
 
 
 def test_candidate_measurement_rejects_invalid_backend_timeout_and_activation():
@@ -363,7 +372,7 @@ def test_app_runtime_and_tuner_import_without_apps_directory():
     code = (
         "import sys; "
         f"sys.path.insert(0, {app_path!r}); "
-        "import runtime, tune; "
+        "from python import deployment; import tune; "
         "assert not any(name == 'common' or name.startswith('common.') for name in sys.modules)"
     )
     result = subprocess.run(

@@ -19,13 +19,13 @@ def captured():
     import vta.relay  # Register the VTA compiler hooks before preparing the graph.
 
     spec = importlib.util.spec_from_file_location(
-        "ic_v1_actual_compute_pipeline", APP_ROOT / "model_pipeline.py"
+        "ic_v1_actual_compute_pipeline", APP_ROOT / "python" / "model.py"
     )
     pipeline = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = pipeline
     spec.loader.exec_module(pipeline)
     prepared = pipeline.prepare_model(MODEL_PATH)
-    from deployment_compute import capture_deployment_compute
+    from python.vta_workload import capture_deployment_compute
 
     compute = capture_deployment_compute(
         prepared.mixed_module,

@@ -39,12 +39,14 @@ ACTIVE_RELAY_CONSUMERS = (
             / "apps"
             / "mlperf_tiny_benchmark"
             / "image_classification_v1"
-            / "model_pipeline.py",
+            / "python"
+            / "model.py",
             VTA_ROOT
             / "apps"
             / "mlperf_tiny_benchmark"
             / "image_classification_v1"
-            / "runtime.py",
+            / "python"
+            / "deployment.py",
         ),
     ),
 )

@@ -17,17 +17,16 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 def _load(path, name):
     sys.path.insert(0, str(APP_ROOT))
     try:
-        spec = importlib.util.spec_from_file_location(name, APP_ROOT / path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        spec.loader.exec_module(module)
-        return module
+        import importlib
+        module_name = "python.deployment" if path in ("python/deployment.py",) else "deploy"
+        return importlib.import_module(module_name)
     finally:
         sys.path.pop(0)
 
 
+
 def test_run_parser_accepts_only_selected_targets_and_single_image_options():
-    runner = _load("run.py", "ic_v1_selected_run_contract")
+    runner = _load("deploy.py", "ic_v1_selected_run_contract")
     args = runner._parser().parse_args([])
     assert args.target == "vta,llvm"
     assert args.simulator == "fsim"
@@ -44,7 +43,7 @@ def test_run_parser_accepts_only_selected_targets_and_single_image_options():
 
 
 def test_cpu_run_does_not_import_vta_or_require_backend(monkeypatch, tmp_path):
-    runner = _load("run.py", "ic_v1_cpu_run_contract")
+    runner = _load("deploy.py", "ic_v1_cpu_run_contract")
     monkeypatch.delenv("VTA_BACKEND", raising=False)
     loaded_vta_modules = {name for name in sys.modules if name == "vta" or name.startswith("vta.")}
     calls = []
@@ -56,15 +55,19 @@ def test_cpu_run_does_not_import_vta_or_require_backend(monkeypatch, tmp_path):
         ),
         write_deployment_report=lambda *args, **kwargs: "report",
     )
-    monkeypatch.setitem(sys.modules, "runtime", fake)
+    monkeypatch.syspath_prepend(str(APP_ROOT))
+    import python
+    monkeypatch.setattr(python, "deployment", fake, raising=False)
     runner.main(["--target", "llvm"])
     assert calls[0]["target"] == "llvm"
     assert {name for name in sys.modules if name == "vta" or name.startswith("vta.")} == loaded_vta_modules
 
 
 def test_cpu_rejects_workload_export_before_runtime_import(monkeypatch):
-    runner = _load("run.py", "ic_v1_cpu_export_rejected")
-    monkeypatch.setitem(sys.modules, "runtime", None)
+    runner = _load("deploy.py", "ic_v1_cpu_export_rejected")
+    monkeypatch.syspath_prepend(str(APP_ROOT))
+    import python
+    monkeypatch.setattr(python, "deployment", None, raising=False)
     with pytest.raises(ValueError, match="requires a target that includes VTA"):
         runner.main(["--target", "c", "--export-workloads", "out.json"])
 
@@ -75,7 +78,7 @@ def test_importing_cpu_runtime_does_not_load_vta_backend():
     env["PYTHONPATH"] = os.pathsep.join(
         [str(APP_ROOT), str(APP_ROOT.parents[2] / "python"), *filter(None, env.get("PYTHONPATH", "").split(os.pathsep))]
     )
-    code = "import sys, runtime; assert not any(name == 'vta' or name.startswith('vta.') for name in sys.modules)"
+    code = "import sys; from python import deployment; assert not any(name == 'vta' or name.startswith('vta.') for name in sys.modules)"
     completed = subprocess.run(
         [sys.executable, "-c", code], cwd=APP_ROOT, env=env, capture_output=True, text=True
     )
@@ -83,7 +86,7 @@ def test_importing_cpu_runtime_does_not_load_vta_backend():
 
 
 def test_markdown_report_uses_n_a_for_cpu_and_fsim_cycles(tmp_path):
-    runtime = _load("runtime.py", "ic_v1_markdown_report_runtime")
+    runtime = _load("python/deployment.py", "ic_v1_markdown_report_runtime")
     result = SimpleNamespace(
         target="vta,c", simulator="fsim", model_path=Path("model.tflite"),
         input_path=Path("image.png"), model_sha256="a" * 64, input_sha256="b" * 64,

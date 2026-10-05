@@ -28,15 +28,15 @@ export TRIAL_BATCH MIN_SUCCESSFUL TIMEOUT FSIM_TIMEOUT TSIM_TIMEOUT
 export INPUT_LOGS OUTPUT_LOGS
 
 deploy:
-	@$(APP_DIR)/make_tasks.sh deploy
+	@$(APP_DIR)/scripts/make_tasks.sh deploy
 
 tune-fsim:
-	@$(APP_DIR)/make_tasks.sh tune-fsim
+	@$(APP_DIR)/scripts/make_tasks.sh tune-fsim
 
 tune-tsim:
-	@$(APP_DIR)/make_tasks.sh tune-tsim
+	@$(APP_DIR)/scripts/make_tasks.sh tune-tsim
 
 tune:
-	@$(APP_DIR)/make_tasks.sh tune
+	@$(APP_DIR)/scripts/make_tasks.sh tune
 
 .PHONY: deploy tune-fsim tune-tsim tune

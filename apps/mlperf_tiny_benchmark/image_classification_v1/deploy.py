@@ -54,9 +54,9 @@ def main(argv=None):
         raise RuntimeError("VTA_BACKEND must match --simulator")
 
     # Keep CPU startup independent from VTA and simulator package initialization.
-    import runtime
+    from python import deployment
 
-    result = runtime.run_selected(
+    result = deployment.run_selected(
         target=args.target,
         simulator=args.simulator,
         schedule=args.schedule,
@@ -66,7 +66,7 @@ def main(argv=None):
         export_workloads=args.export_workloads,
     )
     if args.deployment_report is not None:
-        runtime.write_deployment_report(result, args.deployment_report)
+        deployment.write_deployment_report(result, args.deployment_report)
         print(f"Deployment report: {args.deployment_report.expanduser().resolve()}")
     return 0
 

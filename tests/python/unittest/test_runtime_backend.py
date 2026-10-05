@@ -127,6 +127,10 @@ def test_legacy_target_config_is_rejected_by_environment_loader(tmp_path, monkey
 
 def test_benchmark_runtime_sources_do_not_compare_environment_target():
     runtime_paths = sorted((VTA_ROOT / "apps" / "mlperf_tiny_benchmark").glob("*/runtime.py"))
+    runtime_paths.append(
+        VTA_ROOT / "apps" / "mlperf_tiny_benchmark" / "image_classification_v1"
+        / "python" / "deployment.py"
+    )
 
     assert runtime_paths
     for runtime_path in runtime_paths:
