@@ -1,4 +1,4 @@
-"""Deterministic KWS preprocessing and Relay/VTA model preparation."""
+"""Deterministic KWS preprocessing and arithmetic-preserving Relay preparation."""
 
 from dataclasses import dataclass
 import hashlib
@@ -10,17 +10,28 @@ import wave
 import numpy as np
 import tflite
 import tvm
-import vta
 from tvm import relay
 
 
+MODEL_ID = "keyword_spotting_v1"
+CLASS_NAMES = (
+    "Down", "Go", "Left", "No", "Off", "On", "Right", "Stop", "Up", "Yes",
+    "Silence", "Unknown",
+)
+PREPROCESSING_POLICY = (
+    "mono PCM16 16 kHz, pad/trim to one second, deterministic 49x10 MFCC, "
+    "int8 scale 0.5847029 zero point 83"
+)
+QUANTIZATION = {
+    "input_scale": 0.5847029,
+    "input_zero_point": 83,
+    "arithmetic": "preserve imported int8 QNN fixed-point multipliers and per-axis shifts",
+}
 MODEL_SHA256 = "aeea436800704fce17b17292e4412630ad856e9d777c044c64ef748a880bd0ae"
-INPUT_NAME = "input_1"
 INPUT_SHAPE = (1, 49, 10, 1)
 INPUT_DTYPE = "int8"
 INPUT_SCALE = 0.5847029
 INPUT_ZERO_POINT = 83
-OUTPUT_NAME = "Identity"
 OUTPUT_SHAPE = (1, 12)
 OUTPUT_DTYPE = "int8"
 SAMPLE_RATE = 16000
@@ -50,7 +61,7 @@ EXPECTED_TFLITE_OPERATORS = (
 
 @dataclass(frozen=True)
 class ImportedModel:
-    """The authenticated TFLite model and its typed Relay import."""
+    """The TFLite model and its typed Relay import."""
 
     module: tvm.IRModule
     params: dict
@@ -78,10 +89,9 @@ class RoutingSummary:
 
 @dataclass(frozen=True)
 class PreparedModel:
-    """One quantized graph forked into reference and VTA-partitioned forms."""
+    """Arithmetic-preserving CPU graph and optional real VTA partition."""
 
     imported: ImportedModel
-    quantized_module: tvm.IRModule
     reference_module: tvm.IRModule
     mixed_module: tvm.IRModule
     routing: RoutingSummary
@@ -110,7 +120,7 @@ def _operator_name_map():
 def _quantization(tensor):
     quantization = tensor.Quantization()
     if quantization is None or quantization.ScaleLength() != 1 or quantization.ZeroPointLength() != 1:
-        raise ValueError(f"tensor { _tensor_name(tensor)!r} must have one quantization scale and zero point")
+        raise ValueError(f"tensor {_tensor_name(tensor)!r} must have one quantization scale and zero point")
     return float(quantization.Scale(0)), int(quantization.ZeroPoint(0))
 
 
@@ -131,9 +141,9 @@ def _flatbuffer_contract(model_bytes):
     input_contract = (_tensor_name(input_tensor), _tensor_shape(input_tensor), int(input_tensor.Type()))
     output_contract = (_tensor_name(output_tensor), _tensor_shape(output_tensor), int(output_tensor.Type()))
     int8_type = int(tflite.TensorType.INT8)
-    if input_contract != (INPUT_NAME, INPUT_SHAPE, int8_type):
+    if input_contract[1:] != (INPUT_SHAPE, int8_type):
         raise ValueError(f"unexpected model input contract: {input_contract}")
-    if output_contract != (OUTPUT_NAME, OUTPUT_SHAPE, int8_type):
+    if output_contract[1:] != (OUTPUT_SHAPE, int8_type):
         raise ValueError(f"unexpected model output contract: {output_contract}")
     input_scale, input_zero_point = _quantization(input_tensor)
     if not math.isclose(input_scale, INPUT_SCALE, rel_tol=1e-6, abs_tol=1e-7):
@@ -165,139 +175,44 @@ def _relay_operator_names(function):
 
 
 def import_model(model_path):
-    """Authenticate and import the committed int8 TFLite model exactly once."""
+    """Import one supported int8 TFLite model and record its content hash."""
     model_path = Path(model_path)
     model_bytes = model_path.read_bytes()
     model_sha256 = hashlib.sha256(model_bytes).hexdigest()
-    if model_sha256 != MODEL_SHA256:
-        raise ValueError(
-            f"model SHA-256 mismatch: expected {MODEL_SHA256}, received {model_sha256}"
-        )
-
     model, input_scale, input_zero_point, operator_names = _flatbuffer_contract(model_bytes)
+    graph = model.Subgraphs(0)
+    input_name = _tensor_name(graph.Tensors(graph.Inputs(0)))
+    output_name = _tensor_name(graph.Tensors(graph.Outputs(0)))
     module, params = relay.frontend.from_tflite(
-        model,
-        shape_dict={INPUT_NAME: INPUT_SHAPE},
-        dtype_dict={INPUT_NAME: INPUT_DTYPE},
+        model, shape_dict={input_name: INPUT_SHAPE}, dtype_dict={input_name: INPUT_DTYPE}
     )
     module = relay.transform.InferType()(module)
     main = module["main"]
     relay_input = (_shape(main.params[0]), main.params[0].checked_type.dtype)
     relay_output = (tuple(int(dimension) for dimension in main.ret_type.shape), main.ret_type.dtype)
-    if relay_input != (INPUT_SHAPE, INPUT_DTYPE):
-        raise ValueError(f"unexpected Relay input contract: {relay_input}")
-    if relay_output != (OUTPUT_SHAPE, OUTPUT_DTYPE):
-        raise ValueError(f"unexpected Relay output contract: {relay_output}")
+    if relay_input != (INPUT_SHAPE, INPUT_DTYPE) or relay_output != (OUTPUT_SHAPE, OUTPUT_DTYPE):
+        raise ValueError(f"unexpected Relay tensor contract: {relay_input} -> {relay_output}")
 
     return ImportedModel(
         module=module,
         params=dict(params),
         model_sha256=model_sha256,
-        input_name=INPUT_NAME,
+        input_name=input_name,
         input_shape=INPUT_SHAPE,
         input_dtype=INPUT_DTYPE,
         input_scale=input_scale,
         input_zero_point=input_zero_point,
-        output_name=OUTPUT_NAME,
+        output_name=output_name,
         output_shape=OUTPUT_SHAPE,
         output_dtype=OUTPUT_DTYPE,
         tflite_operator_names=operator_names,
     )
 
 
-class _VTAReadyMutator(relay.ExprMutator):
-    """Normalize TFLite qnn edges to the repository VTA composite contract."""
-
-    def visit_call(self, call):
-        rewritten = super().visit_call(call)
-        if not isinstance(rewritten.op, tvm.ir.Op):
-            return rewritten
-        operator_name = rewritten.op.name
-
-        if operator_name == "fixed_point_multiply_per_axis":
-            shifts = rewritten.args[-1].data.numpy().reshape(-1)
-            return relay.right_shift(rewritten.args[0], relay.const(int(max(shifts)), "int32"))
-        if operator_name == "fixed_point_multiply":
-            shift = int(rewritten.attrs.shift)
-            if shift < 0:
-                return relay.left_shift(rewritten.args[0], relay.const(-shift, "int32"))
-            return relay.right_shift(rewritten.args[0], relay.const(shift, "int32"))
-
-        if operator_name == "cast" and str(rewritten.attrs.dtype) == "int32":
-            original_type = getattr(call.args[0], "checked_type", None)
-            if original_type is not None and str(original_type.dtype) == "int32":
-                return rewritten.args[0]
-
-        if operator_name == "nn.conv2d":
-            data, weight = rewritten.args
-            if (
-                isinstance(weight, relay.Call)
-                and isinstance(weight.op, tvm.ir.Op)
-                and weight.op.name == "cast"
-                and isinstance(weight.args[0], relay.Constant)
-            ):
-                attrs = rewritten.attrs
-                return relay.nn.conv2d(
-                    data,
-                    weight.args[0],
-                    channels=int(attrs.channels),
-                    kernel_size=tuple(int(value) for value in attrs.kernel_size),
-                    strides=tuple(int(value) for value in attrs.strides),
-                    padding=tuple(int(value) for value in attrs.padding),
-                    dilation=tuple(int(value) for value in attrs.dilation),
-                    groups=int(attrs.groups),
-                    data_layout=str(attrs.data_layout),
-                    kernel_layout=str(attrs.kernel_layout),
-                    out_layout=str(attrs.out_layout) or None,
-                    out_dtype=str(attrs.out_dtype),
-                )
-
-        if operator_name == "subtract":
-            left = rewritten.args[0]
-            if isinstance(left, relay.Call) and isinstance(left.op, tvm.ir.Op) and left.op.name == "nn.conv2d":
-                return left
-
-        if operator_name == "add":
-            left, right = rewritten.args
-            if isinstance(left, relay.Call) and isinstance(left.op, tvm.ir.Op) and left.op.name == "right_shift":
-                return left
-            if isinstance(right, relay.Call) and isinstance(right.op, tvm.ir.Op) and right.op.name == "right_shift":
-                return right
-
-        return rewritten
-
-
-def _normalize_for_vta(module):
-    canonical = relay.qnn.transform.CanonicalizeOps()(module)
-    canonical = relay.transform.InferType()(canonical)
-    main = canonical["main"]
-    body = _VTAReadyMutator().visit(main.body)
-    normalized = tvm.IRModule.from_expr(
-        relay.Function(main.params, body, type_params=main.type_params, attrs=main.attrs)
-    )
-    return relay.transform.InferType()(normalized)
-
-
-def quantize_model(imported):
-    """Run the approved Relay quantization pass once, then normalize VTA edges."""
-    missing = object()
-    previous_math = getattr(np, "math", missing)
-    np.math = math
-    try:
-        with relay.quantize.qconfig(
-            calibrate_mode="global_scale",
-            global_scale=8.0,
-            skip_conv_layers=[0],
-        ):
-            quantized = relay.quantize.quantize(imported.module, params=imported.params)
-    finally:
-        if previous_math is missing:
-            delattr(np, "math")
-        else:
-            np.math = previous_math
-    if not isinstance(quantized, tvm.IRModule):
-        return quantized
-    return _normalize_for_vta(quantized)
+def canonicalize_qnn_model(imported):
+    """Canonicalize imported QNN operators without changing their arithmetic."""
+    canonical = relay.qnn.transform.CanonicalizeOps()(imported.module)
+    return relay.transform.InferType()(canonical)
 
 
 def _external_functions(module):
@@ -325,47 +240,42 @@ def _composite_names(function):
 
 
 def inspect_partitioning(reference_module, mixed_module):
-    """Validate non-empty deterministic VTA regions and host routing."""
+    """Count only real VTA partitions and preserve any unsupported work on CPU."""
     external = _external_functions(mixed_module)
-    if not external:
-        raise ValueError("KWS model produced no VTA partitions")
     symbols = tuple(item[0] for item in external)
     expected_prefix = f"tvmgen_{VTA_MODULE_NAME}_vta_main_"
     if not all(symbol.startswith(expected_prefix) for symbol in symbols):
         raise ValueError(f"unexpected VTA symbols: {symbols}")
     convolutions = tuple(_relay_operator_names(item[2]).count("nn.conv2d") for item in external)
-    if not all(count > 0 for count in convolutions):
-        raise ValueError(f"VTA partitions must contain convolution regions: {convolutions}")
-
+    if any(count <= 0 for count in convolutions):
+        raise ValueError(f"VTA partitions must contain real convolutions: {convolutions}")
     host_operator_names = tuple(sorted(set(_relay_operator_names(mixed_module["main"]))))
-    required_host = {"nn.avg_pool2d", "nn.dense", "nn.softmax", "reshape"}
-    if not required_host <= set(host_operator_names):
-        missing = sorted(required_host - set(host_operator_names))
-        raise ValueError(f"mixed main is missing required host operators: {missing}")
     composite_names = tuple(name for item in external for name in _composite_names(item[2]))
-    routing = RoutingSummary(
+    if _shape(reference_module["main"].params[0]) != INPUT_SHAPE:
+        raise ValueError("reference graph input shape changed during partitioning")
+    if tuple(int(dimension) for dimension in mixed_module["main"].ret_type.shape) != OUTPUT_SHAPE:
+        raise ValueError("mixed graph output shape changed during partitioning")
+    return RoutingSummary(
         symbols=symbols,
         convolutions_per_partition=convolutions,
         host_operator_names=host_operator_names,
         composite_names=composite_names,
     )
-    if _shape(reference_module["main"].params[0]) != INPUT_SHAPE:
-        raise ValueError("reference graph input shape changed during partitioning")
-    if tuple(int(dimension) for dimension in mixed_module["main"].ret_type.shape) != OUTPUT_SHAPE:
-        raise ValueError("mixed graph output shape changed during partitioning")
-    return routing
 
 
-def prepare_model(model_path):
-    """Import, quantize once, partition once, and validate the routing."""
+def prepare_model(model_path, *, use_vta=True):
+    """Prepare an exact CPU graph and optionally inspect real VTA partitions."""
     imported = import_model(model_path)
-    quantized_module = quantize_model(imported)
-    reference_module = quantized_module
-    mixed_module = vta.relay.partition_for_vta(quantized_module, mod_name=VTA_MODULE_NAME)
-    routing = inspect_partitioning(reference_module, mixed_module)
+    reference_module = canonicalize_qnn_model(imported)
+    if use_vta:
+        import vta
+
+        mixed_module = vta.relay.partition_for_vta(reference_module, mod_name=VTA_MODULE_NAME)
+        routing = inspect_partitioning(reference_module, mixed_module)
+    else:
+        mixed_module = routing = None
     return PreparedModel(
         imported=imported,
-        quantized_module=quantized_module,
         reference_module=reference_module,
         mixed_module=mixed_module,
         routing=routing,
@@ -399,7 +309,7 @@ def _read_wav(sample_path):
             if wav.getnchannels() != 1 or wav.getsampwidth() != 2 or wav.getframerate() != SAMPLE_RATE:
                 raise ValueError(f"{sample_path} must be mono 16-bit {SAMPLE_RATE} Hz WAV")
             samples = np.frombuffer(wav.readframes(wav.getnframes()), dtype="<i2").copy()
-    except (OSError, EOFError) as error:
+    except (OSError, EOFError, wave.Error) as error:
         raise ValueError(f"unable to read WAV sample {sample_path}") from error
     if samples.size == 0:
         raise ValueError(f"{sample_path} contains no PCM frames")

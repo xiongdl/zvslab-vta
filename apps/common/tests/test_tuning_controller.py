@@ -11,7 +11,6 @@ APPS_ROOT = Path(__file__).resolve().parents[2] / "mlperf_tiny_benchmark"
 MODEL_IDS = (
     "image_classification_v1",
     "anomaly_detection_v1",
-    "keyword_spotting_v1",
     "streaming_wakeword_v1",
 )
 

@@ -3,3 +3,10 @@ __pycache__/
 tests/__pycache__/
 *.py[cod]
 !samples/manifest.json
+
+# Saved schedules and transactional tuning state are persistent deliverables.
+!tune/
+!tune/*/
+!tune/*/*.json
+!tune/*/*.log
+!tune/*/*.tmp
