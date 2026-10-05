@@ -13,7 +13,6 @@ MODEL_IDS = (
     "anomaly_detection_v1",
     "keyword_spotting_v1",
     "streaming_wakeword_v1",
-    "visual_wake_words_v1",
 )
 
 

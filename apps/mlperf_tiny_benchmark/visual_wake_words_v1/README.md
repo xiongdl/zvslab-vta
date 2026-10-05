@@ -1,179 +1,185 @@
-# MLPerf Tiny VWW HOST deployment
+# Visual Wake Words V1
 
-This fixed-purpose application imports the committed floating MLPerf Tiny v1.4
-Visual Wake Words model, applies the documented TVM quantization policy once, and builds
-both a pure host reference and a mixed VTA Graph Executor artifact. It reloads
-the host libraries, compares their output tensors within the fixed `1e-6`
-absolute/relative tolerance for the ten committed JPEG samples, and requires
-positive simulator activity. The matrix mode builds
-LLVM and C variants below separate `llvm-fsim/` and `c-fsim/` (FSIM) or
-`llvm-tsim/` and `c-tsim/` (TSIM) bundle roots.
+This application deploys one Visual Wake Words image at a time and tunes only
+the real VTA computation in the prepared model. It owns its model preparation,
+deployment, workload snapshots, isolated FSIM/TSIM tuning, schedule validation,
+reports, and Make orchestration. The committed floating-point model expects one
+96×96 RGB image, decoded as float32 NHWC and divided by 255. TVM applies the
+fixed `global_scale=8`, `skip_conv_layers=[0]` quantization policy. The result
+is class `0` (`non_person`) or `1` (`person`) with both raw scores. This is a
+deployment and tuning example; classification accuracy is not an acceptance
+gate.
 
-Importing `vta` loads and validates the compiler target extension. The mixed
-branch explicitly applies `vta.relay.partition_for_vta()` once, then uses
-`vta.relay.plan_devices_for_vta()` to constrain host operators to CPU and
-outlined VTA functions to `ext_dev`. The resulting CPU/VTA target map is passed
-to `relay.build`, which inserts compiler-owned device copies and produces the
-standard mixed runtime module without post-build graph JSON edits. The plan
-keeps the thirteen depthwise convolutions on CPU and the twelve deterministic
-VTA regions on `ext_dev`.
-
-The VTA compiler target is activated only as the lowering context; the target
-map returned by the planner remains the canonical `ext_dev -device=vta`
-target paired with the selected LLVM or C host target:
-
-```python
-with vta.build_config():
-    mixed_factory = relay.build(plan.module, target=plan.targets)
-```
-
-The application is an execution-equivalence example. It does not report model
-accuracy, performance, energy, or MLPerf submission results.
+The current TVM/VTA partitioner produces real convolution partitions for this
+model. Deployment reports actual placement and measurements. If a future
+runtime produces no real partitions, VTA targets truthfully fall back to CPU,
+report zero VTA coverage and N/A cycles, and workload export or schedule replay
+fails before publishing files.
 
 ## Prerequisites
 
-From the repository root, prepare the pinned Python environment and build the
-compiler extension and simulator libraries:
+Run from the repository root. Initialize `tvm/` and `vta/`, use the pinned
+`.envs/tvm-vta-env` environment, and build the TVM libraries and both VTA
+simulators using `scripts/README.md`. The shared geometry file is
+`$PWD/vta/config/vta_64mac.json`. Do not install packages for this application.
+
+The direct CLI uses the same pinned interpreter and the app-local Python
+package:
 
 ```bash
-# Use the existing project environment at .envs/tvm-vta-env; do not recreate it
-# during verification.
-bash scripts/build_vta_lib.sh \
-  --config "$PWD/vta/config/vta_64mac.json" --backend all
+export APP="$PWD/vta/apps/mlperf_tiny_benchmark/visual_wake_words_v1"
+export PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$APP"
+export CONFIG="$PWD/vta/config/vta_64mac.json"
+export PYTHON="$PWD/.envs/tvm-vta-env/bin/python"
 ```
 
-The active contract is the shared absolute `VTA_CONFIG_FILE` plus
-`VTA_BACKEND=fsim|tsim`. The build script uses `--backend fsim|tsim|all` and
-this runner uses `--simulator fsim|tsim`; the values must match. The CPU
-reference branch is part of the FSIM matrix and is not a separate VTA backend.
-`TARGET=sim`, `TARGET=tsim`, and `--target libvta_*` are retired; use the
-shared geometry file and explicit backend selectors. FPGA backends such as
-`pynq` and `zcu104` remain deferred.
+The default model is `model/vww_96_float.tflite`; the default image is
+`samples/00-non-person-000000000009.jpg`. Optional model/input/output paths are
+accepted explicitly, but custom models must match the supported one-input,
+one-output VWW tensor and operator topology.
 
-## Run
+## Manual acceptance
 
-From the repository root:
+Run these steps from the repository root. Successful deployment prints the
+predicted VWW class and two raw scores. The report records model and input
+hashes, selected target, CPU/VTA placement, schedule coverage, logical MACs,
+and measurements available from the selected simulator.
 
-```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/visual_wake_words_v1/run.py
-```
+1. Run the app-owned tests, including asset/model contracts, CPU startup,
+   graph bundle integrity, CLI and Make boundaries, workload snapshots, tuning,
+   and cleanup:
 
-The optional `--output-dir PATH` changes only the generated-artifact location.
-The default `build/` directory is ignored by the repository. The default CLI
-mode is LLVM FSIM; pass `--host-codegen c` for a single C-host run or
-`--host-codegen all` to build and execute the complete ordered LLVM/C matrix.
-Pass `--simulator tsim` with `VTA_CONFIG_FILE` set to the shared
-`vta/config/vta_64mac.json` and `VTA_BACKEND=tsim` for the Verilated hardware
-model. Matrix bundles
-are published as `<host>-<simulator>/{reference,mixed}/`, with each directory
-containing its Graph JSON, parameters, DSO, manifest, and generated host
-source. A partial export is removed if the build fails.
+   ```bash
+   VTA_CONFIG_FILE="$CONFIG" VTA_BACKEND=fsim PYTHONPATH="$PYTHONPATH" \
+     "$PYTHON" -m pytest -q "$APP/tests"
+   ```
 
-FSIM matrix:
+2. Confirm both CPU targets work without VTA configuration or a simulator:
 
-```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/visual_wake_words_v1/run.py \
-  --simulator fsim --host-codegen all
-```
+   ```bash
+   env -u VTA_BACKEND -u VTA_CONFIG_FILE PYTHONPATH="$PYTHONPATH" \
+     "$PYTHON" "$APP/deploy.py" --target c --deployment-report "$APP/build/c.md"
+   env -u VTA_BACKEND -u VTA_CONFIG_FILE PYTHONPATH="$PYTHONPATH" \
+     "$PYTHON" "$APP/deploy.py" --target llvm --deployment-report "$APP/build/llvm.md"
+   ```
 
-Complete TSIM matrix (fresh process):
+   Each command must report one class and two scores; its report shows CPU
+   placement and N/A cycles. `--target c --export-workloads ...` must fail
+   before runtime startup because CPU deployment cannot export VTA workloads.
 
-```bash
-VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
-PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
-  ./.envs/tvm-vta-env/bin/python \
-  vta/apps/mlperf_tiny_benchmark/visual_wake_words_v1/run.py \
-  --simulator tsim --host-codegen all
-```
+3. Check both VTA host code generators under each backend using one image:
 
-Successful output reports thirteen deterministic VTA regions, ten bounded output
-comparisons per host, and positive simulator counters. FSIM validates GEMM,
-weight-load, and output-store counters; TSIM validates its supported
-`cycle_count` counter only; FSIM-only counters are not required for TSIM.
-Missing libraries, unexpected model or routing
-structure, output differences, wrong configuration, and absent accelerator
-activity cause a nonzero exit. TSIM initialization and hardware loading remain
-lazy until all four bundles have been built, exported, and reloaded.
+   ```bash
+   for backend in fsim tsim; do
+     for host in c llvm; do
+       VTA_BACKEND="$backend" VTA_CONFIG_FILE="$CONFIG" PYTHONPATH="$PYTHONPATH" \
+         "$PYTHON" "$APP/deploy.py" --target "vta,$host" --simulator "$backend" \
+         --deployment-report "$APP/build/${backend}-${host}.md"
+     done
+   done
+   ```
 
-## Actual-deployment schedules and tuning
+   Each report must show real VTA partitions and CPU fallback operators.
+   FSIM counters must show accelerator activity and cycle fields remain N/A.
+   TSIM reports positive whole-graph and per-partition cycles. CPU and VTA
+   prepared outputs must agree within the app test's float tolerance. A
+   simulator/backend mismatch must fail before model compilation.
 
-`run.py` is the only deployment entry point. Omitting `--schedule` or passing
-`--schedule none` uses default schedules. `--schedule PATH` loads one native
-AutoTVM `.log` and its same-stem `.json` metadata automatically. The metadata
-binds schedules to the model, actual prepared computation, geometry,
-occurrences, workloads/configurations, and native record hashes. Partial
-snapshots are allowed; uncovered occurrences remain on default schedules and
-the runner reports this coverage. Invalid identities or records fail before
-execution.
+4. Export a workload snapshot from the default-schedule FSIM deployment. Then
+   move the model and image out of reach for tuning; the tuning commands below
+   consume only the exported workload file:
 
-The graph contains thirteen deterministic single-convolution VTA regions and
-keeps thirteen depthwise convolutions on CPU. The ten committed JPEG samples
-are compared against the pure HOST reference with the fixed `1e-6`
-absolute/relative tolerance and exact classification agreement. The
-`--deployment-report PATH` option records model/schedule provenance, coverage,
-outputs, and measured evidence. On TSIM,
-`--validate-schedule-evidence` requires complete measured coverage and the
-strict per-layer cycle-alignment gate. Standard correctness execution still
-checks all ten committed samples; schedule evidence measures one performance
-sample. `cycle_count` is simulator activity, not FPGA latency or MLPerf
-performance.
+   ```bash
+   VTA_BACKEND=fsim VTA_CONFIG_FILE="$CONFIG" PYTHONPATH="$PYTHONPATH" \
+     "$PYTHON" "$APP/deploy.py" --target vta,llvm --simulator fsim \
+     --export-workloads "$APP/build/workloads.json"
+   ```
 
-```bash
-MODEL_DIR=vta/apps/mlperf_tiny_benchmark/visual_wake_words_v1
-export MODEL_DIR
-export VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json"
-export PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/vta/apps"
+   The snapshot must contain model id/hash, input hash and preprocessing,
+   quantization policy, geometry/config hash, compatibility data, real Relay
+   occurrences, captured activations, and an integrity seal. Editing a payload
+   or loading another model's snapshot must be rejected.
 
-VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/run.py" \
-  --simulator fsim --schedule none
+5. Run a bounded FSIM candidate search and TSIM selection for occurrence zero:
 
-VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/run.py" \
-  --simulator tsim --schedule /path/to/snapshot.log \
-  --deployment-report /tmp/vww-deployment.json
-```
+   ```bash
+   VTA_BACKEND=fsim VTA_CONFIG_FILE="$CONFIG" PYTHONPATH="$PYTHONPATH" \
+     "$PYTHON" "$APP/tune.py" --workloads "$APP/build/workloads.json" \
+     --workload 0 --simulator fsim --trial-batch 1 --min-successful 1 \
+     --output-logs "$APP/tune/vta_64mac/fsim.tmp"
+   VTA_BACKEND=tsim VTA_CONFIG_FILE="$CONFIG" PYTHONPATH="$PYTHONPATH" \
+     "$PYTHON" "$APP/tune.py" --workloads "$APP/build/workloads.json" \
+     --workload 0 --simulator tsim --input-logs "$APP/tune/vta_64mac/fsim.tmp" \
+     --output-logs "$APP/tune/vta_64mac/best.log"
+   ```
 
-## Tune actual deployment occurrences
+   FSIM logs contain candidates, not deployable winners. TSIM selects the
+   lowest successful cycle count and publishes `best.log`, matching
+   `best.json`, `config.json`, and `config.sha256`. If a candidate cannot be
+   compiled or measured, it is counted as a failure; no-success or failed
+   publication must preserve any prior valid schedule files.
 
-`tune.py` captures the real prepared VTA occurrences and tunes them through
-shared lowering. The seed measures each default schedule on TSIM and writes
-`build/actual_compute_tuning/seed/seed.log` with same-stem metadata. Deploy it
-with the strict TSIM evidence gate; the passing report is a prerequisite for
-search:
+6. Replay the TSIM-selected schedule and check output/report coverage:
 
-```bash
-VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune.py" --seed --all
-VTA_BACKEND=tsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/run.py" \
-  --simulator tsim \
-  --schedule "$MODEL_DIR/build/actual_compute_tuning/seed/seed.log" \
-  --validate-schedule-evidence \
-  --deployment-report "$MODEL_DIR/build/actual_compute_tuning/seed/deployment.json"
+   ```bash
+   VTA_BACKEND=tsim VTA_CONFIG_FILE="$CONFIG" PYTHONPATH="$PYTHONPATH" \
+     "$PYTHON" "$APP/deploy.py" --target vta,llvm --simulator tsim \
+     --schedule "$APP/tune/vta_64mac/best.log" \
+     --deployment-report "$APP/build/replay.md"
+   ```
 
-VTA_BACKEND=fsim ./.envs/tvm-vta-env/bin/python "$MODEL_DIR/tune.py" \
-  --all --alignment-report "$MODEL_DIR/build/actual_compute_tuning/seed/deployment.json"
-```
+   The report marks occurrence zero selected and all other real occurrences as
+   default. Selected output must agree with the prepared CPU output. Measured
+   replay cycles and selected-occurrence AutoTVM cycles must align strictly
+   within 10 percent under the same layer measurement protocol.
 
-Search defaults to 100 unique configurations per batch, 20 successful
-schedules per occurrence, and 60/120-second FSIM/TSIM candidate timeouts; it
-stops at the quota or when the valid configuration space is exhausted. Use
-`--workload-index N` or `--max-workloads N` for bounded search. Resume with
-`--resume-manifest PATH` and the unchanged alignment report and tuning
-identity. The manifest, occurrence ledgers, failures, and intermediate logs are
-kept under `build/actual_compute_tuning/<run-id>/`.
+7. Confirm the Make workflow routes paths safely, bounds tuning, completes the
+   full FSIM→TSIM sequence without redeploying a winner, and cleans only local
+   build output and Python caches:
 
-When successful TSIM candidates exist, search writes a `best.log` and its
-same-stem metadata. To export a specific candidate, pass the matching resume
-manifest and `--output-log PATH` with
-`--export-candidate CANDIDATE --workload-index OCCURRENCE`; use `--export-best`
-for the best successful candidate of each selected occurrence. A partial
-candidate is a deployable snapshot and uncovered regions use defaults. Candidate
-provenance records whether it has TSIM measurements. Historical compatible
-complete-fusion manifests can be migrated with
-`common.schedule.migrate_legacy_full_fusion`; it validates the current model,
-geometry, occurrence computations, schedule records, and single-call TSIM
-protocol without inventing measurements.
+   ```bash
+   make -C "$APP" deploy TARGET=llvm REPORT="$APP/build/make-cpu.md"
+   make -C "$APP" deploy TARGET=vta,llvm SIMULATOR=fsim \
+     EXPORT_WORKLOADS="$APP/build/make-workloads.json"
+   make -C "$APP" tune-fsim WORKLOADS="$APP/build/make-workloads.json" \
+     WORKLOAD=0 TRIAL_BATCH=1 MIN_SUCCESSFUL=1
+   make -C "$APP" tune-tsim WORKLOADS="$APP/build/make-workloads.json" \
+     INPUT_LOGS="$APP/tune/vta_64mac/fsim.tmp" WORKLOAD=0
+   make -C "$APP" deploy TARGET=vta,llvm SIMULATOR=tsim \
+     SCHEDULE="$APP/tune/vta_64mac/best.log" REPORT="$APP/build/make-replay.md"
+   make -C "$APP" tune WORKLOAD=0 TRIAL_BATCH=1 MIN_SUCCESSFUL=1
+   mkdir -p "$APP/build/custom input path"
+   cp "$APP/model/vww_96_float.tflite" "$APP/build/custom input path/model.tflite"
+   cp "$APP/samples/00-non-person-000000000009.jpg" "$APP/build/custom input path/input.jpg"
+   "$PYTHON" "$APP/deploy.py" --target llvm \
+     --model "$APP/build/custom input path/model.tflite" \
+     --input "$APP/build/custom input path/input.jpg" \
+     --output-dir "$APP/build/custom input path/direct bundle" \
+     --deployment-report "$APP/build/custom input path/direct report.md"
+   make -C "$APP" deploy TARGET=llvm \
+     MODEL="$APP/build/custom input path/model.tflite" \
+     INPUT="$APP/build/custom input path/input.jpg" \
+     OUTPUT_DIR="$APP/build/custom input path/make bundle" \
+     REPORT="$APP/build/custom input path/make report.md"
+   make -C "$APP" clean
+   ```
+
+   After clean, local `build/` and Python caches are gone, while the model,
+   samples, license, and persistent `tune/vta_64mac/` schedule/config files
+   remain. Both custom-path commands must create their reports and bundles
+   despite spaces in the paths. Running clean again succeeds. The full tune
+   target exports when needed, runs FSIM then TSIM, and stops after selection.
+
+## Direct CLI and Make contract
+
+`deploy.py` accepts `--target c|llvm|vta,c|vta,llvm`, `--simulator fsim|tsim`,
+`--model`, `--input`, `--schedule`, `--output-dir`, `--deployment-report`, and
+`--export-workloads`. It compiles only the selected target. CPU startup does
+not import VTA. VTA requests require matching `VTA_BACKEND` and `--simulator`,
+plus an absolute `VTA_CONFIG_FILE`.
+
+`tune.py` accepts only an exported `--workloads` snapshot. FSIM accepts
+`--trial-batch`, `--min-successful`, and `--timeout`; TSIM requires `--input-logs`
+and rejects FSIM-only options. `make deploy`, `make tune-fsim`, `make tune-tsim`,
+`make tune`, and `make clean` use corresponding variables from the template.
+`make clean` preserves all persistent tuning results and source assets.

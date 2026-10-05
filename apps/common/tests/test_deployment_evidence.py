@@ -18,13 +18,13 @@ def test_graph_node_resolution_uses_exact_function_symbols():
     graph = {"nodes": [
         {"op": "null", "name": "input"},
         {"op": "tvm_op", "name": "region_1",
-         "attrs": {"func_name": "tvmgen_vww_vta_main_1"}},
+         "attrs": {"func_name": "tvmgen_example_vta_main_1"}},
         {"op": "tvm_op", "name": "region_10",
-         "attrs": {"func_name": "tvmgen_vww_vta_main_10"}},
+         "attrs": {"func_name": "tvmgen_example_vta_main_10"}},
     ]}
     expected = [
-        {"occurrence": 1, "symbol": "tvmgen_vww_vta_main_1"},
-        {"occurrence": 10, "symbol": "tvmgen_vww_vta_main_10"},
+        {"occurrence": 1, "symbol": "tvmgen_example_vta_main_1"},
+        {"occurrence": 10, "symbol": "tvmgen_example_vta_main_10"},
     ]
 
     assert evidence.resolve_graph_nodes(graph, expected) == {1: 1, 10: 2}

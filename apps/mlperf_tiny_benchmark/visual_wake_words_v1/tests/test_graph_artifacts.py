@@ -28,7 +28,7 @@ import pytest
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
-ARTIFACTS_PATH = APP_ROOT / "graph_artifacts.py"
+ARTIFACTS_PATH = APP_ROOT / "python" / "graph_artifacts.py"
 
 
 @pytest.fixture(scope="module")
@@ -50,7 +50,7 @@ def artifacts_module():
         sys.modules["tvm"] = fake_tvm
         sys.modules["tvm.runtime"] = fake_runtime
         sys.modules["tvm.relay"] = fake_relay
-    spec = importlib.util.spec_from_file_location("vww_graph_artifacts", ARTIFACTS_PATH)
+    spec = importlib.util.spec_from_file_location("resnet_graph_artifacts", ARTIFACTS_PATH)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -113,7 +113,7 @@ def _export(artifacts_module, monkeypatch, tmp_path, module, **kwargs):
         FakeFactory(module),
         tmp_path,
         "bundle",
-        artifact_name="vww96",
+        artifact_name="vww",
         artifact_role="reference",
         model_sha256="a" * 64,
         host_codegen="test",
@@ -137,7 +137,7 @@ def test_export_writes_exact_files_and_schema_one_manifest(artifacts_module, mon
 
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     assert manifest["schema_version"] == 1
-    assert manifest["artifact"] == {"name": "vww96", "role": "reference"}
+    assert manifest["artifact"] == {"name": "vww", "role": "reference"}
     assert manifest["host_codegen"] == "test"
     assert manifest["simulator"] == "fsim"
     assert manifest["files"]["graph"]["sha256"] == hashlib.sha256(b'{"nodes":[]}').hexdigest()
@@ -189,7 +189,7 @@ def test_unsafe_artifact_paths_are_rejected_before_output_mutation(
             FakeFactory(module),
             tmp_path,
             relative,
-            artifact_name="vww96",
+            artifact_name="vww",
             artifact_role="reference",
             model_sha256="a" * 64,
             host_codegen="test",
@@ -210,7 +210,7 @@ def test_symlink_escape_is_rejected(artifacts_module, monkeypatch, tmp_path):
             FakeFactory(module),
             tmp_path,
             "link/bundle",
-            artifact_name="vww96",
+            artifact_name="vww",
             artifact_role="reference",
             model_sha256="a" * 64,
             host_codegen="test",
@@ -228,7 +228,7 @@ def test_expected_and_forbidden_symbols_are_checked_after_reload(artifacts_modul
         FakeFactory(FakeModule("llvm", source="source")),
         tmp_path,
         "mixed",
-        artifact_name="vww96",
+        artifact_name="vww",
         artifact_role="mixed",
         model_sha256="a" * 64,
         host_codegen="llvm",
@@ -274,7 +274,7 @@ def test_failed_replacement_preserves_previous_bundle_and_cleans_staging(
         factory,
         tmp_path,
         "bundle",
-        artifact_name="vww96",
+        artifact_name="vww",
         artifact_role="reference",
         model_sha256="a" * 64,
         host_codegen="test",
@@ -291,7 +291,7 @@ def test_failed_replacement_preserves_previous_bundle_and_cleans_staging(
             FakeFactory(module, graph="new", params=b"new", library=b"new"),
             tmp_path,
             "bundle",
-            artifact_name="vww96",
+            artifact_name="vww",
             artifact_role="reference",
             model_sha256="a" * 64,
             host_codegen="test",
@@ -320,7 +320,7 @@ def test_failed_final_reload_on_first_export_removes_published_bundle_and_stagin
             FakeFactory(module),
             tmp_path,
             "bundle",
-            artifact_name="vww96",
+            artifact_name="vww",
             artifact_role="reference",
             model_sha256="a" * 64,
             host_codegen="llvm",
@@ -356,7 +356,7 @@ def test_final_library_hash_is_validated_before_post_publication_load(
             FakeFactory(module),
             tmp_path,
             "bundle",
-            artifact_name="vww96",
+            artifact_name="vww",
             artifact_role="reference",
             model_sha256="a" * 64,
             host_codegen="llvm",
@@ -385,7 +385,7 @@ def test_host_source_acceptance_requires_nonempty_matching_language(
             FakeFactory(module),
             tmp_path,
             "bundle",
-            artifact_name="vww96",
+            artifact_name="vww",
             artifact_role="reference",
             model_sha256="a" * 64,
             host_codegen=host_codegen,

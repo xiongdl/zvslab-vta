@@ -13,7 +13,6 @@ def test_registry_lists_exact_model_assets_in_application_order():
         "streaming_wakeword_v1": (
             "streaming_wakeword_v1", "model", "str_ww_ref_model.tflite"
         ),
-        "visual_wake_words_v1": ("visual_wake_words_v1", "model", "vww_96_float.tflite"),
     }
 
     assert MODEL_PIPELINES == expected

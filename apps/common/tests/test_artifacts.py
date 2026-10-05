@@ -59,7 +59,7 @@ def test_inventory_scopes_model_and_preserves_unknown_and_tracked_files(tmp_path
 
 
 def test_inventory_accepts_exact_model_ids_and_reports_missing_roots(tmp_path):
-    assert len(MODEL_IDS) == 6
+    assert len(MODEL_IDS) == 5
     result = inventory_artifacts(tmp_path / "absent", model="all", tracked_paths=set())
     assert result.items == ()
     assert result.total_bytes == 0

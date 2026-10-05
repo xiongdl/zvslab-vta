@@ -1,87 +1,103 @@
-"""VWW unified runtime schedule and deployment evidence checks."""
+"""Markdown deployment report and target CLI contracts."""
 
 import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _load_runtime():
-    spec = importlib.util.spec_from_file_location("vww_unified_runtime_profile", APP_ROOT / "runtime.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
+def _load(path, name):
     sys.path.insert(0, str(APP_ROOT))
     try:
-        spec.loader.exec_module(module)
+        import importlib
+        module_name = "python.deployment" if path in ("python/deployment.py",) else "deploy"
+        return importlib.import_module(module_name)
     finally:
         sys.path.pop(0)
-    return module
 
 
-def test_cycle_gate_uses_inclusive_ten_percent():
-    runtime = _load_runtime()
 
-    assert runtime.cycles_within_ten_percent(110, 100) is True
-    assert runtime.cycles_within_ten_percent(90, 100) is True
-    assert runtime.cycles_within_ten_percent(111, 100) is False
-    assert runtime.cycles_within_ten_percent(89, 100) is False
-    with pytest.raises(ValueError, match="positive integer"):
-        runtime.cycles_within_ten_percent(True, 100)
-
-
-def test_runtime_reports_each_occurrence_snapshot_or_default():
-    runtime = _load_runtime()
-    artifacts = SimpleNamespace(schedule_coverage=(
-        (0, "vta_a", True), (1, "vta_b", False),
-    ))
-
-    assert runtime.schedule_coverage_rows(artifacts) == [
-        {"occurrence": 0, "symbol": "vta_a", "selected": True},
-        {"occurrence": 1, "symbol": "vta_b", "selected": False},
-    ]
-
-
-def test_schedule_evidence_requires_measured_complete_coverage():
-    runtime = _load_runtime()
-    layers = (SimpleNamespace(occurrence=0), SimpleNamespace(occurrence=1))
-    deployment = SimpleNamespace(layers=layers)
-    selected = {
-        0: SimpleNamespace(measured=True),
-        1: SimpleNamespace(measured=True),
-    }
-    runtime._validate_schedule_evidence(deployment, SimpleNamespace(selected=selected))
-
-    with pytest.raises(ValueError, match="complete occurrence coverage"):
-        runtime._validate_schedule_evidence(deployment, SimpleNamespace(selected={0: selected[0]}))
-    selected[1] = SimpleNamespace(measured=False)
-    with pytest.raises(ValueError, match="measured config"):
-        runtime._validate_schedule_evidence(deployment, SimpleNamespace(selected=selected))
+def test_markdown_report_documents_cpu_and_fsim_unavailable_measurements(tmp_path, monkeypatch):
+    runtime = _load("python/deployment.py", "ic_v1_profile_runtime")
+    monkeypatch.setenv("VTA_CONFIG_FILE", str(APP_ROOT.parents[2] / "config" / "vta_64mac.json"))
+    result = SimpleNamespace(
+        target="vta,c", simulator="fsim", model_path=Path("resnet.tflite"),
+        input_path=Path("image.png"), model_sha256="a" * 64, input_sha256="b" * 64,
+        schedule=None, schedule_coverage=(), predicted_class=1,
+        scores=np.array([[0.1, 0.9]], dtype="float32"),
+        layers=(
+            runtime.LayerMetrics("vta.conv0", "vta", "nn.conv2d", 1024, None, 64, None),
+            runtime.LayerMetrics("cpu.conv0", "cpu", "nn.conv2d", 2048, None, None, None),
+        ),
+        whole_cycles=None, profiler_stats={"gemm_counter": 12},
+    )
+    path = tmp_path / "report.md"
+    runtime.write_deployment_report(result, path)
+    report = path.read_text(encoding="utf-8")
+    assert "# VWW deployment report" in report
+    assert "| vta.conv0 | vta | nn.conv2d | 1,024 | N/A | 64 | N/A |" in report
+    assert "| cpu.conv0 | cpu | nn.conv2d | 2,048 | N/A | N/A | N/A |" in report
+    assert "FSIM does not provide cycle counts" in report
+    assert "gemm_counter" in report
 
 
-def test_run_cli_has_one_schedule_and_report_evidence_interface():
-    spec = importlib.util.spec_from_file_location("vww_unified_run_cli", APP_ROOT / "run.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    sys.path.insert(0, str(APP_ROOT))
+def test_tsim_report_calculates_layer_and_whole_model_utilization(tmp_path, monkeypatch):
+    runtime = _load("python/deployment.py", "ic_v1_tsim_profile_runtime")
+    monkeypatch.setenv("VTA_CONFIG_FILE", str(APP_ROOT.parents[2] / "config" / "vta_64mac.json"))
+    result = SimpleNamespace(
+        target="vta,llvm", simulator="tsim", model_path=Path("resnet.tflite"),
+        input_path=Path("image.png"), model_sha256="a" * 64, input_sha256="b" * 64,
+        schedule=Path("best.log"), schedule_coverage=((0, "layer0", True),),
+        predicted_class=1, scores=np.array([[0.2, 0.8]], dtype="float32"),
+        layers=(runtime.LayerMetrics("layer0", "vta", "nn.conv2d", 640, 5, 8, 16.0),),
+        whole_cycles=10, profiler_stats={"cycle_count": 10},
+    )
+    path = tmp_path / "report.md"
+    runtime.write_deployment_report(result, path)
+    report = path.read_text(encoding="utf-8")
+    assert "1600.00%" in report
+    assert "- Whole-model VTA MAC utilization: 800.00%" in report
+    assert "Sum of measured VTA layer cycles: 5; residual against whole-model cycles: 5." in report
+
+
+def test_conv_mac_count_uses_per_group_kernel_input_extent():
+    runtime = _load("python/deployment.py", "ic_v1_mac_arithmetic_runtime")
+    call = SimpleNamespace(
+        checked_type=SimpleNamespace(shape=(1, 8, 8, 16)),
+        args=(None, SimpleNamespace(checked_type=SimpleNamespace(shape=(3, 3, 4, 16)))),
+        attrs=SimpleNamespace(kernel_layout="HWIO", groups=2),
+    )
+    assert runtime._conv_macs(call) == 36_864
+
+
+def test_parser_accepts_four_targets_and_rejects_retired_flags():
+    runner = _load("deploy.py", "ic_v1_cli_contract")
+    parser = runner._parser()
+    assert parser.parse_args([]).target == "vta,llvm"
+    for target in ("c", "llvm", "vta,c", "vta,llvm"):
+        assert parser.parse_args(["--target", target]).target == target
+    for removed in ("--host-codegen", "--validate-schedule-evidence"):
+        with pytest.raises(SystemExit):
+            parser.parse_args([removed, "all"] if removed == "--host-codegen" else [removed])
+
+
+def test_cpu_entrypoint_needs_no_vta_backend():
+    runner = _load("deploy.py", "ic_v1_cpu_entrypoint")
+    result = SimpleNamespace()
+    calls = []
+    runtime = SimpleNamespace(
+        run_selected=lambda **kwargs: calls.append(kwargs) or result,
+        write_deployment_report=lambda *_: None,
+    )
+    sys.modules["python"].deployment = runtime
     try:
-        spec.loader.exec_module(module)
+        assert runner.main(["--target", "llvm"]) == 0
     finally:
-        sys.path.pop(0)
-    args = module._parser().parse_args([
-        "--schedule", "none", "--deployment-report", "report.json",
-        "--validate-schedule-evidence",
-    ])
-    assert args.schedule == "none"
-    assert args.deployment_report == Path("report.json")
-    assert args.validate_schedule_evidence is True
-    with pytest.raises(SystemExit):
-        module._parser().parse_args(["--autotvm-log", "old.log"])
-
-
-def test_runtime_module_does_not_depend_on_second_deployment_command():
-    assert not (APP_ROOT / "tune" / "deployment.py").exists()
+        del sys.modules["python"].deployment
+    assert calls[0]["target"] == "llvm"

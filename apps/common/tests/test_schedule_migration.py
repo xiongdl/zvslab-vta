@@ -15,13 +15,11 @@ ARTIFACTS = {
     "anomaly_detection_v1": "anomaly_detection_v1/tune/optimal/20261001T174411.872234Z/best-manifest.json",
     "keyword_spotting_v1": "keyword_spotting_v1/tune/optimal/20261001T192416.141960Z/best-manifest.json",
     "streaming_wakeword_v1": "streaming_wakeword_v1/tune/optimal/20261001T205934.834798Z/best-manifest.json",
-    "visual_wake_words_v1": "visual_wake_words_v1/tune/optimal/20261001T220401.514781Z/best-manifest.json",
 }
 DEPLOYMENT_REPORTS = {
     "anomaly_detection_v1": "anomaly_detection_v1/tune/deployment-full.json",
     "keyword_spotting_v1": "keyword_spotting_v1/tune/deployment-full.json",
     "streaming_wakeword_v1": "streaming_wakeword_v1/tune/deployment-full.json",
-    "visual_wake_words_v1": "visual_wake_words_v1/tune/deployment-full.json",
 }
 
 
@@ -84,18 +82,6 @@ def test_committed_full_fusion_artifacts_migrate_only_for_actual_layer_identitie
     for row in metadata["occurrences"]:
         measured = next(result for result in row["measurement"]["results"] if result is not None)
         assert measured["costs"] == [report_cycles[row["symbol"]]]
-
-    if model_id == "visual_wake_words_v1":
-        calculator_path = ROOT / "scripts" / "mac_utilization.py"
-        spec = importlib.util.spec_from_file_location("migration_mac_calculator", calculator_path)
-        calculator = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(calculator)
-        calculated = calculator.calculate_deployment_report(report)
-        calculator_cycles = {
-            row["symbol"]: row["autotvm_cycles_per_invocation"]
-            for row in calculated["occurrences"]
-        }
-        assert calculator_cycles == report_cycles
 
 
 def test_historical_migration_rejects_missing_single_call_protocol(tmp_path):
