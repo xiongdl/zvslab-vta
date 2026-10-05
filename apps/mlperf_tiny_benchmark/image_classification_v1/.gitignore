@@ -4,7 +4,3 @@
 !tune/*/*.json
 !tune/*/*.log
 !tune/*/*.tmp
-!tune/legacy/
-!tune/legacy/c4-full/
-!tune/legacy/c4-full/*.json
-!tune/legacy/c4-full/*.log

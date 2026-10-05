@@ -1,9 +1,11 @@
 # MLPerf Tiny VTA applications
 
-Each model application has one deployment entry point, `run.py`, and one
-schedule-search entry point, `tune.py`. Both use the model's actual prepared
-deployment layers and shared VTA lowering. Generic per-operator AutoTVM tuning
-and separate model deployment commands have been retired.
+Each model application has a deployment entry point, `run.py`, and a tuning
+entry point, `tune.py`. Their exact command interfaces are model-specific.
+`image_classification_v1` also provides a Makefile and documents its standalone
+single-image and FSIM/TSIM workflow in its own README. The other applications
+document their own host and schedule interfaces below. Generic per-operator
+AutoTVM tuning and separate model deployment commands have been retired.
 
 The six applications are `image_classification_v1`,
 `image_classification_v2`, `anomaly_detection_v1`, `keyword_spotting_v1`,
@@ -54,10 +56,10 @@ model/geometry/schedule identities, selected and default coverage, output
 checks, and any measured evidence. Model README files describe the exact
 sample and performance gates.
 
-## Seed, search, resume, and export
+## Seed, search, resume, and export for the other models
 
-Tune the actual deployment occurrences with a model's `tune.py`; all six
-scripts expose the same command shape. A TSIM seed measures the default
+Tune the actual deployment occurrences with one of the other models' `tune.py`
+scripts. A TSIM seed measures the default
 schedule at each occurrence, exports a complete schedule log/metadata pair,
 and is then run once through `run.py --validate-schedule-evidence` to create
 the alignment report required by search:
@@ -108,12 +110,13 @@ best exports are ordinary deployable schedule snapshots and can be supplied
 to `run.py --schedule PATH`. A one-occurrence export is a valid partial
 snapshot.
 
-The runner can migrate compatible historical full-fusion manifests to the
+Model flows that still support migration can migrate compatible historical full-fusion manifests to the
 current actual-compute snapshot format with the common
 `common.schedule.migrate_legacy_full_fusion` helper. Migration validates the
 real model computation, geometry, schedule configuration, native records, and
 historical single-call TSIM measurement protocol; it does not invent new
-measurements. Models expose this through their migration option in `tune.py`.
+measurements. The standalone image_classification_v1 tuning flow uses its
+current FSIM and TSIM logs and does not use these historical manifests.
 
 ## Cleanup
 

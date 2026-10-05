@@ -8,12 +8,19 @@ MLPerf result.
 
 ## Requirements
 
-Use the existing `.envs/tvm-vta-env`, initialized `tvm/` and `vta/`
-submodules, and previously built libraries. The CPU target needs TVM; a VTA
-target also needs the selected VTA simulator library and an absolute geometry
-configuration in `VTA_CONFIG_FILE`. A direct VTA invocation sets matching
-`VTA_BACKEND` and `--simulator` values. CPU invocation does not require either
-variable or simulator libraries.
+The application code, ResNet-8 model, and default input image are contained in
+this directory. Running it still requires the repository's `.envs/tvm-vta-env`
+and initialized `tvm/` and `vta/` checkouts. CPU targets need TVM; VTA targets
+also need the selected simulator library and an absolute geometry configuration
+in `VTA_CONFIG_FILE`. A direct VTA invocation sets matching `VTA_BACKEND` and
+`--simulator` values. CPU invocation does not require either variable or VTA
+simulator libraries. The Makefile uses the current repository layout to find
+these external components.
+
+The application's Python code does not import `apps/common` or neighboring
+benchmark applications. Its tests use the project TVM/VTA environment and
+libraries; they do not need the original CIFAR-10 archive or repository setup
+and sample-extraction scripts.
 
 Run from the repository root with:
 
@@ -179,6 +186,3 @@ identities and preserves other occurrences. Re-tuning a selected occurrence
 invalidates its previous best while retaining other best selections. Files are
 staged and validated before publication, and ordinary write failures restore
 the previous validated set. Do not run concurrent writers in one tune folder.
-
-Historical evidence is preserved under `tune/legacy/c4-full/`; it predates
-this single-image deployment path and is not a fresh measurement.

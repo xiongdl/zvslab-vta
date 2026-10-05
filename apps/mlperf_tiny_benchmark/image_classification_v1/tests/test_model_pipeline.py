@@ -181,7 +181,7 @@ def test_quantization_restores_numpy_math_when_relay_raises(model_pipeline, monk
     assert not hasattr(np, "math")
 
 
-def test_prepare_forks_reference_and_mixed_from_one_quantized_module(model_pipeline, monkeypatch):
+def test_prepare_partitions_the_single_quantized_module(model_pipeline, monkeypatch):
     imported = object()
     quantized_module = object()
     mixed_module = object()
@@ -213,7 +213,6 @@ def test_prepare_forks_reference_and_mixed_from_one_quantized_module(model_pipel
 
     assert prepared.imported is imported
     assert prepared.quantized_module is quantized_module
-    assert prepared.reference_module is quantized_module
     assert prepared.mixed_module is mixed_module
     assert prepared.routing is routing
     assert calls == [
@@ -230,7 +229,6 @@ def test_real_quantized_partition_has_exact_deterministic_eight_region_routing(m
     first = model_pipeline.prepare_model(MODEL_PATH)
     second = model_pipeline.prepare_model(MODEL_PATH)
 
-    assert tvm.ir.structural_equal(first.quantized_module, first.reference_module)
     assert tvm.ir.structural_equal(first.quantized_module, second.quantized_module)
     assert tvm.ir.structural_equal(first.mixed_module, second.mixed_module)
     assert first.routing == second.routing

@@ -157,7 +157,6 @@ class MakeWorkflowTests(unittest.TestCase):
         self.assertFalse(ignored(tune_dir / "fsim.tmp"))
         self.assertFalse(ignored(tune_dir / "best.log"))
         self.assertFalse(ignored(tune_dir / "best.json"))
-        self.assertFalse(ignored(APP_DIR / "tune" / "legacy" / "c4-full" / "best-manifest.json"))
         self.assertTrue(ignored(APP_DIR / "build" / "workloads.json"))
 
     def test_make_c_relative_paths_resolve_from_make_working_directory(self):

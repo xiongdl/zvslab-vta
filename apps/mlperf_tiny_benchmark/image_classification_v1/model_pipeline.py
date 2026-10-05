@@ -91,11 +91,10 @@ class RoutingSummary:
 
 @dataclass(frozen=True)
 class PreparedModel:
-    """The one quantized reference graph and its mixed VTA partition."""
+    """The quantized graph and its mixed VTA partition."""
 
     imported: ImportedModel
     quantized_module: tvm.IRModule
-    reference_module: tvm.IRModule
     mixed_module: tvm.IRModule
     routing: RoutingSummary
 
@@ -256,10 +255,10 @@ def _composite_names(function):
     return tuple(names)
 
 
-def inspect_partitioning(reference_module, mixed_module):
+def inspect_partitioning(quantized_module, mixed_module):
     """Validate and summarize the exact eight-region VTA routing contract."""
-    if _count_operator(reference_module["main"], "nn.conv2d") != 9:
-        raise ValueError("quantized reference must contain exactly nine convolutions")
+    if _count_operator(quantized_module["main"], "nn.conv2d") != 9:
+        raise ValueError("quantized model must contain exactly nine convolutions")
 
     external = []
     for global_var, function in mixed_module.functions.items():
@@ -316,7 +315,6 @@ def prepare_model(model_path, *, use_vta=True):
     return PreparedModel(
         imported=imported,
         quantized_module=quantized_module,
-        reference_module=quantized_module,
         mixed_module=mixed_module,
         routing=routing,
     )

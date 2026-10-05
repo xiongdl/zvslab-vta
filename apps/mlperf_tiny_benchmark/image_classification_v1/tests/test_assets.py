@@ -19,30 +19,21 @@
 
 import hashlib
 import json
-import pickle
-import re
-import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
-VTA_ROOT = Path(__file__).resolve().parents[4]
-REPOSITORY_ROOT = VTA_ROOT.parent
 MODEL_PATH = APP_ROOT / "model" / "pretrainedResnet.tflite"
 MODEL_README_PATH = APP_ROOT / "model" / "README.md"
 MLPERF_LICENSE_PATH = APP_ROOT / "LICENSE.mlperf-tiny"
 MANIFEST_PATH = APP_ROOT / "samples" / "manifest.json"
-EXTRACTOR_PATH = REPOSITORY_ROOT / "scripts" / "extract_mlperf_resnet_samples.py"
-LOCAL_TEST_BATCH = VTA_ROOT / "apps" / "mlperf_tiny_benchmark" / "cifar-10-batches-py" / "test_batch"
 
 MODEL_SHA256 = "b5c0046d6e0328b4956afd6baa29555a29b1f1c65bdd45aaed75b7cd484d9f79"
 MLPERF_LICENSE_SHA256 = "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
 TEST_BATCH_SHA256 = "f53d8d457504f7cff4ea9e021afcf0e0ad8e24a91f3fc42091b8adef61157831"
 
-EXPECTED_DEPENDENCIES = {"tflite": "2.10.0", "Pillow": "11.3.0"}
 EXPECTED_OPERATOR_CODES = [3, 3, 3, 0, 3, 3, 3, 0, 3, 3, 3, 0, 1, 22, 9, 25]
 EXPECTED_CONV_CHANNELS = [16, 16, 16, 32, 32, 32, 64, 64, 64]
 EXPECTED_SAMPLES = [
@@ -147,29 +138,6 @@ def _manifest():
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
 
-def _load_local_test_batch():
-    with LOCAL_TEST_BATCH.open("rb") as stream:
-        return pickle.load(stream, encoding="bytes")
-
-
-def _batch_rgb(batch, index):
-    chw = np.asarray(batch[b"data"][index], dtype="uint8").reshape(3, 32, 32)
-    return np.transpose(chw, (1, 2, 0))
-
-
-def test_setup_pins_only_the_two_approved_additional_dependencies():
-    setup_text = (REPOSITORY_ROOT / "scripts" / "setup_tvm_vta_env.sh").read_text(
-        encoding="utf-8"
-    )
-    for package, version in EXPECTED_DEPENDENCIES.items():
-        assert re.search(rf'(?m)^\s*["\']?{re.escape(package)}=={re.escape(version)}["\']?\s*\\?$', setup_text)
-
-    forbidden = ["tensorflow", "tflite-runtime", "scikit-learn", "h5py", "cmsis-nn", "autotvm"]
-    lowered = setup_text.lower()
-    for package in forbidden:
-        assert package not in lowered
-
-
 def test_model_is_the_exact_unmodified_mlperf_tiny_v14_float_artifact():
     assert _sha256(MODEL_PATH) == MODEL_SHA256
     assert _sha256(MLPERF_LICENSE_PATH) == MLPERF_LICENSE_SHA256
@@ -267,42 +235,3 @@ def test_committed_pngs_match_exact_bytes_and_decode_as_lossless_rgb():
         assert pixels.dtype == np.uint8
         assert pixels.shape == (32, 32, 3)
         assert hashlib.sha256(pixels.tobytes()).hexdigest() == sample["raw_rgb_sha256"]
-
-
-def test_committed_pngs_match_optional_local_test_batch_exactly():
-    if not LOCAL_TEST_BATCH.exists():
-        return
-
-    from PIL import Image
-
-    assert _sha256(LOCAL_TEST_BATCH) == TEST_BATCH_SHA256
-    batch = _load_local_test_batch()
-    for sample in EXPECTED_SAMPLES:
-        index = sample["test_index"]
-        assert int(batch[b"labels"][index]) == sample["numeric_label"]
-        assert batch[b"filenames"][index].decode("utf-8") == sample["original_filename"]
-        with Image.open(MANIFEST_PATH.parent / sample["filename"]) as image:
-            actual = np.asarray(image.convert("RGB"))
-        np.testing.assert_array_equal(actual, _batch_rgb(batch, index))
-
-
-def test_extractor_recreates_committed_manifest_and_png_hashes(tmp_path):
-    if not LOCAL_TEST_BATCH.exists():
-        return
-
-    subprocess.run(
-        [
-            sys.executable,
-            str(EXTRACTOR_PATH),
-            "--test-batch",
-            str(LOCAL_TEST_BATCH),
-            "--output-dir",
-            str(tmp_path),
-        ],
-        check=True,
-    )
-
-    recreated_manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
-    assert recreated_manifest == _manifest()
-    for sample in EXPECTED_SAMPLES:
-        assert _sha256(tmp_path / sample["filename"]) == sample["png_sha256"]
