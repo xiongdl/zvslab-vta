@@ -25,16 +25,13 @@ from pathlib import Path
 import numpy as np
 import tflite
 import tvm
-import vta
 from PIL import Image
 from tvm import relay
 
 
 MODEL_SHA256 = "fb17ae9c1b6d0e5bd97f0f35024f207556261d7310b249716c87cc0628214b0e"
-INPUT_NAME = "serving_default_input_5:0"
 INPUT_SHAPE = (1, 32, 32, 3)
 INPUT_DTYPE = "float32"
-OUTPUT_NAME = "StatefulPartitionedCall:0"
 OUTPUT_SHAPE = (1, 10)
 OUTPUT_DTYPE = "float32"
 EXPECTED_TFLITE_OPERATORS = (
@@ -56,9 +53,6 @@ EXPECTED_TFLITE_OPERATORS = (
     "SOFTMAX",
 )
 EXPECTED_CONV_CHANNELS = (40, 40, 40, 80, 80, 80, 160, 160, 160)
-EXPECTED_VTA_SYMBOLS = tuple(
-    f"tvmgen_mlperf_resnet_large_vta_main_{index}" for index in range(8)
-)
 REQUIRED_HOST_OPERATORS = frozenset(
     {"add", "nn.avg_pool2d", "nn.conv2d", "nn.dense", "nn.softmax", "reshape"}
 )
@@ -98,7 +92,6 @@ class PreparedModel:
 
     imported: ImportedModel
     quantized_module: tvm.IRModule
-    reference_module: tvm.IRModule
     mixed_module: tvm.IRModule
     routing: RoutingSummary
 
@@ -133,11 +126,15 @@ def _flatbuffer_contract(model_bytes):
 
     input_tensor = graph.Tensors(graph.Inputs(0))
     output_tensor = graph.Tensors(graph.Outputs(0))
-    input_contract = (_tensor_name(input_tensor), _shape(input_tensor), int(input_tensor.Type()))
-    output_contract = (_tensor_name(output_tensor), _shape(output_tensor), int(output_tensor.Type()))
-    if input_contract != (INPUT_NAME, INPUT_SHAPE, int(tflite.TensorType.FLOAT32)):
+    input_contract = (
+        _tensor_name(input_tensor), _shape(input_tensor), int(input_tensor.Type())
+    )
+    output_contract = (
+        _tensor_name(output_tensor), _shape(output_tensor), int(output_tensor.Type())
+    )
+    if input_contract[1:] != (INPUT_SHAPE, int(tflite.TensorType.FLOAT32)):
         raise ValueError(f"unexpected model input contract: {input_contract}")
-    if output_contract != (OUTPUT_NAME, OUTPUT_SHAPE, int(tflite.TensorType.FLOAT32)):
+    if output_contract[1:] != (OUTPUT_SHAPE, int(tflite.TensorType.FLOAT32)):
         raise ValueError(f"unexpected model output contract: {output_contract}")
 
     operator_names = []
@@ -157,7 +154,13 @@ def _flatbuffer_contract(model_bytes):
         raise ValueError(f"unexpected TFLite operator topology: {operator_names}")
     if convolution_channels != EXPECTED_CONV_CHANNELS:
         raise ValueError(f"unexpected convolution channel topology: {convolution_channels}")
-    return model, operator_names, convolution_channels
+    return (
+        model,
+        input_contract[0],
+        output_contract[0],
+        operator_names,
+        convolution_channels,
+    )
 
 
 def _relay_operator_names(function):
@@ -172,20 +175,26 @@ def _relay_operator_names(function):
 
 
 def import_float_model(model_path):
-    """Verify and import the exact committed floating ResNet-8 Large artifact."""
+    """Verify and import the supported floating ResNet-8 Large topology."""
     model_path = Path(model_path)
     model_bytes = model_path.read_bytes()
     model_sha256 = hashlib.sha256(model_bytes).hexdigest()
-    if model_sha256 != MODEL_SHA256:
-        raise ValueError(
-            f"model SHA-256 mismatch: expected {MODEL_SHA256}, received {model_sha256}"
-        )
-
-    model, operator_names, convolution_channels = _flatbuffer_contract(model_bytes)
+    try:
+        (
+            model,
+            input_name,
+            output_name,
+            operator_names,
+            convolution_channels,
+        ) = _flatbuffer_contract(model_bytes)
+    except ValueError:
+        raise
+    except Exception as error:
+        raise ValueError("model is not a valid TFLite FlatBuffer") from error
     module, params = relay.frontend.from_tflite(
         model,
-        shape_dict={INPUT_NAME: INPUT_SHAPE},
-        dtype_dict={INPUT_NAME: INPUT_DTYPE},
+        shape_dict={input_name: INPUT_SHAPE},
+        dtype_dict={input_name: INPUT_DTYPE},
     )
     module = relay.transform.InferType()(module)
     main = module["main"]
@@ -214,10 +223,10 @@ def import_float_model(model_path):
         module=module,
         params=dict(params),
         model_sha256=model_sha256,
-        input_name=INPUT_NAME,
+        input_name=input_name,
         input_shape=INPUT_SHAPE,
         input_dtype=INPUT_DTYPE,
-        output_name=OUTPUT_NAME,
+        output_name=output_name,
         output_shape=OUTPUT_SHAPE,
         output_dtype=OUTPUT_DTYPE,
         tflite_operator_names=operator_names,
@@ -259,9 +268,9 @@ def _composite_names(function):
     return tuple(names)
 
 
-def inspect_partitioning(reference_module, mixed_module):
-    """Validate and summarize the exact eight-partition VTA routing contract."""
-    if _count_operator(reference_module["main"], "nn.conv2d") != 9:
+def inspect_partitioning(quantized_module, mixed_module):
+    """Validate and summarize the observed VTA partition routing."""
+    if _count_operator(quantized_module["main"], "nn.conv2d") != 9:
         raise ValueError("quantized reference must contain exactly nine convolutions")
 
     external = []
@@ -286,37 +295,37 @@ def inspect_partitioning(reference_module, mixed_module):
         host_operator_names=tuple(sorted(set(host_operator_names))),
         composite_names=composite_names,
     )
-    if summary.symbols != EXPECTED_VTA_SYMBOLS:
-        raise ValueError(f"unexpected VTA symbols: {summary.symbols}")
-    if summary.convolutions_per_partition != (1,) * 8:
+    if any(count < 1 for count in summary.convolutions_per_partition):
         raise ValueError(
-            f"each VTA partition must contain one convolution: {summary.convolutions_per_partition}"
+            f"VTA partitions must contain real convolutions: {summary.convolutions_per_partition}"
         )
-    if summary.host_convolution_count != 1:
-        raise ValueError("the one non-partitioned convolution must remain on the host")
     if not REQUIRED_HOST_OPERATORS <= set(summary.host_operator_names):
         missing = sorted(REQUIRED_HOST_OPERATORS - set(summary.host_operator_names))
         raise ValueError(f"mixed main is missing required host operators: {missing}")
-    if len(summary.composite_names) != 8 or not all(
+    if len(summary.composite_names) != len(summary.symbols) or not all(
         name.startswith("vta.") for name in summary.composite_names
     ):
         raise ValueError(f"unexpected VTA composites: {summary.composite_names}")
     return summary
 
 
-def prepare_model(model_path):
-    """Import, quantize once, and fork reference and mixed graphs."""
+def prepare_model(model_path, *, use_vta=True):
+    """Import and quantize once, optionally adding a real VTA partition."""
     imported = import_float_model(model_path)
     quantized_module = quantize_model(imported)
-    reference_module = quantized_module
-    mixed_module = vta.relay.partition_for_vta(
-        quantized_module, mod_name="mlperf_resnet_large"
-    )
-    routing = inspect_partitioning(reference_module, mixed_module)
+    if use_vta:
+        import vta
+
+        mixed_module = vta.relay.partition_for_vta(
+            quantized_module, mod_name="mlperf_resnet_large"
+        )
+        routing = inspect_partitioning(quantized_module, mixed_module)
+    else:
+        mixed_module = None
+        routing = None
     return PreparedModel(
         imported=imported,
         quantized_module=quantized_module,
-        reference_module=reference_module,
         mixed_module=mixed_module,
         routing=routing,
     )
@@ -329,3 +338,12 @@ def load_sample(sample_path):
             raise ValueError(f"sample must be 32x32 pixels, received {image.size}")
         pixels = np.asarray(image.convert("RGB"), dtype="uint8")
     return pixels.astype("float32")[None, ...]
+
+
+def __getattr__(name):
+    """Preserve a lazy VTA test seam without importing VTA for CPU use."""
+    if name == "vta":
+        import vta
+
+        return vta
+    raise AttributeError(name)

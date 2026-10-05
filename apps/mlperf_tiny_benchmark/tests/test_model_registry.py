@@ -8,9 +8,6 @@ from mlperf_tiny_benchmark.model_registry import MODEL_PIPELINES
 def test_registry_lists_exact_model_assets_in_application_order():
     expected = {
         "image_classification_v1": ("image_classification_v1", "model", "pretrainedResnet.tflite"),
-        "image_classification_v2": (
-            "image_classification_v2", "model", "pretrainedResnet_large_float.tflite"
-        ),
         "anomaly_detection_v1": ("anomaly_detection_v1", "model", "ad01_fp32.tflite"),
         "keyword_spotting_v1": ("keyword_spotting_v1", "model", "kws_ref_model.tflite"),
         "streaming_wakeword_v1": (

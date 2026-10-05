@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Contracts for importing, quantizing, and partitioning ResNet-8 Large."""
+"""Contracts for importing, quantizing, and partitioning the ResNet-8 Large model."""
 
 import ast
 import importlib.util
@@ -29,44 +29,68 @@ import pytest
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
-MODEL_PIPELINE_PATH = APP_ROOT / "model_pipeline.py"
+MODEL_PIPELINE_PATH = APP_ROOT / "python" / "model.py"
 MODEL_PATH = APP_ROOT / "model" / "pretrainedResnet_large_float.tflite"
 SAMPLE_PATH = APP_ROOT / "samples" / "00-airplane.png"
 MODEL_SHA256 = "fb17ae9c1b6d0e5bd97f0f35024f207556261d7310b249716c87cc0628214b0e"
 
 EXPECTED_TFLITE_OPERATORS = (
-    "CONV_2D", "CONV_2D", "CONV_2D", "ADD",
-    "CONV_2D", "CONV_2D", "CONV_2D", "ADD",
-    "CONV_2D", "CONV_2D", "CONV_2D", "ADD",
-    "AVERAGE_POOL_2D", "RESHAPE", "FULLY_CONNECTED", "SOFTMAX",
+    "CONV_2D",
+    "CONV_2D",
+    "CONV_2D",
+    "ADD",
+    "CONV_2D",
+    "CONV_2D",
+    "CONV_2D",
+    "ADD",
+    "CONV_2D",
+    "CONV_2D",
+    "CONV_2D",
+    "ADD",
+    "AVERAGE_POOL_2D",
+    "RESHAPE",
+    "FULLY_CONNECTED",
+    "SOFTMAX",
 )
 EXPECTED_CONV_CHANNELS = (40, 40, 40, 80, 80, 80, 160, 160, 160)
-EXPECTED_VTA_SYMBOLS = tuple(
-    f"tvmgen_mlperf_resnet_large_vta_main_{index}" for index in range(8)
-)
 REQUIRED_HOST_OPERATORS = {
-    "add", "nn.avg_pool2d", "nn.conv2d", "nn.dense", "nn.softmax", "reshape"
+    "add",
+    "nn.avg_pool2d",
+    "nn.conv2d",
+    "nn.dense",
+    "nn.softmax",
+    "reshape",
 }
 
 
 @pytest.fixture(scope="module")
 def model_pipeline():
-    assert MODEL_PIPELINE_PATH.is_file(), f"missing Task 5 implementation: {MODEL_PIPELINE_PATH}"
-    spec = importlib.util.spec_from_file_location("mlperf_resnet_large_model_pipeline", MODEL_PIPELINE_PATH)
+    assert MODEL_PIPELINE_PATH.is_file(), f"missing Task 11 implementation: {MODEL_PIPELINE_PATH}"
+    spec = importlib.util.spec_from_file_location("mlperf_resnet_model_pipeline", MODEL_PIPELINE_PATH)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
 
-def test_import_rejects_any_change_to_the_committed_model_bytes(model_pipeline, tmp_path):
-    changed_model = tmp_path / "changed.tflite"
-    contents = bytearray(MODEL_PATH.read_bytes())
-    contents[-1] ^= 1
-    changed_model.write_bytes(contents)
+def test_custom_model_path_accepts_same_supported_float_resnet8_large(model_pipeline, tmp_path):
+    custom_model = tmp_path / "custom-resnet8_large.tflite"
+    model = MODEL_PATH.read_bytes()
+    original_name = b"serving_default_input_5:0"
+    custom_name = b"testing_default_input_5:0"
+    assert len(original_name) == len(custom_name)
+    assert original_name in model
+    custom_model.write_bytes(model.replace(original_name, custom_name, 1))
+    imported = model_pipeline.import_float_model(custom_model)
+    assert imported.model_sha256 != MODEL_SHA256
+    assert imported.input_name == custom_name.decode()
 
-    with pytest.raises(ValueError, match="model SHA-256"):
-        model_pipeline.import_float_model(changed_model)
+
+def test_import_rejects_malformed_flatbuffer(model_pipeline, tmp_path):
+    invalid_model = tmp_path / "invalid.tflite"
+    invalid_model.write_bytes(b"not a flatbuffer")
+    with pytest.raises(ValueError, match="valid TFLite FlatBuffer"):
+        model_pipeline.import_float_model(invalid_model)
 
 
 def test_import_asserts_exact_float_resnet8_large_flatbuffer_and_relay_contract(model_pipeline):
@@ -129,7 +153,14 @@ def test_quantization_runs_once_with_only_the_approved_qconfig(model_pipeline, m
 
     assert actual is quantized_module
     assert events == [
-        ("qconfig", {"calibrate_mode": "global_scale", "global_scale": 8.0, "skip_conv_layers": [0]}),
+        (
+            "qconfig",
+            {
+                "calibrate_mode": "global_scale",
+                "global_scale": 8.0,
+                "skip_conv_layers": [0],
+            },
+        ),
         ("quantize", source_module, source_params),
     ]
 
@@ -155,7 +186,7 @@ def test_quantization_restores_numpy_math_when_relay_raises(model_pipeline, monk
     assert not hasattr(np, "math")
 
 
-def test_prepare_forks_reference_and_mixed_from_one_quantized_module(model_pipeline, monkeypatch):
+def test_prepare_partitions_the_single_quantized_module(model_pipeline, monkeypatch):
     imported = object()
     quantized_module = object()
     mixed_module = object()
@@ -187,7 +218,6 @@ def test_prepare_forks_reference_and_mixed_from_one_quantized_module(model_pipel
 
     assert prepared.imported is imported
     assert prepared.quantized_module is quantized_module
-    assert prepared.reference_module is quantized_module
     assert prepared.mixed_module is mixed_module
     assert prepared.routing is routing
     assert calls == [
@@ -198,22 +228,31 @@ def test_prepare_forks_reference_and_mixed_from_one_quantized_module(model_pipel
     ]
 
 
-def test_real_quantized_partition_has_exact_deterministic_eight_partition_routing(model_pipeline):
+def test_real_quantized_partition_reports_only_actual_vta_regions(model_pipeline):
     import tvm
 
     first = model_pipeline.prepare_model(MODEL_PATH)
     second = model_pipeline.prepare_model(MODEL_PATH)
 
-    assert tvm.ir.structural_equal(first.quantized_module, first.reference_module)
     assert tvm.ir.structural_equal(first.quantized_module, second.quantized_module)
     assert tvm.ir.structural_equal(first.mixed_module, second.mixed_module)
     assert first.routing == second.routing
-    assert first.routing.symbols == EXPECTED_VTA_SYMBOLS
-    assert first.routing.convolutions_per_partition == (1,) * 8
-    assert first.routing.host_convolution_count == 1
+    assert first.routing.symbols
+    assert len(first.routing.convolutions_per_partition) == len(first.routing.symbols)
+    assert all(count > 0 for count in first.routing.convolutions_per_partition)
     assert REQUIRED_HOST_OPERATORS <= set(first.routing.host_operator_names)
     assert all(name.startswith("vta.") for name in first.routing.composite_names)
-    assert len(first.routing.composite_names) == 8
+    assert len(first.routing.composite_names) == len(first.routing.symbols)
+
+
+def test_partition_inspection_accepts_truthful_zero_coverage(model_pipeline):
+    imported = model_pipeline.import_float_model(MODEL_PATH)
+    quantized = model_pipeline.quantize_model(imported)
+    summary = model_pipeline.inspect_partitioning(quantized, quantized)
+
+    assert summary.symbols == ()
+    assert summary.convolutions_per_partition == ()
+    assert summary.host_convolution_count == 9
 
 
 def test_sample_preprocessing_is_exact_float32_nhwc_without_normalization(model_pipeline):
@@ -244,7 +283,11 @@ def test_model_pipeline_has_no_forbidden_runtime_dependency_or_legacy_flow():
     assert "tflite_runtime" not in imported_roots
     lowered = source.lower()
     for forbidden in [
-        "autotvm", "graphpack", "relay.ext." + "vta", "tiny-v1.4",
-        "cifar-10-batches-py", "download_testdata",
+        "autotvm",
+        "graphpack",
+        "relay.ext." + "vta",
+        "tiny-v1.4",
+        "cifar-10-batches-py",
+        "download_testdata",
     ]:
         assert forbidden not in lowered

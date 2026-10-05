@@ -18,7 +18,7 @@ spec.loader.exec_module(tuning)
 
 def _identity():
     return {
-        "model_id": "image_classification_v2",
+        "model_id": "visual_wake_words_v1",
         "model_sha256": "m" * 64,
         "geometry_sha256": "g" * 64,
         "compute_sha256": "c" * 64,
@@ -161,7 +161,7 @@ def test_alignment_gate_requires_ten_outputs_one_performance_sample_and_cycles(t
     import hashlib
 
     report = {
-        "status": "passed", "model": "image_classification_v2",
+        "status": "passed", "model": "visual_wake_words_v1",
         "model_sha256": "m" * 64, "geometry_sha256": "g" * 64,
         "measurement_protocol": "tsim_single_call_v1", "sample_count": 10,
         "outputs_passed": 10, "performance_sample_count": 1,
@@ -176,7 +176,7 @@ def test_alignment_gate_requires_ten_outputs_one_performance_sample_and_cycles(t
         layers = [type("Layer", (), {"occurrence": 0, "symbol": "vta_0"})()]
 
     assert tuning.validate_alignment_report(
-        report_path, model_id="image_classification_v2", model_sha256="m" * 64,
+        report_path, model_id="visual_wake_words_v1", model_sha256="m" * 64,
         geometry_sha256="g" * 64, compute=Compute(), schedule_path=schedule,
     ) == report
 
@@ -184,7 +184,7 @@ def test_alignment_gate_requires_ten_outputs_one_performance_sample_and_cycles(t
     report_path.write_text(json.dumps(report))
     with pytest.raises(ValueError, match="all ten"):
         tuning.validate_alignment_report(
-            report_path, model_id="image_classification_v2", model_sha256="m" * 64,
+            report_path, model_id="visual_wake_words_v1", model_sha256="m" * 64,
             geometry_sha256="g" * 64, compute=Compute(), schedule_path=schedule,
         )
 
@@ -201,7 +201,7 @@ def test_candidate_and_best_exports_share_snapshot_format_and_keep_failures_unme
         config_spaces=[("conv2d_packed.vta", ("workload",), "vta", _Space())],
     )
     compute = SimpleNamespace(
-        model_id="image_classification_v2",
+        model_id="visual_wake_words_v1",
         model_sha256="m" * 64,
         geometry={"target": "sim_64x32", "model": "sim_64x32"},
         layers=[layer],

@@ -12,7 +12,7 @@ def _touch(path: Path, contents: bytes = b"x") -> Path:
 def test_inventory_covers_shared_and_selected_model_builds(tmp_path):
     benchmark = tmp_path / "mlperf_tiny_benchmark"
     shared_log = _touch(
-        benchmark / "build" / "autotvm" / "image_classification_v2-fsim-20261002T123456Z.log", b"abc"
+        benchmark / "build" / "autotvm" / "image_classification_v1-fsim-20261002T123456Z.log", b"abc"
     )
     cache_lib = _touch(benchmark / MODEL_IDS[0] / "build" / "reference" / "model.dylib", b"12345")
     run_ledger = _touch(
