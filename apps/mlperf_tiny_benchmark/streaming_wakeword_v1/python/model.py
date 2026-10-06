@@ -1,4 +1,4 @@
-"""Streaming wakeword input preparation and semantically exact Relay import."""
+"""Streaming wakeword float-feature preparation and quantized Relay import."""
 
 from dataclasses import dataclass
 from functools import lru_cache
@@ -20,16 +20,12 @@ WINDOW_STRIDE_SAMPLES = 512
 FFT_LENGTH = 1024
 MEL_BINS = 40
 POWER_OFFSET = 52.0
-INPUT_SCALE = 0.003701042616739869
-INPUT_ZERO_POINT = -128
 INPUT_SHAPE = (1, 30, 1, 40)
 INPUT_NAME = "serving_default_input_1:0"
-INPUT_DTYPE = "int8"
+INPUT_DTYPE = "float32"
 OUTPUT_NAME = "StatefulPartitionedCall:0"
 OUTPUT_SHAPE = (1, 3)
-OUTPUT_DTYPE = "int8"
-OUTPUT_SCALE = 0.00390625
-OUTPUT_ZERO_POINT = -128
+OUTPUT_DTYPE = "float32"
 VTA_MODULE_NAME = "mlperf_streaming_wakeword"
 LABELS = ("Marvin", "Silence", "Unknown")
 EXPECTED_TFLITE_OPERATORS = (
@@ -44,10 +40,6 @@ class ImportedModel:
     module: tvm.IRModule
     params: dict
     model_sha256: str
-    input_scale: float
-    input_zero_point: int
-    output_scale: float
-    output_zero_point: int
     tflite_operator_names: tuple
 
 
@@ -126,20 +118,14 @@ def _log_mel_features(samples):
     return np.clip(log_mel, 0.0, 1.0).astype(np.float32)
 
 
-def quantize_features(features, scale=INPUT_SCALE, zero_point=INPUT_ZERO_POINT):
-    features = np.asarray(features)
-    if features.shape != (30, 40) or features.dtype.kind not in "fc":
+def load_sample(sample_path):
+    """Return the existing normalized log-mel features as float32."""
+    features = _log_mel_features(_read_wav(sample_path))
+    if features.shape != (30, 40) or features.dtype != np.float32:
         raise ValueError(f"unexpected log-mel feature matrix: {features.shape}, {features.dtype}")
     if not np.isfinite(features).all() or float(features.min()) < 0.0 or float(features.max()) > 1.0:
         raise ValueError("log-mel features must be finite and clipped to [0, 1]")
-    if not math.isfinite(scale) or scale <= 0:
-        raise ValueError("input quantization scale must be positive and finite")
-    quantized = np.rint(features / np.float32(scale) + np.float32(zero_point))
-    return np.clip(quantized, -128, 127).astype(np.int8)[None, :, None, :]
-
-
-def load_sample(sample_path):
-    return quantize_features(_log_mel_features(_read_wav(sample_path)))
+    return features[None, :, None, :]
 
 
 def _tensor_shape(tensor):
@@ -149,13 +135,6 @@ def _tensor_shape(tensor):
 def _operator_name_map():
     return {value: name for name, value in vars(tflite.BuiltinOperator).items()
             if not name.startswith("_") and isinstance(value, int)}
-
-
-def _tensor_quantization(tensor):
-    quant = tensor.Quantization()
-    if quant is None or quant.ScaleLength() != 1 or quant.ZeroPointLength() != 1:
-        raise ValueError(f"tensor {tensor.Name()!r} must have one scale and zero point")
-    return float(quant.Scale(0)), int(quant.ZeroPoint(0))
 
 
 def import_model(model_path):
@@ -173,16 +152,15 @@ def import_model(model_path):
         output_tensor = graph.Tensors(graph.Outputs(0))
         input_contract = (input_tensor.Name().decode(), _tensor_shape(input_tensor), int(input_tensor.Type()))
         output_contract = (output_tensor.Name().decode(), _tensor_shape(output_tensor), int(output_tensor.Type()))
-        if input_contract != (INPUT_NAME, INPUT_SHAPE, int(tflite.TensorType.INT8)):
+        if input_contract != (INPUT_NAME, INPUT_SHAPE, int(tflite.TensorType.FLOAT32)):
             raise ValueError(f"unexpected model input contract: {input_contract}")
-        if output_contract != (OUTPUT_NAME, OUTPUT_SHAPE, int(tflite.TensorType.INT8)):
+        if output_contract != (OUTPUT_NAME, OUTPUT_SHAPE, int(tflite.TensorType.FLOAT32)):
             raise ValueError(f"unexpected model output contract: {output_contract}")
-        input_scale, input_zero = _tensor_quantization(input_tensor)
-        output_scale, output_zero = _tensor_quantization(output_tensor)
-        if not math.isclose(input_scale, INPUT_SCALE, rel_tol=1e-6, abs_tol=1e-9) or input_zero != INPUT_ZERO_POINT:
-            raise ValueError("model input quantization differs from the supported contract")
-        if not math.isclose(output_scale, OUTPUT_SCALE, rel_tol=1e-6, abs_tol=1e-9) or output_zero != OUTPUT_ZERO_POINT:
-            raise ValueError("model output quantization differs from the supported contract")
+        tensor_types = {int(graph.Tensors(i).Type()) for i in range(graph.TensorsLength())}
+        if any(int(dtype) in tensor_types for dtype in (
+            tflite.TensorType.INT8, tflite.TensorType.UINT8, tflite.TensorType.INT16
+        )):
+            raise ValueError("model must contain float32 tensors, not an integer-quantized model")
         operator_names = []
         names = _operator_name_map()
         for index in range(graph.OperatorsLength()):
@@ -209,18 +187,25 @@ def import_model(model_path):
         raise
     except Exception as error:
         raise ValueError("model is not a valid supported TFLite FlatBuffer") from error
-    return ImportedModel(module, dict(params), digest, input_scale, input_zero,
-                         output_scale, output_zero, operator_names)
+    return ImportedModel(module, dict(params), digest, operator_names)
 
 
 def prepare_model(model_path, use_vta=False):
-    """Canonicalize imported QNN ops without changing their fixed-point math."""
+    """Quantize float Relay and optionally partition the resulting graph for VTA."""
     imported = import_model(model_path)
-    # This is the CPU graph as well as the only candidate graph for partitioning.
-    # Its output must match imported QNN directly; no scalar-shift rewriting.
-    canonical = relay.transform.InferType()(
-        relay.qnn.transform.CanonicalizeOps()(imported.module)
-    )
+    with relay.quantize.qconfig(
+        calibrate_mode="global_scale", global_scale=8.0, skip_conv_layers=[0]
+    ):
+        missing = object()
+        previous_math = getattr(np, "math", missing)
+        np.math = math
+        try:
+            canonical = relay.quantize.quantize(imported.module, params=imported.params)
+        finally:
+            if previous_math is missing:
+                delattr(np, "math")
+            else:
+                np.math = previous_math
     if not use_vta:
         return PreparedModel(imported, canonical, None, RoutingSummary(()), None)
 

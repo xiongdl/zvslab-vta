@@ -1,4 +1,4 @@
-"""Deterministic KWS preprocessing and arithmetic-preserving Relay preparation."""
+"""Deterministic float-feature preprocessing and quantized Relay preparation."""
 
 from dataclasses import dataclass
 import hashlib
@@ -29,11 +29,11 @@ QUANTIZATION = {
 }
 MODEL_SHA256 = "aeea436800704fce17b17292e4412630ad856e9d777c044c64ef748a880bd0ae"
 INPUT_SHAPE = (1, 49, 10, 1)
-INPUT_DTYPE = "int8"
-INPUT_SCALE = 0.5847029
-INPUT_ZERO_POINT = 83
+INPUT_NAME = "input_1"
+INPUT_DTYPE = "float32"
 OUTPUT_SHAPE = (1, 12)
-OUTPUT_DTYPE = "int8"
+OUTPUT_NAME = "Identity"
+OUTPUT_DTYPE = "float32"
 SAMPLE_RATE = 16000
 CLIP_FRAMES = 16000
 WINDOW_FRAMES = 480
@@ -69,8 +69,6 @@ class ImportedModel:
     input_name: str
     input_shape: tuple
     input_dtype: str
-    input_scale: float
-    input_zero_point: int
     output_name: str
     output_shape: tuple
     output_dtype: str
@@ -117,13 +115,6 @@ def _operator_name_map():
     }
 
 
-def _quantization(tensor):
-    quantization = tensor.Quantization()
-    if quantization is None or quantization.ScaleLength() != 1 or quantization.ZeroPointLength() != 1:
-        raise ValueError(f"tensor {_tensor_name(tensor)!r} must have one quantization scale and zero point")
-    return float(quantization.Scale(0)), int(quantization.ZeroPoint(0))
-
-
 def _flatbuffer_contract(model_bytes):
     try:
         model = tflite.Model.GetRootAsModel(model_bytes, 0)
@@ -140,16 +131,11 @@ def _flatbuffer_contract(model_bytes):
     output_tensor = graph.Tensors(graph.Outputs(0))
     input_contract = (_tensor_name(input_tensor), _tensor_shape(input_tensor), int(input_tensor.Type()))
     output_contract = (_tensor_name(output_tensor), _tensor_shape(output_tensor), int(output_tensor.Type()))
-    int8_type = int(tflite.TensorType.INT8)
-    if input_contract[1:] != (INPUT_SHAPE, int8_type):
+    float_type = int(tflite.TensorType.FLOAT32)
+    if input_contract != (INPUT_NAME, INPUT_SHAPE, float_type):
         raise ValueError(f"unexpected model input contract: {input_contract}")
-    if output_contract[1:] != (OUTPUT_SHAPE, int8_type):
+    if output_contract != (OUTPUT_NAME, OUTPUT_SHAPE, float_type):
         raise ValueError(f"unexpected model output contract: {output_contract}")
-    input_scale, input_zero_point = _quantization(input_tensor)
-    if not math.isclose(input_scale, INPUT_SCALE, rel_tol=1e-6, abs_tol=1e-7):
-        raise ValueError(f"unexpected input quantization scale: {input_scale}")
-    if input_zero_point != INPUT_ZERO_POINT:
-        raise ValueError(f"unexpected input quantization zero point: {input_zero_point}")
 
     names_by_code = _operator_name_map()
     operator_names = []
@@ -160,7 +146,7 @@ def _flatbuffer_contract(model_bytes):
     operator_names = tuple(operator_names)
     if operator_names != EXPECTED_TFLITE_OPERATORS:
         raise ValueError(f"unexpected TFLite operator topology: {operator_names}")
-    return model, input_scale, input_zero_point, operator_names
+    return model, operator_names
 
 
 def _relay_operator_names(function):
@@ -179,7 +165,7 @@ def import_model(model_path):
     model_path = Path(model_path)
     model_bytes = model_path.read_bytes()
     model_sha256 = hashlib.sha256(model_bytes).hexdigest()
-    model, input_scale, input_zero_point, operator_names = _flatbuffer_contract(model_bytes)
+    model, operator_names = _flatbuffer_contract(model_bytes)
     graph = model.Subgraphs(0)
     input_name = _tensor_name(graph.Tensors(graph.Inputs(0)))
     output_name = _tensor_name(graph.Tensors(graph.Outputs(0)))
@@ -200,8 +186,6 @@ def import_model(model_path):
         input_name=input_name,
         input_shape=INPUT_SHAPE,
         input_dtype=INPUT_DTYPE,
-        input_scale=input_scale,
-        input_zero_point=input_zero_point,
         output_name=output_name,
         output_shape=OUTPUT_SHAPE,
         output_dtype=OUTPUT_DTYPE,
@@ -209,10 +193,21 @@ def import_model(model_path):
     )
 
 
-def canonicalize_qnn_model(imported):
-    """Canonicalize imported QNN operators without changing their arithmetic."""
-    canonical = relay.qnn.transform.CanonicalizeOps()(imported.module)
-    return relay.transform.InferType()(canonical)
+def quantize_model(imported):
+    """Quantize float Relay once using the reference image-classification policy."""
+    with relay.quantize.qconfig(
+        calibrate_mode="global_scale", global_scale=8.0, skip_conv_layers=[0]
+    ):
+        missing = object()
+        previous_math = getattr(np, "math", missing)
+        np.math = math
+        try:
+            return relay.quantize.quantize(imported.module, params=imported.params)
+        finally:
+            if previous_math is missing:
+                delattr(np, "math")
+            else:
+                np.math = previous_math
 
 
 def _external_functions(module):
@@ -240,7 +235,7 @@ def _composite_names(function):
 
 
 def inspect_partitioning(reference_module, mixed_module):
-    """Count only real VTA partitions and preserve any unsupported work on CPU."""
+    """Count real VTA partitions and preserve unsupported work on CPU."""
     external = _external_functions(mixed_module)
     symbols = tuple(item[0] for item in external)
     expected_prefix = f"tvmgen_{VTA_MODULE_NAME}_vta_main_"
@@ -266,7 +261,7 @@ def inspect_partitioning(reference_module, mixed_module):
 def prepare_model(model_path, *, use_vta=True):
     """Prepare an exact CPU graph and optionally inspect real VTA partitions."""
     imported = import_model(model_path)
-    reference_module = canonicalize_qnn_model(imported)
+    reference_module = quantize_model(imported)
     if use_vta:
         import vta
 
@@ -334,14 +329,9 @@ def _mfcc(samples):
     return log_mel @ dct.T
 
 
-def quantize_features(features, scale=INPUT_SCALE, zero_point=INPUT_ZERO_POINT):
-    """Quantize MFCCs once using the committed TFLite input contract."""
+def load_sample(sample_path):
+    """Return unchanged float32 MFCC features for the float TFLite input."""
+    features = _mfcc(_read_wav(sample_path))
     if features.shape != (49, 10) or not np.isfinite(features).all():
         raise ValueError(f"unexpected MFCC feature matrix: {features.shape}")
-    quantized = np.rint(features / np.float32(scale) + np.float32(zero_point))
-    return np.clip(quantized, -128, 127).astype(np.int8)[None, :, :, None]
-
-
-def load_sample(sample_path):
-    """Load one WAV and return the model's deterministic int8 MFCC tensor."""
-    return quantize_features(_mfcc(_read_wav(sample_path)))
+    return np.asarray(features, dtype=np.float32)[None, :, :, None]
