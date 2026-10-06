@@ -7,7 +7,7 @@ ifeq ($(origin CONFIG),undefined)
 CONFIG := $(REPO_DIR)/vta/config/vta_64mac.json
 endif
 ifeq ($(origin MODEL),undefined)
-    MODEL := $(APP_DIR)/model/kws_ref_model.tflite
+    MODEL := $(APP_DIR)/model/kws_ref_model_float32.tflite
 endif
 ifeq ($(origin INPUT),undefined)
     INPUT := $(APP_DIR)/samples/down-00176480_nohash_0.wav

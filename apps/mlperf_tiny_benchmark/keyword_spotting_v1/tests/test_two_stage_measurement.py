@@ -69,6 +69,7 @@ def test_candidate_measurement_rejects_invalid_backend_timeout_and_activation():
 def test_tune_cli_rejects_non_finite_timeout(timeout):
     tune = _load_local("tune")
     args = tune._parser().parse_args([
+        "--model", str(APP_ROOT / "model/kws_ref_model_float32.tflite"),
         "--workloads", "workloads.json", "--timeout", str(timeout),
         "--output-logs", "out.tmp",
     ])

@@ -7,7 +7,7 @@ repo_dir="$(cd -- "${app_dir}/../../../../" && pwd -P)"
 invocation_dir="$PWD"
 python_bin="${PYTHON:-${repo_dir}/.envs/tvm-vta-env/bin/python}"
 config="${CONFIG:-${repo_dir}/vta/config/vta_64mac.json}"
-model="${MODEL:-${app_dir}/model/kws_ref_model.tflite}"
+model="${MODEL:-${app_dir}/model/kws_ref_model_float32.tflite}"
 input_wav="${INPUT:-${app_dir}/samples/down-00176480_nohash_0.wav}"
 target="${TARGET:-vta,llvm}"
 simulator="${SIMULATOR:-fsim}"
@@ -65,7 +65,7 @@ run_fsim() {
     local output_logs="$2"
     local timeout="$3"
     run_python fsim "$app_dir/tune.py" \
-        --workloads "$workloads" --workload "$workload" --simulator fsim \
+        --model "$model" --workloads "$workloads" --workload "$workload" --simulator fsim \
         --trial-batch "$trial_batch" --min-successful "$min_successful" \
         --timeout "$timeout" --output-logs "$output_logs"
 }
@@ -76,7 +76,7 @@ run_tsim() {
     local output_logs="$3"
     local timeout="$4"
     run_python tsim "$app_dir/tune.py" \
-        --workloads "$workloads" --workload "$workload" --simulator tsim \
+        --model "$model" --workloads "$workloads" --workload "$workload" --simulator tsim \
         --input-logs "$input_logs" --timeout "$timeout" \
         --output-logs "$output_logs"
 }

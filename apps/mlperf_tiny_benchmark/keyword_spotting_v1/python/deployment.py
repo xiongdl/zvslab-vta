@@ -41,7 +41,7 @@ from .autotvm_dispatch import config_space_context
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
-MODEL_PATH = APP_ROOT / "model" / "kws_ref_model.tflite"
+MODEL_PATH = APP_ROOT / "model" / "kws_ref_model_float32.tflite"
 DEFAULT_OUTPUT_DIR = APP_ROOT / "build"
 
 

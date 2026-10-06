@@ -54,7 +54,7 @@ class MakeWorkflowTests(unittest.TestCase):
         self.assertEqual(call["backend"], None)
         self.assertIn("--target", call["args"])
         self.assertIn("llvm", call["args"])
-        self.assertIn(str(APP_DIR / "model" / "kws_ref_model.tflite"), call["args"])
+        self.assertIn(str(APP_DIR / "model" / "kws_ref_model_float32.tflite"), call["args"])
         self.assertIn(str(APP_DIR / "samples" / "down-00176480_nohash_0.wav"), call["args"])
         self.assertEqual(call["pythonpath"],
                          f"{REPO_DIR}/tvm/python:{REPO_DIR}/vta/python:{APP_DIR}")
@@ -109,6 +109,10 @@ class MakeWorkflowTests(unittest.TestCase):
         self.assertIn(str(best), calls[1]["args"])
         self.assertIn(str(workload), calls[2]["args"])
         self.assertIn(str(workload), calls[3]["args"])
+        expected_model = str(APP_DIR / "model" / "kws_ref_model_float32.tflite")
+        for call in calls:
+            model_arg = call["args"][call["args"].index("--model") + 1]
+            self.assertEqual(model_arg, expected_model)
         self.assertTrue(all("/apps/common" not in call["pythonpath"] for call in calls))
 
     def test_full_tune_exports_then_runs_both_stages_without_deploying_winner(self):

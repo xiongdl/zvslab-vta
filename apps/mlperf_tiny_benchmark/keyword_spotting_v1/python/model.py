@@ -20,19 +20,19 @@ CLASS_NAMES = (
 )
 PREPROCESSING_POLICY = (
     "mono PCM16 16 kHz, pad/trim to one second, deterministic 49x10 MFCC, "
-    "int8 scale 0.5847029 zero point 83"
+    "float32 MFCC features"
 )
 QUANTIZATION = {
-    "input_scale": 0.5847029,
-    "input_zero_point": 83,
-    "arithmetic": "preserve imported int8 QNN fixed-point multipliers and per-axis shifts",
+    "calibrate_mode": "global_scale",
+    "global_scale": 8.0,
+    "skip_conv_layers": [0],
 }
-MODEL_SHA256 = "aeea436800704fce17b17292e4412630ad856e9d777c044c64ef748a880bd0ae"
+MODEL_SHA256 = "738a9f29d175aaa3928db9c8281265be5ec3406598fd3d30018b26084a3d5536"
 INPUT_SHAPE = (1, 49, 10, 1)
-INPUT_NAME = "input_1"
+INPUT_NAME = "serving_default_input_1:0"
 INPUT_DTYPE = "float32"
 OUTPUT_SHAPE = (1, 12)
-OUTPUT_NAME = "Identity"
+OUTPUT_NAME = "StatefulPartitionedCall:0"
 OUTPUT_DTYPE = "float32"
 SAMPLE_RATE = 16000
 CLIP_FRAMES = 16000
@@ -161,7 +161,7 @@ def _relay_operator_names(function):
 
 
 def import_model(model_path):
-    """Import one supported int8 TFLite model and record its content hash."""
+    """Import the supported all-float TFLite model and record its content hash."""
     model_path = Path(model_path)
     model_bytes = model_path.read_bytes()
     model_sha256 = hashlib.sha256(model_bytes).hexdigest()

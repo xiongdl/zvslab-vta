@@ -51,13 +51,17 @@ def test_empty_workload_snapshot_rejects_tuning_without_replacing_prior_files(
     tune = _load("tune")
     monkeypatch.setenv("VTA_BACKEND", "fsim")
     monkeypatch.setattr(
-        tuning, "load_workloads", lambda _path: type("Snapshot", (), {"layers": ()})()
+        tuning, "load_workloads", lambda _path: type("Snapshot", (), {
+            "model_sha256": "738a9f29d175aaa3928db9c8281265be5ec3406598fd3d30018b26084a3d5536",
+            "layers": (),
+        })()
     )
     workload_file = tmp_path / "empty-workloads.json"
     workload_file.write_text("authenticated empty snapshot fixture", encoding="utf-8")
     output = tmp_path / "existing.tmp"
     output.write_bytes(b"prior validated candidates")
     args = tune._parser().parse_args([
+        "--model", str(APP_ROOT / "model/kws_ref_model_float32.tflite"),
         "--workloads", str(workload_file), "--simulator", "fsim",
         "--trial-batch", "1", "--min-successful", "1", "--output-logs", str(output),
     ])
@@ -65,3 +69,21 @@ def test_empty_workload_snapshot_rejects_tuning_without_replacing_prior_files(
     with pytest.raises(ValueError, match="no real VTA workloads"):
         tuning.run(args)
     assert output.read_bytes() == b"prior validated candidates"
+
+
+def test_workload_snapshot_must_match_float_model_hash(monkeypatch, tmp_path):
+    tuning = _load("workflow")
+    tune = _load("tune")
+    monkeypatch.setenv("VTA_BACKEND", "fsim")
+    monkeypatch.setattr(
+        tuning, "load_workloads",
+        lambda _path: type("Snapshot", (), {"model_sha256": "0" * 64, "layers": ()})(),
+    )
+    args = tune._parser().parse_args([
+        "--model", str(APP_ROOT / "model/kws_ref_model_float32.tflite"),
+        "--workloads", str(tmp_path / "snapshot.json"), "--simulator", "fsim",
+        "--trial-batch", "1", "--min-successful", "1",
+        "--output-logs", str(tmp_path / "candidates.tmp"),
+    ])
+    with pytest.raises(ValueError, match="workloads model hash does not match --model"):
+        tuning.run(args)

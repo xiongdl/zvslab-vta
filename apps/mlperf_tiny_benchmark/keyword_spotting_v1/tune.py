@@ -26,6 +26,8 @@ from pathlib import Path
 
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", type=Path, required=True,
+                        help="float32 TFLite model whose hash must match the workload snapshot")
     parser.add_argument("--workloads", type=Path, required=True)
     parser.add_argument("--workload", type=int, default=-1,
                         help="-1 selects every exported VTA occurrence; otherwise select one index")

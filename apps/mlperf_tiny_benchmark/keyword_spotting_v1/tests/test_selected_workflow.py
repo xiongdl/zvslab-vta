@@ -30,7 +30,7 @@ def _load_deploy():
 def test_cli_defaults_and_selected_target_surface():
     deploy = _load_deploy()
     args = deploy._parser().parse_args([])
-    assert args.model == APP_ROOT / "model" / "kws_ref_model.tflite"
+    assert args.model == APP_ROOT / "model" / "kws_ref_model_float32.tflite"
     assert args.input == APP_ROOT / "samples" / "down-00176480_nohash_0.wav"
     assert args.target == "vta,llvm"
     assert args.simulator == "fsim"
@@ -83,36 +83,6 @@ def test_cpu_runtime_import_has_no_vta_or_shared_application_dependency():
     assert not (APP_ROOT / "graph_artifacts.py").exists()
 
 
-@pytest.mark.parametrize("backend", ["fsim", "tsim"])
-@pytest.mark.parametrize(
-    "operation", [
-        ("--export-workloads", "workloads.json"),
-        ("--schedule", "schedule.log"),
-    ],
-)
-def test_vta_zero_coverage_rejects_exports_and_schedules_without_publication(
-    tmp_path, backend, operation
-):
-    env = os.environ.copy()
-    repo = APP_ROOT.parents[3]
-    env["VTA_CONFIG_FILE"] = str(repo / "vta/config/vta_64mac.json")
-    env["VTA_BACKEND"] = backend
-    env["PYTHONPATH"] = os.pathsep.join([
-        str(repo / "tvm/python"), str(repo / "vta/python"), str(APP_ROOT),
-    ])
-    requested_path = tmp_path / operation[1]
-    result = subprocess.run(
-        [sys.executable, str(APP_ROOT / "deploy.py"), "--target", "vta,llvm",
-         "--simulator", backend, operation[0], str(requested_path),
-         "--output-dir", str(tmp_path / "build")],
-        cwd=repo, env=env, capture_output=True, text=True,
-    )
-    assert result.returncode != 0
-    assert "no real VTA workloads" in result.stderr
-    assert not requested_path.exists()
-    assert not (tmp_path / "build").exists()
-
-
 def test_deployment_report_states_zero_coverage_and_unavailable_cycles(tmp_path, monkeypatch):
     package_name = "keyword_spotting_v1_test_app"
     if package_name not in sys.modules:
@@ -129,10 +99,10 @@ def test_deployment_report_states_zero_coverage_and_unavailable_cycles(tmp_path,
     monkeypatch.setenv("VTA_CONFIG_FILE", str(config))
     report = tmp_path / "deployment.md"
     result = SimpleNamespace(
-        target="vta,llvm", simulator=None, model_path=APP_ROOT / "model/kws_ref_model.tflite",
+        target="vta,llvm", simulator=None, model_path=APP_ROOT / "model/kws_ref_model_float32.tflite",
         model_sha256="a" * 64, input_path=APP_ROOT / "samples/down-00176480_nohash_0.wav",
         input_sha256="b" * 64, schedule=None, schedule_coverage=(), predicted_class=0,
-        scores=np.array([[-107] * 12], dtype=np.int8), layers=(), whole_cycles=None,
+        scores=np.array([[0.1] * 12], dtype=np.float32), layers=(), whole_cycles=None,
         profiler_stats=None, fallback_reason="no real VTA partitions; executed on CPU",
     )
     deployment.write_deployment_report(result, report)
