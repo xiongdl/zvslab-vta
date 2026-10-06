@@ -100,16 +100,17 @@ and measurements available from the selected simulator.
    occurrences, captured activations, and an integrity seal. Editing a payload
    or loading another model's snapshot must be rejected.
 
-5. Run a bounded FSIM candidate search and TSIM selection for occurrence zero:
+5. Run a bounded FSIM candidate search and TSIM selection for every real VTA
+   occurrence:
 
    ```bash
    VTA_BACKEND=fsim VTA_CONFIG_FILE="$CONFIG" PYTHONPATH="$PYTHONPATH" \
      "$PYTHON" "$APP/tune.py" --workloads "$APP/build/workloads.json" \
-     --workload 0 --simulator fsim --trial-batch 1 --min-successful 1 \
+     --workload -1 --simulator fsim --trial-batch 1 --min-successful 1 \
      --output-logs "$APP/tune/vta_64mac/fsim.tmp"
    VTA_BACKEND=tsim VTA_CONFIG_FILE="$CONFIG" PYTHONPATH="$PYTHONPATH" \
      "$PYTHON" "$APP/tune.py" --workloads "$APP/build/workloads.json" \
-     --workload 0 --simulator tsim --input-logs "$APP/tune/vta_64mac/fsim.tmp" \
+     --workload -1 --simulator tsim --input-logs "$APP/tune/vta_64mac/fsim.tmp" \
      --output-logs "$APP/tune/vta_64mac/best.log"
    ```
 
@@ -128,10 +129,10 @@ and measurements available from the selected simulator.
      --deployment-report "$APP/build/replay.md"
    ```
 
-   The report marks occurrence zero selected and all other real occurrences as
-   default. Selected output must agree with the prepared CPU output. Measured
-   replay cycles and selected-occurrence AutoTVM cycles must align strictly
-   within 10 percent under the same layer measurement protocol.
+   The report marks every real occurrence selected. Selected output must agree
+   with the prepared CPU output. Measured replay cycles and AutoTVM cycles for
+   every selected occurrence must align strictly within 10 percent under the
+   same layer measurement protocol.
 
 7. Confirm the Make workflow routes paths safely, bounds tuning, completes the
    full FSIM→TSIM sequence without redeploying a winner, and cleans only local
@@ -142,12 +143,12 @@ and measurements available from the selected simulator.
    make -C "$APP" deploy TARGET=vta,llvm SIMULATOR=fsim \
      EXPORT_WORKLOADS="$APP/build/make-workloads.json"
    make -C "$APP" tune-fsim WORKLOADS="$APP/build/make-workloads.json" \
-     WORKLOAD=0 TRIAL_BATCH=1 MIN_SUCCESSFUL=1
+     WORKLOAD=-1 TRIAL_BATCH=1 MIN_SUCCESSFUL=1
    make -C "$APP" tune-tsim WORKLOADS="$APP/build/make-workloads.json" \
-     INPUT_LOGS="$APP/tune/vta_64mac/fsim.tmp" WORKLOAD=0
+     INPUT_LOGS="$APP/tune/vta_64mac/fsim.tmp" WORKLOAD=-1
    make -C "$APP" deploy TARGET=vta,llvm SIMULATOR=tsim \
      SCHEDULE="$APP/tune/vta_64mac/best.log" REPORT="$APP/build/make-replay.md"
-   make -C "$APP" tune WORKLOAD=0 TRIAL_BATCH=1 MIN_SUCCESSFUL=1
+   make -C "$APP" tune WORKLOAD=-1 TRIAL_BATCH=1 MIN_SUCCESSFUL=1
    mkdir -p "$APP/build/custom input path"
    cp "$APP/model/vww_96_float.tflite" "$APP/build/custom input path/model.tflite"
    cp "$APP/samples/00-non-person-000000000009.jpg" "$APP/build/custom input path/input.jpg"

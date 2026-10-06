@@ -87,18 +87,18 @@ export VTA_BACKEND=fsim VTA_CONFIG_FILE="$CONFIG"
   --export-workloads "$APP/build/workloads.json"
 ```
 
-Run one bounded occurrence through FSIM candidate search, TSIM selection, then
-selected-schedule replay. `WORKLOAD=0`, one candidate batch, and one successful
-candidate keep the manual run bounded. TSIM chooses the lowest measured cycles
-for that workload and replay reports selected coverage plus per-layer and
-whole-model cycles.
+Run all nine real VTA occurrences through FSIM candidate search and TSIM
+selection, then replay the complete schedule. `WORKLOAD=-1`, one candidate
+batch, and one successful candidate per occurrence keep the manual run
+bounded. TSIM chooses the lowest measured cycles for each workload and replay
+reports full selected coverage plus per-layer and whole-model cycles.
 
 ```bash
 "$PYTHON" "$APP/tune.py" --workloads "$APP/build/workloads.json" \
-  --workload 0 --simulator fsim --trial-batch 1 --min-successful 1 \
+  --workload -1 --simulator fsim --trial-batch 1 --min-successful 1 \
   --timeout 120 --output-logs "$APP/tune/vta_64mac/fsim.tmp"
 VTA_BACKEND=tsim "$PYTHON" "$APP/tune.py" \
-  --workloads "$APP/build/workloads.json" --workload 0 --simulator tsim \
+  --workloads "$APP/build/workloads.json" --workload -1 --simulator tsim \
   --input-logs "$APP/tune/vta_64mac/fsim.tmp" \
   --timeout 120 --output-logs "$APP/tune/vta_64mac/best.log"
 VTA_BACKEND=tsim "$PYTHON" "$APP/deploy.py" --target vta,llvm --simulator tsim \
@@ -116,13 +116,13 @@ paths with spaces and relative paths resolve from the command's working
 make -C "$APP" deploy TARGET=llvm
 make -C "$APP" deploy TARGET=vta,llvm SIMULATOR=fsim \
   EXPORT_WORKLOADS=build/workloads.json REPORT=build/default.md
-make -C "$APP" tune-fsim WORKLOADS=build/workloads.json WORKLOAD=0 \
+make -C "$APP" tune-fsim WORKLOADS=build/workloads.json WORKLOAD=-1 \
   TRIAL_BATCH=1 MIN_SUCCESSFUL=1
-make -C "$APP" tune-tsim WORKLOADS=build/workloads.json WORKLOAD=0 \
+make -C "$APP" tune-tsim WORKLOADS=build/workloads.json WORKLOAD=-1 \
   INPUT_LOGS=tune/vta_64mac/fsim.tmp
 make -C "$APP" deploy TARGET=vta,llvm SIMULATOR=tsim \
   SCHEDULE=tune/vta_64mac/best.log REPORT=build/replay.md
-make -C "$APP" tune OUTPUT_DIR=build/full-tune WORKLOAD=0 \
+make -C "$APP" tune OUTPUT_DIR=build/full-tune WORKLOAD=-1 \
   TRIAL_BATCH=1 MIN_SUCCESSFUL=1 FSIM_TIMEOUT=120 TSIM_TIMEOUT=120
 ```
 

@@ -131,14 +131,14 @@ The Makefile provides individual stages and the full sequence:
 ```bash
 # Export workloads during deployment, then run each stage explicitly.
 make deploy EXPORT_WORKLOADS=build/workloads.json
-make tune-fsim WORKLOADS=build/workloads.json WORKLOAD=0 \
+make tune-fsim WORKLOADS=build/workloads.json WORKLOAD=-1 \
   TRIAL_BATCH=1 MIN_SUCCESSFUL=1
 make tune-tsim WORKLOADS=build/workloads.json \
-  INPUT_LOGS=tune/vta_64mac/fsim.tmp WORKLOAD=0
+  INPUT_LOGS=tune/vta_64mac/fsim.tmp WORKLOAD=-1
 
 # Or export, search and select in one command.
 make tune
-make tune WORKLOAD=0
+make tune WORKLOAD=-1
 make tune WORKLOADS=build/workloads.json
 ```
 
@@ -248,8 +248,7 @@ done
 
 For the committed default model, deployment should report actual VTA activity;
 TSIM reports positive cycle counts, while CPU and FSIM cycle fields are `N/A`.
-Then exercise workload-only tuning for one occurrence and replay its TSIM
-selection:
+Then tune every real VTA occurrence and replay the complete TSIM schedule:
 
 ```bash
 VTA_CONFIG_FILE="$CONFIG" VTA_BACKEND=fsim PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
@@ -257,11 +256,11 @@ VTA_CONFIG_FILE="$CONFIG" VTA_BACKEND=fsim PYTHONPATH="$PWD/tvm/python:$PWD/vta/
   --simulator fsim --export-workloads "$APP/build/workloads.json"
 VTA_CONFIG_FILE="$CONFIG" VTA_BACKEND=fsim PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   ./.envs/tvm-vta-env/bin/python "$APP/tune.py" --workloads "$APP/build/workloads.json" \
-  --workload 0 --simulator fsim --trial-batch 1 --min-successful 1 \
+  --workload -1 --simulator fsim --trial-batch 1 --min-successful 1 \
   --output-logs "$APP/tune/vta_64mac/fsim.tmp"
 VTA_CONFIG_FILE="$CONFIG" VTA_BACKEND=tsim PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   ./.envs/tvm-vta-env/bin/python "$APP/tune.py" --workloads "$APP/build/workloads.json" \
-  --workload 0 --simulator tsim --input-logs "$APP/tune/vta_64mac/fsim.tmp" \
+  --workload -1 --simulator tsim --input-logs "$APP/tune/vta_64mac/fsim.tmp" \
   --output-logs "$APP/tune/vta_64mac/best.log"
 VTA_CONFIG_FILE="$CONFIG" VTA_BACKEND=tsim PYTHONPATH="$PWD/tvm/python:$PWD/vta/python" \
   ./.envs/tvm-vta-env/bin/python "$APP/deploy.py" --target vta,llvm \
@@ -272,10 +271,10 @@ VTA_CONFIG_FILE="$CONFIG" VTA_BACKEND=tsim PYTHONPATH="$PWD/tvm/python:$PWD/vta/
 The workload JSON contains model/input/configuration provenance and captured
 real activations. FSIM writes native candidates plus JSON metadata; TSIM writes
 the cycle-selected schedule plus metadata. Replay should preserve output scores
-and report selected occurrence coverage and measured cycles. The same stages
-are available through `make deploy`, `make tune-fsim`, and `make tune-tsim`;
-`make tune WORKLOAD=0 TRIAL_BATCH=1 MIN_SUCCESSFUL=1` performs export, FSIM
-search, and TSIM selection without replaying deployment.
+and report full occurrence coverage and measured cycles. The same stages are
+available through `make deploy`, `make tune-fsim`, and `make tune-tsim`;
+`make tune WORKLOAD=-1 TRIAL_BATCH=1 MIN_SUCCESSFUL=1` performs export, FSIM
+search, and TSIM selection for every occurrence without replaying deployment.
 
 For a supported model that produces no real VTA partitions, VTA-target
 deployment should identify the CPU fallback, report zero VTA coverage and
