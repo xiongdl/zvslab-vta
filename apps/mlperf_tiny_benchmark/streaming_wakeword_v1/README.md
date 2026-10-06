@@ -177,9 +177,9 @@ custom path is supplied.
    test -f "$APP/model/str_ww_ref_model.tflite"
    test -f "$APP/samples/marvin-00176480_nohash_0.wav"
    test -f "$APP/LICENSE.mlperf-tiny"
-   test -f "$APP/tune/REPORT-FULL.md"
    test ! -e "$APP/build"
    ```
 
 `clean` removes local build output and Python caches only. It keeps model,
-samples, license, and persistent tuning evidence.
+samples, and license assets. This graph currently produces zero real VTA
+workloads, so there is no usable VTA tuning schedule to retain.

@@ -142,7 +142,8 @@ and available measurements.
    ```
 
    Both commands succeed. Local build output and Python caches are removed;
-   model, samples, licenses, and saved `tune/` evidence remain.
+   model, samples, and licenses remain. No VTA schedule is retained because this
+   graph currently produces zero real VTA workloads.
 
 ## CLI and Make contract
 
@@ -157,9 +158,9 @@ zero real partitions, those targets use CPU fallback and report the limitation.
 `--trial-batch`, `--min-successful`, and `--timeout`; TSIM requires
 `--input-logs` and rejects FSIM-only options. The real KWS graph currently
 cannot produce workloads, so both tuning stages reject missing or empty
-workload data instead of inventing candidates or cycles. The existing
-`REPORT-FULL.md` and `mac-utilization-full.csv` are retained historical outputs
-from the retired arithmetic-rewriting flow; they are not current deployment or
-tuning results. `make deploy`,
+workload data instead of inventing candidates or cycles. The former
+arithmetic-rewriting flow produced schedule records, but they do not apply to
+the current exact-QNN graph and have been removed. This model has no usable VTA
+schedule until the compiler produces a real VTA workload. `make deploy`,
 `make tune-fsim`, `make tune-tsim`, `make tune`, and `make clean` are the local
-entrypoints. Cleanup preserves persistent tuning evidence and model assets.
+entrypoints. Cleanup preserves model assets.
