@@ -11,7 +11,7 @@ import numpy as np
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = APP_ROOT.parents[3]
-MODEL = APP_ROOT / "model/str_ww_ref_model_floag32.tflite"
+MODEL = APP_ROOT / "model/str_ww_ref_model_float32.tflite"
 SAMPLE = APP_ROOT / "samples/marvin-00176480_nohash_0.wav"
 
 

@@ -9,7 +9,7 @@ import tflite
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
-MODEL_PATH = APP_ROOT / "model" / "str_ww_ref_model_floag32.tflite"
+MODEL_PATH = APP_ROOT / "model" / "str_ww_ref_model_float32.tflite"
 MODEL_README_PATH = APP_ROOT / "model" / "README.md"
 LICENSE_PATH = APP_ROOT / "LICENSE.mlperf-tiny"
 SAMPLES_ROOT = APP_ROOT / "samples"
@@ -85,7 +85,7 @@ def test_model_is_the_authenticated_mlperf_tiny_v14_artifact():
     readme = MODEL_README_PATH.read_text(encoding="utf-8")
     for expected in (
         "MLPerf Tiny v1.4",
-        "str_ww_ref_model_floag32.tflite",
+        "str_ww_ref_model_float32.tflite",
         MODEL_SHA256,
         "upstream `quantize.py` SHA-256",
     ):
@@ -140,7 +140,7 @@ def test_manifest_has_exact_class_order_and_authenticated_provenance():
 
     model = manifest["model"]
     _assert_safe_relative_path(model["filename"])
-    assert model["filename"] == "model/str_ww_ref_model_floag32.tflite"
+    assert model["filename"] == "model/str_ww_ref_model_float32.tflite"
     assert model["byte_length"] == MODEL_PATH.stat().st_size
     assert model["sha256"] == MODEL_SHA256
     assert _sha256(MODEL_PATH) == model["sha256"]

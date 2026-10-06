@@ -57,7 +57,7 @@ def test_make_deploy_uses_single_target_and_quotes_custom_paths(tmp_path):
         assert cpu.returncode == 0, cpu.stderr
         [call] = workflow.records()
         assert call["backend"] is None
-        assert str(APP_ROOT / "model/str_ww_ref_model_floag32.tflite") in call["args"]
+        assert str(APP_ROOT / "model/str_ww_ref_model_float32.tflite") in call["args"]
         assert str(APP_ROOT / "samples/marvin-00176480_nohash_0.wav") in call["args"]
         assert call["pythonpath"] == f"{REPO_ROOT}/tvm/python:{REPO_ROOT}/vta/python:{APP_ROOT}"
 

@@ -1,7 +1,7 @@
 # Streaming wakeword float32 model
 
 The application stores only
-`str_ww_ref_model_floag32.tflite`, converted from the MLPerf Tiny v1.4 H5
+`str_ww_ref_model_float32.tflite`, converted from the MLPerf Tiny v1.4 H5
 reference model at
 `.envs/tiny-v1.4/benchmark/training/streaming_wakeword/trained_models/str_ww_ref_model.h5`
 by `scripts/convert_sww_model.py`. The H5 and conversion intermediates remain

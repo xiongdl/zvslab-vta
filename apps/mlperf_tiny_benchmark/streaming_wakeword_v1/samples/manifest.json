@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "model": {
-    "filename": "model/str_ww_ref_model_floag32.tflite",
+    "filename": "model/str_ww_ref_model_float32.tflite",
     "byte_length": 191428,
     "sha256": "c735ab47248df7648d9cb4397c0e7d161fe2e88ede17ad900f34a4163d89b267",
     "source_relative_path": "benchmark/training/streaming_wakeword/trained_models/str_ww_ref_model.h5"

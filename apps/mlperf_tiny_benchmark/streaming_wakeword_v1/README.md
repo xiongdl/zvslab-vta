@@ -37,7 +37,7 @@ no former int8 scale/zero-point conversion.
 ```bash
 PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/$APP" \
   .envs/tvm-vta-env/bin/python "$APP/deploy.py" \
-  --model "$APP/model/str_ww_ref_model_floag32.tflite" \
+  --model "$APP/model/str_ww_ref_model_float32.tflite" \
   --input "$APP/samples/marvin-00176480_nohash_0.wav" \
   --target vta,llvm --simulator fsim \
   --export-workloads "$APP/build/workloads.json" \

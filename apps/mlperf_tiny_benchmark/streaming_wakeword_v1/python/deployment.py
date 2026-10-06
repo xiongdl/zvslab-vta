@@ -39,7 +39,7 @@ from .autotvm_dispatch import config_space_context
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
-MODEL_PATH = APP_ROOT / "model" / "str_ww_ref_model_floag32.tflite"
+MODEL_PATH = APP_ROOT / "model" / "str_ww_ref_model_float32.tflite"
 DEFAULT_OUTPUT_DIR = APP_ROOT / "build"
 MODEL_ID = "streaming_wakeword_v1"
 INPUT_NAME = "serving_default_input_1:0"

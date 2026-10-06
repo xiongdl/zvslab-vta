@@ -23,7 +23,7 @@ from pathlib import Path
 
 
 APP_ROOT = Path(__file__).resolve().parent
-DEFAULT_MODEL = APP_ROOT / "model" / "str_ww_ref_model_floag32.tflite"
+DEFAULT_MODEL = APP_ROOT / "model" / "str_ww_ref_model_float32.tflite"
 DEFAULT_INPUT = APP_ROOT / "samples" / "marvin-00176480_nohash_0.wav"
 DEFAULT_OUTPUT_DIR = APP_ROOT / "build"
 
