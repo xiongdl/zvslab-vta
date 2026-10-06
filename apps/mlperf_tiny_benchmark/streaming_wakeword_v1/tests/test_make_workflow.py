@@ -57,7 +57,7 @@ def test_make_deploy_uses_single_target_and_quotes_custom_paths(tmp_path):
         assert cpu.returncode == 0, cpu.stderr
         [call] = workflow.records()
         assert call["backend"] is None
-        assert str(APP_ROOT / "model/str_ww_ref_model.tflite") in call["args"]
+        assert str(APP_ROOT / "model/str_ww_ref_model_floag32.tflite") in call["args"]
         assert str(APP_ROOT / "samples/marvin-00176480_nohash_0.wav") in call["args"]
         assert call["pythonpath"] == f"{REPO_ROOT}/tvm/python:{REPO_ROOT}/vta/python:{APP_ROOT}"
 
@@ -90,20 +90,21 @@ def test_split_tuning_and_full_tuning_forward_stages_in_order(tmp_path):
     try:
         config = tmp_path / "geometry.json"
         workloads = tmp_path / "workloads.json"
+        selected_model = tmp_path / "custom float model.tflite"
         config.write_text("{}", encoding="utf-8")
         workloads.write_text("{}", encoding="utf-8")
         fsim = workflow.invoke(
-            "tune-fsim", cwd=APP_ROOT, CONFIG=config, WORKLOADS=workloads,
+            "tune-fsim", cwd=APP_ROOT, CONFIG=config, MODEL=selected_model, WORKLOADS=workloads,
             WORKLOAD=0, TRIAL_BATCH=1, MIN_SUCCESSFUL=1, OUTPUT_LOGS=tmp_path / "fsim.tmp",
         )
         assert fsim.returncode == 0, fsim.stderr
         tsim = workflow.invoke(
-            "tune-tsim", cwd=APP_ROOT, CONFIG=config, WORKLOADS=workloads,
+            "tune-tsim", cwd=APP_ROOT, CONFIG=config, MODEL=selected_model, WORKLOADS=workloads,
             INPUT_LOGS=tmp_path / "fsim.tmp", WORKLOAD=0, OUTPUT_LOGS=tmp_path / "best.log",
         )
         assert tsim.returncode == 0, tsim.stderr
         full = workflow.invoke(
-            "tune", cwd=APP_ROOT, CONFIG=config, WORKLOADS=workloads, WORKLOAD=0,
+            "tune", cwd=APP_ROOT, CONFIG=config, MODEL=selected_model, WORKLOADS=workloads, WORKLOAD=0,
             TRIAL_BATCH=1, MIN_SUCCESSFUL=1,
         )
         assert full.returncode == 0, full.stderr
@@ -115,6 +116,7 @@ def test_split_tuning_and_full_tuning_forward_stages_in_order(tmp_path):
         assert str(tmp_path / "fsim.tmp") in calls[1]["args"]
         assert str(tmp_path / "best.log") in calls[1]["args"]
         assert all(str(workloads) in call["args"] for call in calls[2:])
+        assert all(str(selected_model) in call["args"] for call in calls)
     finally:
         workflow.close()
 

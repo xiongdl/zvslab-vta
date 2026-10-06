@@ -264,11 +264,9 @@ VERSION = 1
 MAX_WORKLOAD_FILE_BYTES = 128 * 1024 * 1024
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _QUANTIZATION = {
-    "input_scale": 0.003701042616739869,
-    "input_zero_point": -128,
-    "output_scale": 0.00390625,
-    "output_zero_point": -128,
-    "policy": "committed fixed int8 quantization; preserve imported qnn arithmetic",
+    "policy": "Relay global_scale quantization",
+    "global_scale": 8.0,
+    "skip_conv_layers": [0],
 }
 
 
@@ -430,7 +428,7 @@ def make_document(*, model_sha256, input_sha256, config_bytes, config_basename,
         "model": {"sha256": _require_hash(model_sha256, "model sha256"),
                   "quantization": dict(_QUANTIZATION)},
         "input": {"sha256": _require_hash(input_sha256, "input sha256"),
-                  "decoded_shape": [1, 30, 1, 40], "decoded_dtype": "int8"},
+                  "decoded_shape": [1, 30, 1, 40], "decoded_dtype": "float32"},
         "config": {"basename": Path(config_basename).name,
                    "raw_base64": base64.b64encode(config_bytes).decode("ascii"),
                    "sha256": config_sha, "geometry": geometry,
@@ -518,7 +516,7 @@ def load_workloads(path, *, validate_config_space=True):
         raise ValueError("workloads provenance sections are missing")
     model_sha = _require_hash(model.get("sha256"), "model sha256")
     input_sha = _require_hash(source_input.get("sha256"), "input sha256")
-    if source_input.get("decoded_shape") != [1, 30, 1, 40] or source_input.get("decoded_dtype") != "int8":
+    if source_input.get("decoded_shape") != [1, 30, 1, 40] or source_input.get("decoded_dtype") != "float32":
         raise ValueError("workloads decoded audio tensor contract is unsupported")
     if model.get("quantization") != _QUANTIZATION:
         raise ValueError("workloads quantization policy does not match streaming wakeword")

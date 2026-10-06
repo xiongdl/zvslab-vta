@@ -65,7 +65,7 @@ run_fsim() {
     local output_logs="$2"
     local timeout="$3"
     run_python fsim "$app_dir/tune.py" \
-        --workloads "$workloads" --workload "$workload" --simulator fsim \
+        --model "$model" --workloads "$workloads" --workload "$workload" --simulator fsim \
         --trial-batch "$trial_batch" --min-successful "$min_successful" \
         --timeout "$timeout" --output-logs "$output_logs"
 }
@@ -76,7 +76,7 @@ run_tsim() {
     local output_logs="$3"
     local timeout="$4"
     run_python tsim "$app_dir/tune.py" \
-        --workloads "$workloads" --workload "$workload" --simulator tsim \
+        --model "$model" --workloads "$workloads" --workload "$workload" --simulator tsim \
         --input-logs "$input_logs" --timeout "$timeout" \
         --output-logs "$output_logs"
 }

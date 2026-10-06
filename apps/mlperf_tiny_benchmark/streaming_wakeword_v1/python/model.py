@@ -40,6 +40,11 @@ class ImportedModel:
     module: tvm.IRModule
     params: dict
     model_sha256: str
+    input_name: str
+    input_shape: tuple
+    input_dtype: str
+    output_shape: tuple
+    output_dtype: str
     tflite_operator_names: tuple
 
 
@@ -187,7 +192,10 @@ def import_model(model_path):
         raise
     except Exception as error:
         raise ValueError("model is not a valid supported TFLite FlatBuffer") from error
-    return ImportedModel(module, dict(params), digest, operator_names)
+    return ImportedModel(
+        module, dict(params), digest, INPUT_NAME, INPUT_SHAPE, INPUT_DTYPE,
+        OUTPUT_SHAPE, OUTPUT_DTYPE, operator_names,
+    )
 
 
 def prepare_model(model_path, use_vta=False):
@@ -221,4 +229,4 @@ def prepare_model(model_path, use_vta=False):
                 regions.append(function.attrs.get_str("global_symbol"))
     symbols = tuple(sorted(regions))
     return PreparedModel(imported, canonical, mixed if symbols else None, RoutingSummary(symbols),
-                         None if symbols else "model has no real VTA partitions after exact QNN canonicalization")
+                         None if symbols else "global-scale quantized graph has no VTA partitions")

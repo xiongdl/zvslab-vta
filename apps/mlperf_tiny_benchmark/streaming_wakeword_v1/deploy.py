@@ -23,14 +23,14 @@ from pathlib import Path
 
 
 APP_ROOT = Path(__file__).resolve().parent
-DEFAULT_MODEL = APP_ROOT / "model" / "str_ww_ref_model.tflite"
+DEFAULT_MODEL = APP_ROOT / "model" / "str_ww_ref_model_floag32.tflite"
 DEFAULT_INPUT = APP_ROOT / "samples" / "marvin-00176480_nohash_0.wav"
 DEFAULT_OUTPUT_DIR = APP_ROOT / "build"
 
 
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", type=Path, default=DEFAULT_MODEL, help="supported int8 streaming wakeword TFLite model")
+    parser.add_argument("--model", type=Path, default=DEFAULT_MODEL, help="float32 streaming wakeword TFLite model")
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT, help="one mono 16-bit 16 kHz WAV sample")
     parser.add_argument(
         "--target", choices=("c", "llvm", "vta,c", "vta,llvm"), default="vta,llvm",

@@ -39,7 +39,7 @@ from .autotvm_dispatch import config_space_context
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
-MODEL_PATH = APP_ROOT / "model" / "str_ww_ref_model.tflite"
+MODEL_PATH = APP_ROOT / "model" / "str_ww_ref_model_floag32.tflite"
 DEFAULT_OUTPUT_DIR = APP_ROOT / "build"
 MODEL_ID = "streaming_wakeword_v1"
 INPUT_NAME = "serving_default_input_1:0"
@@ -365,12 +365,14 @@ def _build_selected_factory(module, target, host_codegen, use_vta, params=None):
     if use_vta:
         import vta
 
+        host_target = tvm.target.Target("c") if host_codegen == "c" else tvm.target.Target(vta.get_env().target_host)
+        device_plan = vta.relay.plan_devices_for_vta(module, host_target)
         if host_codegen == "c":
             with tvm.transform.PassContext(config={"tir.disable_vectorize": True}):
                 with vta.build_config(config={"tir.disable_vectorize": True}):
-                    return relay.build(module, target=_mixed_target("c"), params=params)
+                    return relay.build(device_plan.module, target=device_plan.targets, params=params)
         with vta.build_config():
-            return relay.build(module, target=_mixed_target("llvm"), params=params)
+            return relay.build(device_plan.module, target=device_plan.targets, params=params)
     if host_codegen == "c":
         with tvm.transform.PassContext(config={"tir.disable_vectorize": True}):
             return relay.build(module, target=target, params=params)
@@ -407,7 +409,9 @@ def _export_pre_schedule_workloads(prepared, compute, image, input_path,
             host_codegen=host_codegen, simulator=simulator,
             expected_vta_symbols=prepared.routing.symbols,
         )
-        debug = debug_executor.create(bundle.graph_json, bundle.module, tvm.ext_dev(0))
+        debug = debug_executor.create(
+            bundle.graph_json, bundle.module, [tvm.cpu(0), tvm.ext_dev(0)]
+        )
         debug.load_params(bundle.params)
         debug.set_input(INPUT_NAME, image)
         debug._run_per_layer()
@@ -536,7 +540,7 @@ def run_selected(target="vta,llvm", simulator="fsim", schedule=None,
                 simulator, export_workloads,
             )
             print(f"Workloads exported: {exported}")
-    device = tvm.ext_dev(0) if use_vta else tvm.cpu(0)
+    device = [tvm.cpu(0), tvm.ext_dev(0)] if use_vta else tvm.cpu(0)
     graph = graph_executor.create(bundle.graph_json, bundle.module, device)
     graph.load_params(bundle.params)
     graph.set_input(INPUT_NAME, activation)
@@ -596,7 +600,7 @@ def run_selected(target="vta,llvm", simulator="fsim", schedule=None,
         layers=layers, whole_cycles=cycles, profiler_stats=profiler,
     )
     print(f"Wakeword result: {result.predicted_class} ({LABELS[result.predicted_class]})")
-    print("Raw int8 scores:", scores[0].tolist())
+    print("Raw float32 scores:", scores[0].tolist())
     return result
 
 

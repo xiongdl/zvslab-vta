@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "model": {
-    "filename": "model/str_ww_ref_model.tflite",
-    "byte_length": 74520,
-    "sha256": "3af8550895ba7d5c584277102b5075c52dcfa63ba9d2b2240f37c4e6abd5dd2b",
-    "source_relative_path": "benchmark/training/streaming_wakeword/trained_models/str_ww_ref_model.tflite"
+    "filename": "model/str_ww_ref_model_floag32.tflite",
+    "byte_length": 191428,
+    "sha256": "c735ab47248df7648d9cb4397c0e7d161fe2e88ede17ad900f34a4163d89b267",
+    "source_relative_path": "benchmark/training/streaming_wakeword/trained_models/str_ww_ref_model.h5"
   },
   "sample_rate": 16000,
   "sample_width_bytes": 2,

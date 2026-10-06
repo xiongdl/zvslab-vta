@@ -736,7 +736,12 @@ def _run_tsim_locked(args, snapshot):
 
 def run(args):
     _backend(args)
+    from .model import import_model
+
+    imported = import_model(args.model)
     snapshot = load_workloads(args.workloads)
+    if imported.model_sha256 != snapshot.model_sha256:
+        raise ValueError("workloads model hash does not match --model")
     if not snapshot.layers:
         raise ValueError("workloads file contains no VTA occurrences")
     return run_fsim(args, snapshot) if args.simulator == "fsim" else run_tsim(args, snapshot)

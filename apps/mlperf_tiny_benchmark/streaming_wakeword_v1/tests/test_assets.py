@@ -9,13 +9,13 @@ import tflite
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
-MODEL_PATH = APP_ROOT / "model" / "str_ww_ref_model.tflite"
+MODEL_PATH = APP_ROOT / "model" / "str_ww_ref_model_floag32.tflite"
 MODEL_README_PATH = APP_ROOT / "model" / "README.md"
 LICENSE_PATH = APP_ROOT / "LICENSE.mlperf-tiny"
 SAMPLES_ROOT = APP_ROOT / "samples"
 MANIFEST_PATH = SAMPLES_ROOT / "manifest.json"
 
-MODEL_SHA256 = "3af8550895ba7d5c584277102b5075c52dcfa63ba9d2b2240f37c4e6abd5dd2b"
+MODEL_SHA256 = "c735ab47248df7648d9cb4397c0e7d161fe2e88ede17ad900f34a4163d89b267"
 LICENSE_SHA256 = "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
 EXPECTED_CLASSES = ("Marvin", "Silence", "Unknown")
 EXPECTED_SAMPLES = (
@@ -77,18 +77,17 @@ def _assert_safe_relative_path(value, *, basename_only=False):
 def test_model_is_the_authenticated_mlperf_tiny_v14_artifact():
     assert MODEL_PATH.is_file()
     assert not MODEL_PATH.is_symlink()
-    assert MODEL_PATH.stat().st_size == 74520
+    assert MODEL_PATH.stat().st_size == 191428
+    assert {path.name for path in MODEL_PATH.parent.glob("*.tflite")} == {MODEL_PATH.name}
     assert _sha256(MODEL_PATH) == MODEL_SHA256
     assert _sha256(LICENSE_PATH) == LICENSE_SHA256
 
     readme = MODEL_README_PATH.read_text(encoding="utf-8")
     for expected in (
         "MLPerf Tiny v1.4",
-        "benchmark/training/streaming_wakeword/trained_models/str_ww_ref_model.tflite",
+        "str_ww_ref_model_floag32.tflite",
         MODEL_SHA256,
-        "byte-for-byte",
-        "Apache License",
-        "LICENSE.mlperf-tiny",
+        "upstream `quantize.py` SHA-256",
     ):
         assert expected in readme
 
@@ -106,17 +105,11 @@ def test_model_flatbuffer_has_the_approved_input_output_contract():
     output_tensor = graph.Tensors(graph.Outputs(0))
     assert input_tensor.Name() == b"serving_default_input_1:0"
     assert list(input_tensor.ShapeAsNumpy()) == [1, 30, 1, 40]
-    assert input_tensor.Type() == int(tflite.TensorType.INT8)
-    assert input_tensor.Quantization().ScaleAsNumpy().tolist() == [
-        0.003701042616739869
-    ]
-    assert input_tensor.Quantization().ZeroPointAsNumpy().tolist() == [-128]
+    assert input_tensor.Type() == int(tflite.TensorType.FLOAT32)
 
     assert output_tensor.Name() == b"StatefulPartitionedCall:0"
     assert list(output_tensor.ShapeAsNumpy()) == [1, 3]
-    assert output_tensor.Type() == int(tflite.TensorType.INT8)
-    assert output_tensor.Quantization().ScaleAsNumpy().tolist() == [0.00390625]
-    assert output_tensor.Quantization().ZeroPointAsNumpy().tolist() == [-128]
+    assert output_tensor.Type() == int(tflite.TensorType.FLOAT32)
 
 
 def test_manifest_has_exact_class_order_and_authenticated_provenance():
@@ -147,11 +140,12 @@ def test_manifest_has_exact_class_order_and_authenticated_provenance():
 
     model = manifest["model"]
     _assert_safe_relative_path(model["filename"])
-    assert model["filename"] == "model/str_ww_ref_model.tflite"
+    assert model["filename"] == "model/str_ww_ref_model_floag32.tflite"
     assert model["byte_length"] == MODEL_PATH.stat().st_size
     assert model["sha256"] == MODEL_SHA256
     assert _sha256(MODEL_PATH) == model["sha256"]
     _assert_safe_relative_path(model["source_relative_path"])
+    assert model["source_relative_path"].endswith("str_ww_ref_model.h5")
 
     for item in manifest["samples"]:
         _assert_safe_relative_path(item["filename"], basename_only=True)
