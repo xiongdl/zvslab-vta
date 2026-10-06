@@ -44,36 +44,44 @@ PYTHONPATH="$PWD/tvm/python:$PWD/vta/python:$PWD/$APP" \
   --deployment-report "$APP/build/fsim-report.md"
 ```
 
-## C2 SWW verification
+## Tuning
 
-The supplied float model imports as float32 input/output, and TVM quantization
-uses `calibrate_mode=global_scale`, `global_scale=8.0`,
-`skip_conv_layers=[0]`. The mixed graph contains four outlined VTA convolution
-occurrences. Remaining depthwise operations run on CPU.
+Tuning imports the supplied float32 TFLite model and validates its SHA-256
+against the deployment-exported workload snapshot before searching or replay.
+FSIM verifies candidate outputs; TSIM measures those candidates in cycles and
+selects a schedule per VTA occurrence. The schedule sidecar ties the native
+log to the float model, actual occurrence compute, VTA geometry, and simulator
+measurements.
 
-With the committed Marvin WAV and `vta/config/vta_64mac.json`, the FSIM mixed
-deployment executed all four real regions and exported their actual Relay
-functions and int8 VTA activations. The reported float32 scores were
-`[0.99998331, 1.570615e-09, 1.6730595e-05]` (class 0, Marvin). The LLVM CPU
-deployment produced the same scores. This compares the CPU and mixed forms of
-the TVM-quantized graph; these scores are not claimed to equal the float TFLite
-source output bit-for-bit.
+```bash
+# Export actual workloads from the deployed float model.
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+  make -C "$APP" deploy MODEL="$APP/model/str_ww_ref_model_float32.tflite" \
+  TARGET=vta,llvm SIMULATOR=fsim \
+  EXPORT_WORKLOADS="$APP/build/workloads.json"
 
-Workload snapshots record the float model hash, decoded float feature dtype,
-quantization policy, WAV hash, VTA geometry, actual Relay functions, and
-captured activations. `tune.py` requires both `--model` and `--workloads`,
-validates the float TFLite contract, and rejects a model hash that differs
-from the snapshot before search or replay. Tuning is gated on both KWS and SWW
-having executable VTA regions; KWS import is currently escalated, so no tuning
-search or schedule is claimed for this initiative yet.
+# Bounded smoke search: one verified candidate for each occurrence.
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=fsim \
+  make -C "$APP" tune-fsim MODEL="$APP/model/str_ww_ref_model_float32.tflite" \
+  WORKLOADS="$APP/build/workloads.json" WORKLOAD=-1 \
+  TRIAL_BATCH=1 MIN_SUCCESSFUL=1 TIMEOUT=60
 
-```text
-tune.py --model FLOAT32_TFLITE --workloads SNAPSHOT.json
-        --workload -1|INDEX --simulator fsim|tsim
-        --timeout SECONDS --output-logs PATH
-FSIM: --trial-batch N --min-successful N
-TSIM: --input-logs PATH
+# Select by measured TSIM cycles, then replay the selected schedule.
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+  make -C "$APP" tune-tsim MODEL="$APP/model/str_ww_ref_model_float32.tflite" \
+  WORKLOADS="$APP/build/workloads.json" \
+  INPUT_LOGS="$APP/tune/vta_64mac/fsim.tmp" WORKLOAD=-1 TIMEOUT=120
+VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" VTA_BACKEND=tsim \
+  make -C "$APP" deploy MODEL="$APP/model/str_ww_ref_model_float32.tflite" \
+  TARGET=vta,llvm SIMULATOR=tsim SCHEDULE="$APP/tune/vta_64mac/best.log"
 ```
 
-`clean` removes generated build output and Python caches. It retains the float
-TFLite model, WAV samples, license, and any valid tune evidence.
+The bounded C3 smoke run verified one FSIM candidate and measured one TSIM
+candidate for each of four real occurrences. Their selected cycle counts were
+166,099, 407,683, 254,683, and 4,357. TSIM replay predicted Marvin and matched
+the CPU and FSIM scores. This is smoke evidence, not an exhaustive search or a
+performance claim against another implementation. The initiative's
+`CHECKPOINT-C3.md` records hashes and the four deployment targets. `make tune`
+runs export, FSIM search, and TSIM selection together. `make clean` removes
+generated build output and Python caches while preserving the float32 TFLite
+model, WAV samples, license, and validated tune evidence.
