@@ -14,7 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Native DwC encoding and lowering; numerical FSIM tests are added separately."""
+"""Native DwC encoding, lowering, and real-driver numerical execution."""
 import os
 from pathlib import Path
 import shlex
@@ -303,3 +303,83 @@ def test_dwc_storage_rewrite_preserves_bases_and_read_lifetimes(block_in, block_
         reads = [[int(call.args[3]), int(call.args[4])] for call in uops]
         second_src = 3 if block_in == 4 else (2 if block_out == 4 else 1)
         assert reads == ([[second_src, 1]] if keep_live else [[0, 0], [second_src, 1]])
+
+
+@pytest.fixture(scope="module", params=[(0, 3, 3), (0, 4, 3), (1, 3, 3), (0, 3, 4)],
+                ids=["production_8x8", "independent_16x8", "independent_batch2", "independent_8x16"])
+def fsim_probe(request, tmp_path_factory):
+    """Compile matching real FSIM geometry; default uses the production library.
+
+    Independent builds override C macros until asymmetric production configs
+    are supported. These are numerical driver tests, not TOP/RTL acceptance.
+    """
+    root = Path(__file__).resolve().parents[3]
+    tvm_root = Path(os.environ["TVM_PATH"])
+    geometry = request.param
+    build_dir = tmp_path_factory.mktemp("dwc_fsim")
+    cfg = [sys.executable, str(root / "config/vta_config.py"),
+           "--use-cfg=" + str(root / "config/vta_64mac.json")]
+    flags = shlex.split(subprocess.check_output(cfg + ["--backend-contract", "--defs"], text=True))
+    overrides = dict(zip(["VTA_LOG_BATCH", "VTA_LOG_BLOCK_IN", "VTA_LOG_BLOCK_OUT"], geometry))
+    flags = [flag for flag in flags if flag.split("=")[0][2:] not in overrides]
+    flags += ["-D" + key + "=" + str(value) for key, value in overrides.items()]
+    binary = build_dir / "probe"
+    command = [
+        os.environ.get("CXX", "c++"), "-std=c++17", *flags,
+        "-DDMLC_USE_LOGGING_LIBRARY=<tvm/runtime/logging.h>",
+        "-I" + str(root / "include"), "-I" + str(tvm_root / "include"),
+        "-I" + str(tvm_root / "3rdparty/dlpack/include"),
+        "-I" + str(tvm_root / "3rdparty/dmlc-core/include"),
+        str(Path(__file__).with_name("dwc_fsim_probe.cc")),
+    ]
+    if geometry == (0, 3, 3):
+        command += ["-L" + str(root / "build"), "-lvta_fsim",
+                    "-Wl,-rpath," + str(root / "build")]
+    else:
+        command += [str(root / "src/sim/sim_driver.cc"),
+                    str(root / "src/sim/sim_tlpp.cc"),
+                    str(root / "src/vmem/virtual_memory.cc")]
+    command += ["-L" + str(tvm_root / "build"), "-ltvm",
+                "-Wl,-rpath," + str(tvm_root / "build"), "-o", str(binary)]
+    subprocess.run(command, check=True)
+    return binary, tuple(1 << value for value in geometry)
+
+
+@pytest.mark.parametrize("gemm", [False, True], ids=["dwc", "gemm_regression"])
+def test_fsim_signed_nine_taps_restart_reset_and_batch_sharing(fsim_probe, gemm):
+    # Detect missing dispatch, unsigned weights, stale/extra consumption,
+    # batch-dependent shifts, lost BI16 input halves, and changed GEMM behavior.
+    import json
+
+    binary, (batch, block_in, block_out) = fsim_probe
+    result = subprocess.run([str(binary), str(int(gemm))],
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    assert f"GEOMETRY {batch} {block_in} {block_out}" in result.stdout
+    rows = [[int(x) for x in line.split()[1:]] for line in result.stdout.splitlines()
+            if line.startswith("RESULT ")]
+    assert len(rows) == 2 * 4 * batch * block_out
+    for snapshot, pos, b, c, actual in rows:
+        total = 0
+        for tap in range(9):
+            input_channels = range(block_in) if gemm else [
+                c + (block_out if block_in > block_out and pos % 2 else 0)]
+            for channel in input_channels:
+                inp = 1 + (pos * 11 + tap * 7 + b * 13 + channel * 3) % 31
+                if (tap + channel + b) % 2:
+                    inp = -inp
+                phase = channel if gemm else tap % block_in
+                weight_tap = tap // block_in * block_in + phase
+                weight = 0
+                if weight_tap < 9:
+                    weight = 1 + (pos // 2 * 5 + c * 3 + weight_tap * 2) % 13
+                    if (weight_tap + c + pos // 2) % 2:
+                        weight = -weight
+                total += inp * weight
+        expected = 2 * total if snapshot else total + 101 + pos * 17 + b * 5 + c
+        assert actual == expected, (snapshot, pos, b, c, actual, expected)
+    profile = json.loads(result.stdout.split("PROFILE ", 1)[1].split("GEOMETRY", 1)[0])
+    assert profile["gemm_counter"] == (108 if gemm else 0)
+    assert profile["dwc_counter"] == (0 if gemm else 108)
+    assert profile["alu_counter"] == 32
+    assert profile["out_store_nbytes"] == 8 * 4 * batch * block_out

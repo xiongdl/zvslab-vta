@@ -25,6 +25,7 @@
 #include <vta/hw_spec.h>
 #include <tvm/runtime/registry.h>
 #include <vta/sim_tlpp.h>
+#include <array>
 #include <type_traits>
 #include <mutex>
 #include <map>
@@ -273,6 +274,8 @@ class Profiler {
   uint64_t out_store_nbytes{0};
   /*! \brief instr counter for gemm */
   uint64_t gemm_counter{0};
+  /*! \brief instr counter for native depthwise convolution */
+  uint64_t dwc_counter{0};
   /*! \brief instr counter for ALU ops */
   uint64_t alu_counter{0};
   /*! \brief set debug mode */
@@ -285,6 +288,7 @@ class Profiler {
     uop_load_nbytes = 0;
     out_store_nbytes = 0;
     gemm_counter = 0;
+    dwc_counter = 0;
     alu_counter = 0;
   }
   /*! \return Whether we should skip execution. */
@@ -301,6 +305,7 @@ class Profiler {
        << " \"uop_load_nbytes\":" << uop_load_nbytes << ",\n"
        << " \"out_store_nbytes\":" << out_store_nbytes << ",\n"
        << " \"gemm_counter\":" << gemm_counter << ",\n"
+       << " \"dwc_counter\":" << dwc_counter << ",\n"
        << " \"alu_counter\":" << alu_counter << "\n"
        <<"}\n";
     return os.str();
@@ -346,6 +351,7 @@ class Device {
       case VTA_OPCODE_LOAD: device->RunLoad(mem); break;
       case VTA_OPCODE_STORE: device->RunStore(mem); break;
       case VTA_OPCODE_GEMM: device->RunGEMM(gem); break;
+      case VTA_OPCODE_DWC: device->RunDWC(gem); break;
       case VTA_OPCODE_ALU: device->RunALU(alu); break;
       case VTA_OPCODE_FINISH: ++(device->finish_counter_); break;
       default: {
@@ -446,6 +452,57 @@ class Device {
               acc.SetSigned(i, 0);
             }
           }
+        }
+      }
+    }
+  }
+
+  void RunDWC(const VTAGemInsn* op) {
+    if (op->reset_reg) {
+      // DwC has the same accumulator reset semantics as GEMM.
+      RunGEMM(op);
+      return;
+    }
+    prof_->dwc_counter += op->iter_out * op->iter_in * (op->uop_end - op->uop_bgn);
+    if (prof_->SkipExec()) return;
+    constexpr uint32_t kBankLanes = std::min(VTA_BLOCK_IN, VTA_BLOCK_OUT);
+    for (uint32_t y = 0; y < op->iter_out; ++y) {
+      for (uint32_t x = 0; x < op->iter_in; ++x) {
+        // Each range is one actual kernel. Rebuild registers even when the
+        // next output position or channel block reuses the same SRAM address.
+        std::array<uint32_t, (VTA_WGT_ELEM_BYTES + 3) / 4> weight_registers{};
+        BitPacker<VTA_WGT_WIDTH> wgt(weight_registers.data());
+        uint32_t weight_lane = 0;
+        uint32_t previous_weight = ~0U;
+        for (uint32_t uindex = op->uop_bgn; uindex < op->uop_end; ++uindex) {
+          auto* uop = static_cast<VTAUop*>(uop_.BeginPtr(uindex));
+          uint32_t acc_idx = uop->dst_idx + y * op->dst_factor_out + x * op->dst_factor_in;
+          uint32_t inp_idx = uop->src_idx + y * op->src_factor_out + x * op->src_factor_in;
+          uint32_t wgt_idx = uop->wgt_idx + y * op->wgt_factor_out + x * op->wgt_factor_in;
+          if (weight_lane == 0 || wgt_idx != previous_weight) {
+            memcpy(weight_registers.data(), wgt_.BeginPtr(wgt_idx), VTA_WGT_ELEM_BYTES);
+            weight_lane = 0;
+            previous_weight = wgt_idx;
+          }
+          BitPacker<VTA_ACC_WIDTH> acc(acc_.BeginPtr(acc_idx));
+          for (uint32_t j = 0; j < VTA_BLOCK_OUT; ++j) {
+            int32_t weight = wgt.GetSigned(j * VTA_BLOCK_IN);
+            // DMA and GEMM retain BLOCK_IN logical vectors; DwC addresses
+            // min(BLOCK_IN, BLOCK_OUT)-lane banks within those vectors.
+            uint32_t input_element = inp_idx * kBankLanes + j;
+            BitPacker<VTA_INP_WIDTH> inp(inp_.BeginPtr(input_element / VTA_BLOCK_IN));
+            for (uint32_t b = 0; b < VTA_BATCH; ++b) {
+              uint32_t offset = b * VTA_BLOCK_OUT + j;
+              int32_t value = inp.GetSigned(b * VTA_BLOCK_IN + input_element % VTA_BLOCK_IN);
+              acc.SetSigned(offset, acc.GetSigned(offset) + value * weight);
+            }
+            // Consume once per tap, after all batches have shared its low lane.
+            for (uint32_t k = 0; k + 1 < VTA_BLOCK_IN; ++k) {
+              wgt.SetSigned(j * VTA_BLOCK_IN + k, wgt.GetSigned(j * VTA_BLOCK_IN + k + 1));
+            }
+            wgt.SetSigned((j + 1) * VTA_BLOCK_IN - 1, 0);
+          }
+          weight_lane = (weight_lane + 1) % VTA_BLOCK_IN;
         }
       }
     }
