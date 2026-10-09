@@ -117,6 +117,7 @@ def build_config(debug_flag=0, **kwargs):
     if debug_flag:
         pass_list.append((1, add_debug))
     pass_list.append((2, transform.InjectALUIntrin()))
+    pass_list.append((3, transform.LowerDWCAddresses()))
     pass_list.append((3, tvm.tir.transform.LowerDeviceStorageAccessInfo()))
     pass_list.append((3, transform.FoldUopLoop()))
     pass_list.append((3, _VTAOnlyCPUAccessRewrite()))

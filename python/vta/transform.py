@@ -51,26 +51,67 @@ def _match_pragma(stmt, key):
 
 
 def dwc_uop_push(env, dout, dinp=None, dwgt=None, reset=False):
-    """Lower one DwC tap to bank-unit input and packed-entry weight addresses.
+    """Emit one DwC tap while preserving SRAM access identity and lifetimes.
 
     DMA and GEMM retain BLOCK_IN logical vectors. DwC input indices count
     BATCH * min(BLOCK_IN, BLOCK_OUT) lanes so either reverse-geometry subblock
     can be selected. Weight lanes in one entry share the same memory index;
     the compute engine advances its weight register per valid tap.
     """
-    inp_lanes = env.BATCH * min(env.BLOCK_IN, env.BLOCK_OUT)
-    wgt_lanes = env.BLOCK_OUT * env.BLOCK_IN
     return tvm.tir.call_intrin(
         "int32",
         "tir.vta.uop_push",
         env.dev.UOP_MODE_DWC,
         int(reset),
         dout.access_ptr("rw", "int32"),
-        0 if reset else dinp.elem_offset // inp_lanes,
-        0 if reset else dwgt.elem_offset // wgt_lanes,
+        0 if reset else dinp.access_ptr("r", "int32"),
+        0 if reset else dwgt.access_ptr("r", "int32"),
         0,
         0,
         0,
+    )
+
+
+def LowerDWCAddresses():
+    """Translate resolved SRAM offsets after StorageRewrite, before vector lowering.
+
+    Read access pointers must survive allocation merging and lifetime analysis.
+    Generic input-vector conversion uses BLOCK_IN and would lose the reverse
+    geometry's smaller channel subblock, so DwC handles these two operands first.
+    """
+
+    def _ftransform(func, _mod, _ctx):
+        env = get_env()
+        divisors = (
+            env.BATCH * min(env.BLOCK_IN, env.BLOCK_OUT),
+            env.BLOCK_OUT * env.BLOCK_IN,
+        )
+
+        def _rewrite(call):
+            if (
+                not isinstance(call.op, tvm.ir.Op)
+                or call.op.name != "tir.vta.uop_push"
+                or not isinstance(call.args[0], tvm.tir.IntImm)
+                or int(call.args[0]) != env.dev.UOP_MODE_DWC
+            ):
+                return call
+            args = list(call.args)
+            for index, divisor in zip((3, 4), divisors):
+                access = args[index]
+                if (
+                    isinstance(access, tvm.tir.Call)
+                    and isinstance(access.op, tvm.ir.Op)
+                    and access.op.name == "tir.tvm_access_ptr"
+                ):
+                    args[index] = access.args[2] // divisor
+            return tvm.tir.Call(call.dtype, call.op, args, call.span)
+
+        return func.with_body(
+            tvm.tir.stmt_functor.ir_transform(func.body, None, _rewrite, ["tir.Call"])
+        )
+
+    return tvm.tir.transform.prim_func_pass(
+        _ftransform, opt_level=0, name="tir.vta.LowerDWCAddresses"
     )
 
 

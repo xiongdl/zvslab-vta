@@ -146,6 +146,14 @@ def test_dwc_intrinsic_uses_compute_mode_and_preserves_input_subblocks(block_in,
             assert queue_ids == [2]
         call = _calls(intrin.body, "tir.vta.uop_push")[0]
         inp, weight = intrin.buffers[:2]
+        assert call.args[3].args[1].same_as(inp.data)
+        assert call.args[4].args[1].same_as(weight.data)
+        assert [int(call.args[index].args[4]) for index in (3, 4)] == [1, 1]
+        module = tvm.IRModule({"main": tvm.tir.PrimFunc(
+            [buffer.data for buffer in intrin.buffers], intrin.body
+        )})
+        from vta.transform import LowerDWCAddresses
+        call = _calls(LowerDWCAddresses()(module)["main"].body, "tir.vta.uop_push")[0]
         # Reverse geometry's second 8-channel subblock must remain addressable.
         addr = tvm.tir.stmt_functor.substitute(call.args[3], {inp.elem_offset: 8})
         assert int(tvm.arith.Analyzer().simplify(addr)) == 1
@@ -228,3 +236,70 @@ def test_existing_modes_still_reject_adjacent_accumulator_writes(runtime_probe, 
     )
     assert result.returncode != 0
     assert "seq_[i].dst_idx != dst_index" in result.stderr
+
+
+def _run_address_lowering(env, module):
+    """Use the registered DwC address pass before generic vector conversion."""
+    lowered = tvm.tir.transform.StorageRewrite()(module)
+    with vta.build_config() as context:
+        for _, transform in context.config["tir.add_lower_pass"]:
+            if transform.info.name == "tir.vta.LowerDWCAddresses":
+                lowered = transform(lowered)
+    return tvm.tir.transform.LowerDeviceStorageAccessInfo()(lowered)
+
+
+def _allocated_dwc_probe(env, keep_live):
+    from vta.transform import dwc_uop_push
+
+    inp_lanes = env.BATCH * max(env.BLOCK_IN, env.BLOCK_OUT)
+    wgt_lanes = env.BLOCK_IN * env.BLOCK_OUT
+    a = tvm.tir.decl_buffer((inp_lanes,), "int8", name="a", scope=env.inp_scope)
+    b = tvm.tir.decl_buffer((inp_lanes,), "int8", name="b", scope=env.inp_scope)
+    w = tvm.tir.decl_buffer((wgt_lanes,), "int8", name="w", scope=env.wgt_scope)
+    z = tvm.tir.decl_buffer((wgt_lanes,), "int8", name="z", scope=env.wgt_scope)
+    out = tvm.tir.decl_buffer((env.BATCH * env.BLOCK_OUT,), "int32", scope=env.acc_scope)
+    nodes = [
+        tvm.tir.Evaluate(tvm.tir.call_extern(
+            "int32", "load_" + buf.name, buf.access_ptr("w", "int32")
+        )) for buf in [a, b, w, z]
+    ]
+    if not keep_live:
+        nodes.append(tvm.tir.Evaluate(dwc_uop_push(env, out, a, w)))
+    # Selecting a reverse subblock must retain both its allocation base and +8.
+    second_input = tvm.tir.decl_buffer(
+        b.shape, b.dtype, data=b.data, scope=env.inp_scope,
+        elem_offset=8 if env.BLOCK_IN > env.BLOCK_OUT else 0,
+    )
+    nodes.append(tvm.tir.Evaluate(dwc_uop_push(env, out, second_input, z)))
+    if keep_live:
+        nodes.append(tvm.tir.Evaluate(tvm.tir.call_extern(
+            "int32", "keep_both_live",
+            *[buf.access_ptr("r", "int32") for buf in [a, b, w, z]],
+        )))
+    body = tvm.tir.SeqStmt(nodes)
+    for buf in reversed([a, b, w, z, out]):
+        body = tvm.tir.Allocate(
+            buf.data, buf.dtype, buf.shape, tvm.tir.const(True, "bool"), body
+        )
+    return tvm.IRModule({"main": tvm.tir.PrimFunc([], body)})
+
+
+@pytest.mark.parametrize("block_in,block_out", [(3, 3), (3, 4), (4, 3)])
+@pytest.mark.parametrize("keep_live", [False, True], ids=["dwc_read_lifetimes", "nonzero_bases"])
+def test_dwc_storage_rewrite_preserves_bases_and_read_lifetimes(block_in, block_out, keep_live):
+    env = _intrinsic_env(block_in, block_out)
+    with env:
+        lowered = _run_address_lowering(env, _allocated_dwc_probe(env, keep_live))["main"].body
+        externs = _calls(lowered, "tir.call_extern")
+        loads = {
+            call.args[0].value: int(call.args[1]) for call in externs
+            if call.args[0].value.startswith("load_")
+        }
+        assert loads == {
+            "load_a": 0, "load_b": 2 if block_out == 4 else 1,
+            "load_w": 0, "load_z": 1,
+        }
+        uops = _calls(lowered, "tir.vta.uop_push")
+        reads = [[int(call.args[3]), int(call.args[4])] for call in uops]
+        second_src = 3 if block_in == 4 else (2 if block_out == 4 else 1)
+        assert reads == ([[second_src, 1]] if keep_live else [[0, 0], [second_src, 1]])
