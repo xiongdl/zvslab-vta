@@ -122,6 +122,8 @@
 #define VTA_OPCODE_FINISH 3
 /*! Opcode: ALU encoding */
 #define VTA_OPCODE_ALU 4
+/*! Opcode: depthwise convolution encoding (GEMM instruction layout) */
+#define VTA_OPCODE_DWC 5
 
 /*! ALU opcode: unary min op */
 #define VTA_ALU_OPCODE_MIN 0

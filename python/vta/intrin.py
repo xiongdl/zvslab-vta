@@ -137,3 +137,78 @@ def gemm(env, mock=False):
     return te.decl_tensor_intrin(
         out.op, intrin_func, name="GEMM", binds={inp: inp_layout, wgt: wgt_layout, out: out_layout}
     )
+
+
+def dwc(env, mock=False):
+    """One native depthwise tap, with an extent-one reduction for accumulation.
+
+    The caller supplies kernel taps in row-major order. Each weight channel
+    has BLOCK_IN packed kernel positions; this intrinsic selects a tap from
+    that strided entry while hardware consumes its current lowest element.
+    Input address units differ from DMA only when BLOCK_IN > BLOCK_OUT.
+    """
+    from .transform import dwc_uop_push
+
+    inp = te.placeholder((env.BATCH, env.BLOCK_OUT), env.inp_dtype, name=env.inp_scope)
+    wgt = te.placeholder((env.BLOCK_OUT, 1), env.wgt_dtype, name=env.wgt_scope)
+    k = te.reduce_axis((0, 1), name="tap")
+    out = te.compute(
+        (env.BATCH, env.BLOCK_OUT),
+        lambda b, c: te.sum(
+            inp[b, c].astype(env.acc_dtype) * wgt[c, k].astype(env.acc_dtype), axis=k
+        ),
+        name="dwc_out",
+    )
+    inp_lanes = env.BATCH * min(env.BLOCK_IN, env.BLOCK_OUT)
+    wgt_lanes = env.BLOCK_OUT * env.BLOCK_IN
+    out_lanes = env.BATCH * env.BLOCK_OUT
+    inp_layout = tvm.tir.decl_buffer(
+        inp.shape,
+        inp.dtype,
+        env.inp_scope,
+        scope=env.inp_scope,
+        offset_factor=inp_lanes,
+        data_alignment=inp_lanes,
+    )
+    wgt_layout = tvm.tir.decl_buffer(
+        wgt.shape,
+        wgt.dtype,
+        env.wgt_scope,
+        scope=env.wgt_scope,
+        strides=[env.BLOCK_IN, 1],
+        offset_factor=1,
+        data_alignment=wgt_lanes,
+    )
+    out_layout = tvm.tir.decl_buffer(
+        out.shape,
+        out.dtype,
+        env.acc_scope,
+        scope=env.acc_scope,
+        offset_factor=out_lanes,
+        data_alignment=out_lanes,
+    )
+
+    def intrin_func(ins, outs):
+        dinp, dwgt = ins
+        dout = outs[0]
+
+        def instruction(reset):
+            irb = tvm.tir.ir_builder.create()
+            irb.scope_attr(
+                env.dev.vta_axis, "coproc_scope", env.dev.get_task_qid(env.dev.QID_COMPUTE)
+            )
+            irb.scope_attr(env.dev.vta_axis, "coproc_uop_scope", env.dev.vta_push_uop)
+            irb.emit(dwc_uop_push(env, dout, dinp, dwgt, reset))
+            return irb.get()
+
+        if mock:
+            nop = tvm.tir.Evaluate(0)
+            return nop, nop, nop
+        return instruction(False), instruction(True), instruction(False)
+
+    return te.decl_tensor_intrin(
+        out.op,
+        intrin_func,
+        name="DWC",
+        binds={inp: inp_layout, wgt: wgt_layout, out: out_layout},
+    )

@@ -50,6 +50,30 @@ def _match_pragma(stmt, key):
     )
 
 
+def dwc_uop_push(env, dout, dinp=None, dwgt=None, reset=False):
+    """Lower one DwC tap to bank-unit input and packed-entry weight addresses.
+
+    DMA and GEMM retain BLOCK_IN logical vectors. DwC input indices count
+    BATCH * min(BLOCK_IN, BLOCK_OUT) lanes so either reverse-geometry subblock
+    can be selected. Weight lanes in one entry share the same memory index;
+    the compute engine advances its weight register per valid tap.
+    """
+    inp_lanes = env.BATCH * min(env.BLOCK_IN, env.BLOCK_OUT)
+    wgt_lanes = env.BLOCK_OUT * env.BLOCK_IN
+    return tvm.tir.call_intrin(
+        "int32",
+        "tir.vta.uop_push",
+        env.dev.UOP_MODE_DWC,
+        int(reset),
+        dout.access_ptr("rw", "int32"),
+        0 if reset else dinp.elem_offset // inp_lanes,
+        0 if reset else dwgt.elem_offset // wgt_lanes,
+        0,
+        0,
+        0,
+    )
+
+
 def FoldUopLoop():
     """Detect and fold uop loop.
 

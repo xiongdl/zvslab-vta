@@ -31,6 +31,7 @@ extern "C" {
 
 #include <tvm/runtime/c_runtime_api.h>
 #include <vta/driver.h>
+#include <vta/runtime.h>
 
 #define VTA_MEMCPY_H2D 1
 #define VTA_MEMCPY_D2H 2
@@ -161,6 +162,7 @@ TVM_DLL void VTAStoreBuffer2D(VTACommandHandle cmd, uint32_t src_sram_index,
  * \brief Push uop into kernel buffer.
  * In GEMM mode, do a blocked GEMM with 2d access pattern.
  * In ALU mode, do a vectorized ALU operation with 2d access pattern.
+ * In DwC mode, consume one weight per channel and accumulate a channelwise product.
  *
  *  \code
  *
@@ -171,6 +173,8 @@ TVM_DLL void VTAStoreBuffer2D(VTACommandHandle cmd, uint32_t src_sram_index,
  *    accum[dst_index] = 0
  *   elif mode == 0
  *    accum[dst_index] += GEMM(input[src_index], weight[wgt_index]);
+ *   elif mode == 2
+ *    accum[dst_index] += DWC(input[src_index], weight[wgt_index]);
  *   else
  *    if (use_imm)
  *      accum[dst_index] = opcode(accum[dst_index], imm_val);
@@ -179,7 +183,7 @@ TVM_DLL void VTAStoreBuffer2D(VTACommandHandle cmd, uint32_t src_sram_index,
  *
  *  \endcode
  *
- * \param mode Set to GEMM mode if set to 0, ALU mode is set to 1.
+ * \param mode GEMM=0, ALU=1, DwC=2 (VTA_UOP_MODE_*).
  * \param reset_out Resets the accum to 0.
  * \param dst_index The accum memory index.
  * \param src_index The input memory (gemm) / accum memory (alu) index.
@@ -207,7 +211,7 @@ TVM_DLL void VTAUopLoopBegin(uint32_t extent, uint32_t dst_factor, uint32_t src_
 TVM_DLL void VTAUopLoopEnd();
 
 /*!
- * \brief Push GEMM uop kernel into the command handle.
+ * \brief Push GEMM or DwC uop kernel into the command handle.
  * \param uop_handle The uop cache handle.
  * \param finit The initalization function to initialize uop.
  * \param signature The closure arguments of the finit.

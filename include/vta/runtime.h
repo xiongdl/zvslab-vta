@@ -27,6 +27,11 @@
 
 #include <stdint.h>
 
+/*! Micro-op modes passed to VTAUopPush; independent of ISA opcodes. */
+#define VTA_UOP_MODE_GEMM 0
+#define VTA_UOP_MODE_ALU 1
+#define VTA_UOP_MODE_DWC 2
+
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -286,7 +286,7 @@ class UopKernel {
   void PushLoopEnd() { --loop_ptr_; }
   /*!
    * \brief Push micro op into kernel.
-   * \param mode Set to GEMM mode if set to 0, ALU mode is set to 1.
+   * \param mode GEMM=0, ALU=1, DwC=2 (VTA_UOP_MODE_*).
    * \param reset_out Resets the accum to 0.
    * \param dst_index The accum memory index.
    * \param src_index The input memory (gemm) / accum memory (alu) index.
@@ -298,7 +298,9 @@ class UopKernel {
   void Push(uint32_t mode, uint32_t reset_out, uint32_t dst_index, uint32_t src_index,
             uint32_t wgt_index, uint32_t opcode, uint32_t use_imm, int32_t imm_val) {
     // The loop nest structure
-    VerifyDep(dst_index);
+    CHECK_LE(mode, VTA_UOP_MODE_DWC);
+    // DwC tap sequences accumulate to the same destination on consecutive uops.
+    if (mode != VTA_UOP_MODE_DWC) VerifyDep(dst_index);
     VTAUop op;
     op.dst_idx = dst_index;
     op.src_idx = src_index;
@@ -317,7 +319,7 @@ class UopKernel {
       CHECK(reset_out_ == reset_out);
     }
     // Check kernel op and imm/imm_val in ALU mode
-    if (mode == 1) {
+    if (mode == VTA_UOP_MODE_ALU) {
       if (opcode_ == 0xFFFFFFFF) {
         opcode_ = opcode;
         use_imm_ = use_imm;
@@ -342,7 +344,7 @@ class UopKernel {
 
  public:
   // The kernel's mode, opcode, immediate setting and value
-  uint32_t mode_{0xFFFFFFFF};  // UOP type: 0xFFFFFFFF - unset, 0 - GEMM, 1 - ALU
+  uint32_t mode_{0xFFFFFFFF};  // UOP type: 0xFFFFFFFF - unset, 0 - GEMM, 1 - ALU, 2 - DwC
   uint32_t opcode_{0xFFFFFFFF};
   uint32_t reset_out_{0xFFFFFFFF};
   bool use_imm_{false};
@@ -819,9 +821,9 @@ class InsnQueue : public BaseQueue<VTAGenericInsn> {
         printf("\tx: size=%d, stride=%d, pad=[%d, %d]\n", static_cast<int>(c.mem.x_size),
                static_cast<int>(c.mem.x_stride), static_cast<int>(c.mem.x_pad_0),
                static_cast<int>(c.mem.x_pad_1));
-      } else if (c.mem.opcode == VTA_OPCODE_GEMM) {
+      } else if (c.mem.opcode == VTA_OPCODE_GEMM || c.mem.opcode == VTA_OPCODE_DWC) {
         // Print instruction field information
-        printf("GEMM\n");
+        printf("%s\n", c.mem.opcode == VTA_OPCODE_DWC ? "DWC" : "GEMM");
 
         printf("\tdep - pop prev: %d, pop next: %d, push prev: %d, push next: %d\n",
                static_cast<int>(c.mem.pop_prev_dep), static_cast<int>(c.mem.pop_next_dep),
@@ -871,7 +873,8 @@ class InsnQueue : public BaseQueue<VTAGenericInsn> {
           if (c.mem.pop_next_dep) s2g_queue--;
           if (c.mem.push_next_dep) g2s_queue++;
         }
-      } else if (c.mem.opcode == VTA_OPCODE_GEMM || c.mem.opcode == VTA_OPCODE_ALU) {
+      } else if (c.mem.opcode == VTA_OPCODE_GEMM || c.mem.opcode == VTA_OPCODE_DWC ||
+                 c.mem.opcode == VTA_OPCODE_ALU) {
         // Print instruction field information
         if (c.gemm.pop_prev_dep) l2g_queue--;
         if (c.gemm.push_prev_dep) g2l_queue++;
@@ -948,7 +951,8 @@ class InsnQueue : public BaseQueue<VTAGenericInsn> {
   }
   // Get stage of the computation
   static PipelineStage GetPipelineStage(VTAMemInsn* insn) {
-    if (insn->opcode == VTA_OPCODE_GEMM) return kComputeStage;
+    if (insn->opcode == VTA_OPCODE_GEMM || insn->opcode == VTA_OPCODE_DWC)
+      return kComputeStage;
     if (insn->opcode == VTA_OPCODE_ALU) return kComputeStage;
     if (insn->opcode == VTA_OPCODE_LOAD) {
       if (insn->x_size == 0) return kNoneStage;
@@ -1206,6 +1210,7 @@ class CommandQueue {
  private:
   // Push GEMM uop to the command buffer
   void PushGEMMOp(UopKernel* kernel) {
+    CHECK(kernel->mode_ == VTA_UOP_MODE_GEMM || kernel->mode_ == VTA_UOP_MODE_DWC);
     uop_queue_.Push(kernel, [this]() { this->AutoSync(); });
     if (uop_queue_.pending()) {
       VTAMemInsn* insn = insn_queue_.CreateMemInsn(VTA_MEM_ID_UOP);
@@ -1213,7 +1218,7 @@ class CommandQueue {
       uop_queue_.FlushUopLoad(insn);
     }
     VTAGemInsn* insn = insn_queue_.CreateGemInsn();
-    insn->opcode = VTA_OPCODE_GEMM;
+    insn->opcode = kernel->mode_ == VTA_UOP_MODE_DWC ? VTA_OPCODE_DWC : VTA_OPCODE_GEMM;
     insn->reset_reg = kernel->reset_out_;
     insn->uop_bgn = kernel->sram_begin_;
     insn->uop_end = kernel->sram_end_;

@@ -79,6 +79,9 @@ class DevContext(object):
     MEM_ID_ACC = 3
     MEM_ID_OUT = 4
     MEM_ID_ACC_8BIT = 5
+    UOP_MODE_GEMM = 0
+    UOP_MODE_ALU = 1
+    UOP_MODE_DWC = 2
     # VTA ALU Opcodes
     ALU_OPCODE_MIN = 0
     ALU_OPCODE_MAX = 1
@@ -100,6 +103,7 @@ class DevContext(object):
         self.DEBUG_NO_SYNC = False
         env._dev_ctx = self
         self.gemm = intrin.gemm(env, env.mock_mode)
+        self.dwc = intrin.dwc(env, env.mock_mode)
 
     def get_task_qid(self, qid):
         """Get transformed queue index."""
@@ -234,6 +238,11 @@ class Environment(object):
     def gemm(self):
         """GEMM intrinsic"""
         return self.dev.gemm
+
+    @property
+    def dwc(self):
+        """Channelwise multiply-accumulate intrinsic."""
+        return self.dev.dwc
 
     @property
     def target(self):
