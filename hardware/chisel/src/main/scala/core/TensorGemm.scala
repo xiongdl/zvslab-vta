@@ -150,8 +150,11 @@ class MatrixVectorMultiplication(implicit p: Parameters) extends Module {
     val acc_o = new TensorClientData(tensorType = "acc")
     val out = new TensorClientData(tensorType = "out")
   })
+  // The output-channel count selects the number of dot products, while each
+  // dot product consumes one logical BLOCK_IN input vector. Input banking may
+  // expose more physical lanes when BLOCK_OUT is wider than BLOCK_IN.
   val dot = Seq.fill(batch)(Seq.fill(size)(
-    Module(new DotProduct(aBits = inpBits, bBits = wgtBits, size))))
+    Module(new DotProduct(aBits = inpBits, bBits = wgtBits, p(CoreKey).blockIn))))
   // Latency is defined as two in the following, because there is one cycle in the MAC module,
   // and another cycle in the pipelined adders as the first layer of the accumulator
   val acc = Seq.fill(batch)(Seq.fill(size)(Module(new Pipe(UInt(accBits.W), latency = 2))))
@@ -162,7 +165,7 @@ class MatrixVectorMultiplication(implicit p: Parameters) extends Module {
     for (i <- 0 until size) {
       acc(b)(i).io.enq.valid := io.inp.data.valid & io.wgt.data.valid & io.acc_i.data.valid & ~io.reset
       acc(b)(i).io.enq.bits := io.acc_i.data.bits(b)(i)
-      for (j <- 0 until size) {
+      for (j <- 0 until p(CoreKey).blockIn) {
         dot(b)(i).io.a(j) := io.inp.data.bits(b)(j).asSInt
         dot(b)(i).io.b(j) := io.wgt.data.bits(i)(j).asSInt // all batches get the same weight - reuse
       }
@@ -333,7 +336,7 @@ class TensorGemmSimple(debug: Boolean = false)(implicit p: Parameters) extends T
   val uop_idx = Reg(chiselTypeOf(dec.uop_end))
   val uop_end = dec.uop_end
   val uop_acc = Reg(chiselTypeOf(dec.uop_end))
-  val uop_inp = Reg(chiselTypeOf(dec.uop_end))
+  val uop_inp = Reg(UInt((math.max(dec.uop_end.getWidth, io.uop.data.bits.u1.getWidth) + 1).W))
   val uop_wgt = Reg(chiselTypeOf(dec.uop_end))
   val cnt_o = Reg(chiselTypeOf(dec.lp_0))
   val acc_o = Reg(chiselTypeOf(dec.uop_end))
@@ -445,7 +448,7 @@ class TensorGemmSimple(debug: Boolean = false)(implicit p: Parameters) extends T
 
   when(state === sComputeIdx && io.uop.data.valid) {
     uop_acc := io.uop.data.bits.u0 + acc_i
-    uop_inp := io.uop.data.bits.u1 + inp_i
+    uop_inp := io.uop.data.bits.u1 +& inp_i
     uop_wgt := io.uop.data.bits.u2 + wgt_i
   }
 
@@ -460,6 +463,8 @@ class TensorGemmSimple(debug: Boolean = false)(implicit p: Parameters) extends T
   io.inp.rd(0).idx.valid := state === sReadTensor
   // GEMM factors and uop sources remain in logical BLOCK_IN vectors.
   // The input banks address min(BLOCK_IN, BLOCK_OUT) lane subvectors.
+  assert(!io.inp.rd(0).idx.valid || uop_inp < p(CoreKey).inpMemDepth.U,
+    "GEMM input source exceeds the logical input tensor depth")
   io.inp.rd(0).idx.bits := uop_inp * p(CoreKey).inpSlices.U
   io.inp.tieoffWrite() // read-only
 
@@ -599,7 +604,7 @@ class TensorGemmPipelinedSplit (implicit p: Parameters) extends TensorGemmIfc {
 
   val uop_valid = ShiftRegister(delayed_valid, inpReadIdxLatency, resetData = false.B, en = true.B)
   val uop_acc = ShiftRegister(delayedUopData.bits.u0 + delayed_acc_i, inpReadIdxLatency)
-  val uop_inp =  delayedUopData.bits.u1 + delayed_inp_i // it is piped in inp tensor read
+  val uop_inp = delayedUopData.bits.u1 +& delayed_inp_i // widened to check logical source bounds
   val uop_wgt = ShiftRegister(delayedUopData.bits.u2 + delayed_wgt_i, inpReadIdxLatency)
 
   val reset_pipe = Module(
@@ -618,6 +623,8 @@ class TensorGemmPipelinedSplit (implicit p: Parameters) extends TensorGemmIfc {
   io.inp.rd(0).idx.valid := delayed_valid
   // GEMM factors and uop sources remain in logical BLOCK_IN vectors.
   // The input banks address min(BLOCK_IN, BLOCK_OUT) lane subvectors.
+  assert(!io.inp.rd(0).idx.valid || uop_inp < p(CoreKey).inpMemDepth.U,
+    "GEMM input source exceeds the logical input tensor depth")
   io.inp.rd(0).idx.bits := uop_inp * p(CoreKey).inpSlices.U
   val delayed_uop_valid = RegNext(uop_valid, init=false.B) // memdelay
   // asset fires on emulated tensorRead Direct GEMM test TODO: fix memoryManager sram read

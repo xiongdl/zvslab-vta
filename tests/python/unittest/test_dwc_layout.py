@@ -27,6 +27,22 @@ def test_production_geometry_and_abi(bi,bo,depth,subdepth,banks,bankdepth):
     assert len({environment(i,o).BITSTREAM for i,o in [(3,3),(3,4),(4,3)]}) == 3
 
 
+def test_equal_explicit_geometry_has_distinct_artifact_name():
+    import importlib.util
+    cfg = json.loads((Path(__file__).resolve().parents[3] / 'config/vta_64mac.json').read_text())
+    pkg_path = Path(__file__).resolve().parents[3] / 'config/pkg_config.py'
+    spec = importlib.util.spec_from_file_location('vta_pkg_config_test', pkg_path)
+    pkg_config_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pkg_config_module)
+    cfg.update(TARGET='sim', LOG_BLOCK=3, LOG_BLOCK_IN=3, LOG_BLOCK_OUT=3)
+    legacy_equal = pkg_config_module.PkgConfig(dict(cfg)).bitstream
+    cfg.update(LOG_BLOCK_IN=4, LOG_BLOCK_OUT=4)
+    explicit_equal = pkg_config_module.PkgConfig(dict(cfg)).bitstream
+    assert legacy_equal != explicit_equal
+    names = {environment(i, o).BITSTREAM for i, o in [(3, 3), (3, 4), (4, 3)]}
+    assert len(names) == 3
+
+
 @pytest.mark.parametrize('bi,bo', [(3,3),(3,4),(4,3)])
 def test_input_spatial_channel_vectors_and_real_halves(bi,bo):
     from vta.top.dwc_layout import pack_dwc_input

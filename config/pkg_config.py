@@ -125,7 +125,11 @@ class PkgConfig(object):
             cfg["LOG_WGT_BUFF_SIZE"],
             cfg["LOG_ACC_BUFF_SIZE"])
 
-        if cfg["LOG_BLOCK_IN"] != cfg["LOG_BLOCK_OUT"]:
+        # Preserve legacy artifact names when the effective geometry is the
+        # legacy equal geometry. Explicit equal overrides still need a suffix:
+        # LOG_BLOCK is also used by older config consumers and may differ.
+        if (cfg["LOG_BLOCK_IN"] != cfg["LOG_BLOCK"] or
+                cfg["LOG_BLOCK_OUT"] != cfg["LOG_BLOCK"]):
             self.bitstream += "_bi{}_bo{}".format(1 << cfg["LOG_BLOCK_IN"], 1 << cfg["LOG_BLOCK_OUT"])
 
         # Derive FPGA parameters from target
