@@ -62,6 +62,11 @@ def alu_probe(tmp_path_factory):
         raise AssertionError(f"unsupported VTA_BACKEND for ALU probe: {backend}")
     library_extension = ".dylib" if sys.platform == "darwin" else ".so"
     vta_library = VTA_ROOT / "build" / f"libvta_{backend}{library_extension}"
+    if not vta_library.is_file():
+        raise AssertionError(
+            f"VTA_BACKEND={backend} selected library is unavailable: {vta_library}; "
+            f"build it with scripts/build_vta_lib.sh --backend {backend}"
+        )
     tvm_library_dir = tvm_root / "build"
     command = [
         os.environ.get("CXX", "c++"), "-std=c++17", *flags,
@@ -70,7 +75,7 @@ def alu_probe(tmp_path_factory):
         "-I" + str(tvm_root / "3rdparty/dlpack/include"),
         "-I" + str(tvm_root / "3rdparty/dmlc-core/include"),
         str(Path(__file__).with_name("alu_probe.cc")),
-        "-L" + str(VTA_ROOT / "build"), "-lvta_fsim", "-Wl,-rpath," + str(VTA_ROOT / "build"),
+        str(vta_library), "-Wl,-rpath," + str(VTA_ROOT / "build"),
         "-L" + str(tvm_library_dir), "-ltvm", "-Wl,-rpath," + str(tvm_library_dir),
         "-o", str(binary),
     ]
@@ -134,6 +139,21 @@ def run_requantize_group(probe, work_dir, name, mode, cases):
     stages, transformed = _requantize_stages(mode, cases)
     actual = run_probe(probe, work_dir, name, stages, transformed)
     return actual
+
+
+def test_alu_probe_binary_links_requested_vta_backend(alu_probe):
+    backend = os.environ.get("VTA_BACKEND", "fsim")
+    if sys.platform == "darwin":
+        inspect_command = ["otool", "-L", str(alu_probe)]
+    elif sys.platform.startswith("linux"):
+        inspect_command = ["ldd", str(alu_probe)]
+    else:
+        pytest.skip(f"native shared-library inspection is unsupported on {sys.platform}")
+    inspected = subprocess.run(inspect_command, check=True, capture_output=True, text=True)
+    dependencies = inspected.stdout
+    assert f"libvta_{backend}" in dependencies
+    other_backend = "tsim" if backend == "fsim" else "fsim"
+    assert f"libvta_{other_backend}" not in dependencies
 
 
 def assert_cmsis_equal(probe, function, mode, work_dir, name, cases):
