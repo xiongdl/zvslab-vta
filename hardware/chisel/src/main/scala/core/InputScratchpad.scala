@@ -34,11 +34,13 @@ class InputScratchpad(writePorts: Int)(implicit p: Parameters) extends Module {
   for (b <- 0 until c.batch; bank <- 0 until banksPerBatch) {
     val enables = for (port <- 0 until writePorts; q <- 0 until slices) yield {
       val sub = io.write(port).index * slices.U + q.U
-      io.write(port).valid && sub % banksPerBatch.U === bank.U &&
+      val selected = if (banksPerBatch == 1) true.B else (sub % banksPerBatch.U(sub.getWidth.W)) === bank.U
+      io.write(port).valid && selected &&
         io.write(port).mask(b).slice(q*lanes,(q+1)*lanes).reduce(_ || _)
     }
     val rows = for (port <- 0 until writePorts; q <- 0 until slices) yield {
-      (io.write(port).index * slices.U + q.U) / banksPerBatch.U
+      val sub = io.write(port).index * slices.U + q.U
+      if (banksPerBatch == 1) sub else sub / banksPerBatch.U(sub.getWidth.W)
     }
     val datas = for (port <- 0 until writePorts; q <- 0 until slices) yield {
       VecInit(io.write(port).data(b).slice(q*lanes,(q+1)*lanes))
@@ -53,12 +55,16 @@ class InputScratchpad(writePorts: Int)(implicit p: Parameters) extends Module {
   }
   val readIndex = ShiftRegister(io.read.bits,tp.readTensorLatency)
   val readValid = ShiftRegister(io.read.valid,tp.readTensorLatency,false.B,true.B)
-  val stripe = (readIndex / ratio.U) % stripes.U
-  val selector = RegNext(readIndex % ratio.U)
+  val stripe = if (stripes == 1) 0.U else {
+    val group = if (ratio == 1) readIndex else readIndex / ratio.U(readIndex.getWidth.W)
+    group % stripes.U(group.getWidth.W)
+  }
+  val selector = RegNext(if (ratio == 1) 0.U else readIndex % ratio.U(readIndex.getWidth.W))
   val stripeDelayed = RegNext(stripe)
   for(b <- 0 until c.batch) {
     val bankData = VecInit((0 until banksPerBatch).map { bank =>
-      memories(b*banksPerBatch+bank).read(readIndex / banksPerBatch.U,
+      val row = if (banksPerBatch == 1) readIndex else readIndex / banksPerBatch.U(readIndex.getWidth.W)
+      memories(b*banksPerBatch+bank).read(row,
         readValid && stripe === (bank/ratio).U)
     })
     for (j <- 0 until math.max(c.blockIn,c.blockOut)) {

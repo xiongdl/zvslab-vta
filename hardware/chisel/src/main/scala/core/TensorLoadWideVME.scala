@@ -191,9 +191,12 @@ class TensorLoadWideVME(tensorType: String = "none", debug: Boolean = false)(
     io.tensor.rd(0).data <> ram.io.result
     for (i <- 0 until tensorsInClNb) {
       val direct = io.tensor.wr(0)
+      val directBank = if (tensorsInClNb == 1) true.B else
+        (direct.bits.idx % tensorsInClNb.U(direct.bits.idx.getWidth.W)) === i.U
+      val paddingBank = if (tensorsInClNb == 1) true.B else
+        (fillPadding.io.tensorIdx.bits % tensorsInClNb.U(fillPadding.io.tensorIdx.bits.getWidth.W)) === i.U
       ram.io.write(i).valid := Mux(state === sIdle,
-        direct.valid && direct.bits.idx % tensorsInClNb.U === i.U,
-        Mux(isZeroPadWrite, fillPadding.io.tensorIdx.bits % tensorsInClNb.U === i.U, rdDataWrEn(i)))
+        direct.valid && directBank, Mux(isZeroPadWrite, paddingBank, rdDataWrEn(i)))
       ram.io.write(i).index := Mux(state === sIdle, direct.bits.idx,
         Mux(isZeroPadWrite, fillPadding.io.tensorIdx.bits, rdDataWrIdx(i) * tensorsInClNb.U + i.U))
       ram.io.write(i).data := Mux(state === sIdle, direct.bits.data,

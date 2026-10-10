@@ -131,3 +131,71 @@ def test_dma_queue_bridge_uses_balanced_compute_tokens(source, dest):
             calls.append((node.op.name, tuple(map(int, node.args))))
     tvm.tir.stmt_functor.post_order_visit(module['main'].body, visit)
     assert calls == [('tir.vta.coproc_dep_push', (source, 2)), ('tir.vta.coproc_dep_pop', (source, 2)), ('tir.vta.coproc_dep_push', (2, dest)), ('tir.vta.coproc_dep_pop', (2, dest))]
+
+
+def test_real_kws_layer_signed_int32():
+    """Same real operands on the currently built geometry/backend, all 8000 outputs."""
+    import importlib
+    import json
+    import os
+    import sys
+    from pathlib import Path
+    import numpy as np
+    from vta.top import depthwise_conv2d_packed, schedule_depthwise_conv2d_packed, dwc_kernel
+    from vta.top.dwc_layout import pack_dwc_input, pack_dwc_weight
+    from vta.testing import simulator
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'apps/mlperf_tiny_benchmark'))
+    sample = importlib.import_module('keyword_spotting_v1.python.dwc_sample').extract_dwc_sample()
+    env = vta.get_env()
+    backend = os.environ['VTA_BACKEND']
+    simulator.load_backend(backend)
+    assert (env.BLOCK_IN, env.BLOCK_OUT) in [(8, 8), (8, 16), (16, 8)]
+    x = sample.activation.transpose(0, 3, 1, 2)
+    k = sample.weight[:, :, :, 0].transpose(2, 0, 1)
+    # Every physical lane retains its actual channel; neither expanded upper
+    # channels nor reverse lower/upper subblocks are replaced with zeros.
+    assert np.all(np.any(x != 0, axis=(0, 2, 3)))
+    assert np.all(np.any(k != 0, axis=(1, 2)))
+    xp, kp = pack_dwc_input(x, env).data, pack_dwc_weight(k, env)
+    data, weight = te.placeholder(xp.shape, 'int8', 'data'), te.placeholder(kp.shape, 'int8', 'weight')
+    dev = tvm.ext_dev(0)
+    snapshots, profiles = [], []
+    for byte in range(4):
+        with tvm.target.Target('ext_dev'):
+            acc = depthwise_conv2d_packed(data, dwc_kernel(weight, (3, 3)), sample.strides, sample.padding, (1, 1), 'int32')
+            shifted = te.compute(acc.shape, lambda *i: acc[i] >> (8 * byte), name='shifted', tag='elemwise')
+            out = te.compute(acc.shape, lambda *i: shifted[i].astype('int8'), name='result', tag='elemwise')
+            schedule = schedule_depthwise_conv2d_packed([out])
+        with vta.build_config(debug_flag=env.DEBUG_DUMP_INSN, disabled_pass={'tir.CommonSubexprElimTIR'}):
+            mod = vta.build(schedule, [data, weight, out], tvm.target.Target('ext_dev', host='llvm'), name='kws_dwc')
+        result = tvm.nd.empty(tuple(map(int, out.shape)), 'int8', dev)
+        simulator.clear_stats(backend)
+        mod(tvm.nd.array(xp, dev), tvm.nd.array(kp, dev), result)
+        profile = simulator.stats(backend)
+        if backend == 'fsim':
+            assert profile['dwc_counter'] == 9 * 25 * 5 * (64 // env.BLOCK_OUT)
+            assert profile['gemm_counter'] == 0
+        else:
+            assert profile['cycle_count'] > 0
+        profiles.append(profile)
+        snapshots.append(result.numpy().view('uint8').astype('uint32'))
+    actual = sum(snapshot << (8 * byte) for byte, snapshot in enumerate(snapshots)).astype('uint32').view('int32')
+    logical = actual.reshape(1, 25, 5, 64)
+    np.testing.assert_array_equal(logical, sample.reference)
+    artifact_dir = os.environ.get('DWC_ARTIFACTS')
+    if artifact_dir:
+        Path(artifact_dir).mkdir(parents=True, exist_ok=True)
+        np.savez(Path(artifact_dir) / 'sample-and-result.npz', activation=sample.activation, weight=sample.weight, reference=sample.reference, actual=logical, packed_input=xp, packed_weight=kp)
+        import hashlib
+        import shutil
+        root = Path(__file__).resolve().parents[3]
+        sources = [*root.glob('src/**/*.cc'), *root.glob('include/**/*.h'), *root.glob('hardware/chisel/src/main/scala/**/*.scala'), *root.glob('python/vta/**/*.py')]
+        fingerprints = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(sources)}
+        Path(artifact_dir, 'source-fingerprints.json').write_text(json.dumps(fingerprints, indent=2) + '\n')
+        if backend == 'tsim':
+            for filename in ('Test.DefaultTsimConfig.sv', 'vta_geometry.properties'):
+                shutil.copy2(root / 'build/chisel' / filename, Path(artifact_dir) / filename)
+    # Flush native instruction dumps before the single-line JSON record.
+    import ctypes
+    ctypes.CDLL(None).fflush(None)
+    print('KWS_ACCEPTANCE ' + json.dumps({'backend': backend, 'geometry': [env.BLOCK_IN, env.BLOCK_OUT], 'hashes': sample.hashes, 'strides': sample.strides, 'padding': sample.padding, 'profiles': profiles, 'outputs': int(logical.size), 'range': [int(logical.min()), int(logical.max())]}, sort_keys=True), flush=True)

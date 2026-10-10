@@ -88,3 +88,26 @@ def test_shell_script_is_syntactically_valid():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_chisel_geometry_switch_uses_selected_config_even_when_older(tmp_path):
+    """Changing config paths must not reuse a newer previous geometry target."""
+    import json
+    import os
+    import sys
+    import time
+    base = json.loads((PROJECT_ROOT / 'vta/config/vta_64mac.json').read_text())
+    configs = []
+    for block_out in (3, 4):
+        path = tmp_path / f'bo{block_out}.json'
+        path.write_text(json.dumps(dict(base, LOG_BLOCK_IN=3, LOG_BLOCK_OUT=block_out)))
+        os.utime(path, (time.time() - 100, time.time() - 100))
+        configs.append(path)
+    properties = tmp_path / 'geometry.properties'
+    for config, expected in zip(configs, (8, 16)):
+        subprocess.run(['make', '-C', str(PROJECT_ROOT / 'vta/hardware/chisel'),
+                        f'VTA_PATH={PROJECT_ROOT / "vta"}', f'TVM_PATH={PROJECT_ROOT / "tvm"}',
+                        f'PYTHON={sys.executable}', f'VTA_CONFIG_FILE={config}',
+                        f'CHISEL_CONFIG_FILE={properties}', str(properties)], check=True, capture_output=True, text=True)
+        values = dict(line.split('=', 1) for line in properties.read_text().splitlines() if '=' in line and not line.startswith('#'))
+        assert int(values['BLOCK_OUT']) == expected

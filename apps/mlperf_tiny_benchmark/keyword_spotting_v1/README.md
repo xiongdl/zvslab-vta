@@ -108,3 +108,68 @@ float feature preprocessing, quantized CPU graph preparation, four actual
 VTA regions, model-hash validation, Make argument forwarding, and the selected
 deployment/report workflow. `make clean` removes build output and Python
 caches while preserving the model, audio samples, and license.
+
+### Native depthwise layer acceptance
+
+The first quantized depthwise convolution (TFLite operator 1) can be extracted
+from the checked-in float model and `samples/right-00b01445_nohash_0.wav`:
+
+```python
+from keyword_spotting_v1.python.dwc_sample import extract_dwc_sample
+sample = extract_dwc_sample()
+```
+
+Extraction uses this application's existing MFCC preprocessing and Relay
+quantization policy. It returns signed int8 activation `[1,25,5,64]`, signed
+int8 weights `[3,3,64,1]`, stride `(1,1)`, four-side padding `(1,1,1,1)`, and
+an int32 CPU reference `[1,25,5,64]`. The observed Relay layouts are NHWC and
+HWOI; depth multiplier is one. A separate scalar integer convolution must
+match the Relay output exactly. SHA256 hashes identify the model, WAV, logical
+activation, weights, and reference.
+
+From the project root, run all three physical geometries (8×8, 8×16, 16×8):
+
+```sh
+scripts/test_vta_dwc.sh
+# Optional custom artifact directory:
+scripts/test_vta_dwc.sh /absolute/path/to/acceptance-artifacts
+```
+
+The runner rebuilds each matching compiler extension/runtime in fresh
+processes. All three FSIM numerical runs and regressions finish before TSIM
+starts. TSIM regenerates Chisel and Verilator output for each geometry;
+existing dependency caches are reused. Each layer uses the production native
+TOP compute/schedule, all real input channels, and nine kernel taps. Four
+ordinary int8 stores after shifts by 0/8/16/24 reconstruct all 8000 signed
+int32 outputs and compare them exactly. Every physical channel retains real
+nonzero data, including expanded upper channels and both reverse subblocks.
+
+The default artifact directory is `vta/build/dwc-acceptance`, outside the
+implementation planning workspace. Per-run artifacts include the full interleaved instruction/queue trace,
+configuration, library copies and SHA256 fingerprints, logical/packed tensors
+and result, profiler summary, existing GEMM benchmark results, and backend/ISA
+results. FSIM must report native DwC counts (9000, 4500, 9000 per byte for the
+three geometries) with zero GEMM work in the depthwise layer. TSIM must complete
+all four commands and the numerical comparison with positive cycle counts;
+loading or initializing its libraries alone is insufficient. Opcode 5 is
+visible as `DWC` in runtime instruction dumps. Bridged STORE→COMPUTE→LOAD
+queue tokens and completion remain in the trace. The runner rebuilds default
+8×8 libraries on exit. It accepts `DWC_JOBS` to change build parallelism.
+
+This is independent-layer acceptance; it does not route the complete KWS
+graph through native depthwise execution or add tuning records.
+
+Acceptance on 2026-10-10: all six runs compared all 8000 int32 outputs exactly
+(range −8205 to 6860). Each backend/geometry also passed the existing numerical
+GEMM benchmark and 31 backend/ISA tests.
+
+| BI×BO | FSIM native DwC updates per byte | TSIM cycles for bytes 0/1/2/3 |
+| --- | ---: | --- |
+| 8×8 | 9000 | 35893 / 43755 / 43755 / 43755 |
+| 8×16 | 4500 | 20753 / 24712 / 24712 / 24712 |
+| 16×8 | 9000 | 35559 / 43718 / 43718 / 43718 |
+
+Final default-geometry checks passed 412 VTA Python unit tests, 10 focused
+TOP/extraction tests, and all 83 Chisel tests. The complete-project bare pytest
+collection has known unrelated duplicate-module/board-host errors (recorded
+in the Task5 report); it was not repeated for this acceptance.

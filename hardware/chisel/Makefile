@@ -169,14 +169,17 @@ endif
 
 default: lint lib
 
-.PHONY: check_vta_config check_verilator deps
+.PHONY: check_vta_config check_verilator deps force_chisel_config
+force_chisel_config:
 check_vta_config: $(CHISEL_CONFIG_FILE)
 	@test -n "$(VTA_CONFIG_FILE)" || { echo "Error: VTA_CONFIG_FILE is required for hardware generation." >&2; exit 1; }
 	@test -f "$(VTA_CONFIG_FILE)" || { echo "Error: VTA_CONFIG_FILE does not exist: $(VTA_CONFIG_FILE)" >&2; exit 1; }
 	@test -s "$(CHISEL_CONFIG_FILE)" || { echo "Error: normalized Chisel geometry was not generated: $(CHISEL_CONFIG_FILE)" >&2; exit 1; }
 	@$(PYTHON) $(VTA_PATH)/config/vta_config.py --use-cfg=$(VTA_CONFIG_FILE) --backend-contract --defs >/dev/null || { echo "Error: invalid geometry configuration: $(VTA_CONFIG_FILE)" >&2; exit 1; }
 
-$(CHISEL_CONFIG_FILE): $(VTA_CONFIG_FILE) $(VTA_PATH)/config/vta_config.py
+# A different selected config can be older than this shared output.
+# Normalize it on every invocation rather than relying on config mtimes.
+$(CHISEL_CONFIG_FILE): force_chisel_config $(VTA_CONFIG_FILE) $(VTA_PATH)/config/vta_config.py
 	@mkdir -p $(@D)
 	$(PYTHON) $(VTA_PATH)/config/vta_config.py --use-cfg=$(VTA_CONFIG_FILE) --chisel-properties=$@
 
