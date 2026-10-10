@@ -170,7 +170,6 @@ def dwc(env, mock=False, packed=False):
         name="dwc_out",
     )
     inp_lanes = env.BATCH * min(env.BLOCK_IN, env.BLOCK_OUT)
-    wgt_lanes = env.BLOCK_OUT * env.BLOCK_IN
     out_lanes = env.BATCH * env.BLOCK_OUT
     inp_layout = tvm.tir.decl_buffer(
         inp.shape,
@@ -187,7 +186,8 @@ def dwc(env, mock=False, packed=False):
         scope=env.wgt_scope,
         strides=[env.BLOCK_IN, 1],
         offset_factor=1,
-        data_alignment=wgt_lanes,
+        # TE uses its default buffer alignment; SRAM entry alignment is
+        # enforced by MemoryInfo/StorageRewrite, independently of this binding.
     )
     out_layout = tvm.tir.decl_buffer(
         out.shape,

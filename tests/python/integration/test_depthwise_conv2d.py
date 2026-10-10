@@ -23,7 +23,7 @@ from vta.environment import Environment
 
 
 @pytest.mark.parametrize('bi,bo', [(3, 3), (3, 4), (4, 3)])
-def test_default_depthwise_lowering(bi, bo):
+def test_default_depthwise_lowering(bi, bo, capfd):
     from vta.top import depthwise_conv2d_packed, schedule_depthwise_conv2d_packed, dwc_kernel
     cfg = dict(vta.get_env().cfg_dict)
     cfg.update(LOG_BLOCK_IN=bi, LOG_BLOCK_OUT=bo)
@@ -39,6 +39,7 @@ def test_default_depthwise_lowering(bi, bo):
         module = vta.lower(schedule, [data, weight, result])
         with vta.build_config(disabled_pass={'tir.CommonSubexprElimTIR'}):
             vta.build(schedule, [data, weight, result], tvm.target.Target('ext_dev', host='llvm'))
+        assert "required_alignment=" not in capfd.readouterr().err
         updates = []
 
         def visit(node):

@@ -19,6 +19,7 @@
 
 #include <cassert>
 #include <chrono>
+#include <cinttypes>
 #include <thread>
 #include <vta/dpi/tsim.h>
 #include <verilated.h>
@@ -158,7 +159,7 @@ int VTADPISim() {
 #endif
     trace_count++;
     if ((trace_count % 1000000) == 1)
-      fprintf(stderr, "[traced %luM cycles]\n", trace_count / 1000000);
+      fprintf(stderr, "[traced %" PRIu64 "M cycles]\n", trace_count / 1000000);
     while (top->sim_wait) {
       top->clock = 0;
       std::this_thread::sleep_for(std::chrono::milliseconds(100));

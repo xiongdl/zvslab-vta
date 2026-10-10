@@ -98,7 +98,6 @@ def depthwise_conv2d_packed(cfg, data, kernel, strides, padding, dilation, out_d
         name='dwc_view',
     )
     source_weight = kernel.op.input_tensors[0]
-    lanes = env.BLOCK_OUT * env.BLOCK_IN
 
     def load_weight(ins, outs):
         irb = tvm.tir.ir_builder.create()
@@ -117,7 +116,9 @@ def depthwise_conv2d_packed(cfg, data, kernel, strides, padding, dilation, out_d
         name='dwc_weight_load', dtype=source_weight.dtype,
         out_buffers=[tvm.tir.decl_buffer(
             source_weight.shape, source_weight.dtype, name='dwc_weight_sram',
-            scope=env.wgt_scope, data_alignment=lanes,
+            # Keep the TE default alignment for buffer binding. Physical SRAM
+            # allocations retain WGT_ELEM_BITS alignment through MemoryInfo.
+            scope=env.wgt_scope,
         )],
     )
     tap = te.reduce_axis((0, kh * kw), 'kernel_tap')
