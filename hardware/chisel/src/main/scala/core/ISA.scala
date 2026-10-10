@@ -85,14 +85,14 @@ object InstructionLayout {
 
   def uopDstBits(p: Parameters): Int = log2Ceil(p(CoreKey).accMemDepth)
   def uopSrcBits(p: Parameters): Int =
-    log2Ceil(math.max(p(CoreKey).accMemDepth, p(CoreKey).inpMemDepth))
+    log2Ceil(math.max(p(CoreKey).accMemDepth, p(CoreKey).inpSubvectorDepth))
   def uopWgtBits(p: Parameters): Int = log2Ceil(p(CoreKey).wgtMemDepth)
   def uopHighPaddingBits(p: Parameters): Int =
     p(CoreKey).uopBits - uopDstBits(p) - uopSrcBits(p) - uopWgtBits(p)
 
   def uopEndBits(p: Parameters): Int = uopIndexBits(p) + 1
   def accIndexBits(p: Parameters): Int = log2Ceil(p(CoreKey).accMemDepth)
-  def inpIndexBits(p: Parameters): Int = log2Ceil(p(CoreKey).inpMemDepth)
+  def inpIndexBits(p: Parameters): Int = log2Ceil(p(CoreKey).inpSubvectorDepth)
   def wgtIndexBits(p: Parameters): Int = log2Ceil(p(CoreKey).wgtMemDepth)
   // VTAMemInsn starts y_size at the next uint64_t bitfield storage unit.
   def memMidPaddingBits: Int = 64 - (OP_BITS + M_DEP_BITS + M_ID_BITS +

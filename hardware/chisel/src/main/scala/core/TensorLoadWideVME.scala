@@ -185,6 +185,22 @@ class TensorLoadWideVME(tensorType: String = "none", debug: Boolean = false)(
   // group bits can be read/written independently
 
 
+  if (tensorType == "inp") {
+    val ram = Module(new InputScratchpad(tensorsInClNb))
+    ram.io.read <> io.tensor.rd(0).idx
+    io.tensor.rd(0).data <> ram.io.result
+    for (i <- 0 until tensorsInClNb) {
+      val direct = io.tensor.wr(0)
+      ram.io.write(i).valid := Mux(state === sIdle,
+        direct.valid && direct.bits.idx % tensorsInClNb.U === i.U,
+        Mux(isZeroPadWrite, fillPadding.io.tensorIdx.bits % tensorsInClNb.U === i.U, rdDataWrEn(i)))
+      ram.io.write(i).index := Mux(state === sIdle, direct.bits.idx,
+        Mux(isZeroPadWrite, fillPadding.io.tensorIdx.bits, rdDataWrIdx(i) * tensorsInClNb.U + i.U))
+      ram.io.write(i).data := Mux(state === sIdle, direct.bits.data,
+        Mux(isZeroPadWrite, 0.U, rdDataWrData(i)).asTypeOf(direct.bits.data))
+      ram.io.write(i).mask.foreach(_.foreach(_ := true.B))
+    }
+  } else {
   val splitDataFactor = tp.splitWidth * tp.splitLength
   val splitMemFactor = tp.splitMemsFactor
   val groupSizeBits = tp.tensorSizeBits/splitDataFactor
@@ -309,6 +325,8 @@ class TensorLoadWideVME(tensorType: String = "none", debug: Boolean = false)(
     val rvalid = ShiftRegister(
       io.tensor.rd(grpIdx).idx.valid, tp.readTensorLatency + 1, resetData = false.B, en = true.B)
     io.tensor.rd(grpIdx).data.valid := rvalid
+  }
+
   }
 
   // done

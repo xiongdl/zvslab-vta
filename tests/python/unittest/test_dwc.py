@@ -106,22 +106,9 @@ def _calls(stmt, name):
 
 
 def _intrinsic_env(block_in, block_out):
-    """Project the specified geometry until Task3 adds asymmetric config parsing.
-
-    PkgConfig currently replaces LOG_BLOCK_IN/OUT with LOG_BLOCK. These tests
-    exercise the real intrinsic/lowering consumers, rather than claiming that
-    production config loading or a mismatched simulator can execute this shape.
-    """
-    env = Environment(dict(vta.get_env().cfg_dict))
-    env.LOG_BLOCK_IN, env.LOG_BLOCK_OUT = block_in, block_out
-    env.BLOCK_IN, env.BLOCK_OUT = 1 << block_in, 1 << block_out
-    env.INP_ELEM_BITS = env.BATCH * env.BLOCK_IN * env.INP_WIDTH
-    env.WGT_ELEM_BITS = env.BLOCK_OUT * env.BLOCK_IN * env.WGT_WIDTH
-    env.ACC_ELEM_BITS = env.BATCH * env.BLOCK_OUT * env.ACC_WIDTH
-    env.OUT_ELEM_BITS = env.BATCH * env.BLOCK_OUT * env.OUT_WIDTH
-    for prefix in ("INP", "WGT", "ACC", "OUT"):
-        setattr(env, prefix + "_ELEM_BYTES", getattr(env, prefix + "_ELEM_BITS") // 8)
-    return env
+    cfg = dict(vta.get_env().cfg_dict)
+    cfg.update(LOG_BLOCK_IN=block_in, LOG_BLOCK_OUT=block_out)
+    return Environment(cfg)
 
 
 @pytest.mark.parametrize("block_in,block_out", [(3, 3), (3, 4), (4, 3)])
@@ -308,21 +295,18 @@ def test_dwc_storage_rewrite_preserves_bases_and_read_lifetimes(block_in, block_
 @pytest.fixture(scope="module", params=[(0, 3, 3), (0, 4, 3), (1, 3, 3), (0, 3, 4)],
                 ids=["production_8x8", "independent_16x8", "independent_batch2", "independent_8x16"])
 def fsim_probe(request, tmp_path_factory):
-    """Compile matching real FSIM geometry; default uses the production library.
-
-    Independent builds override C macros until asymmetric production configs
-    are supported. These are numerical driver tests, not TOP/RTL acceptance.
-    """
+    """Compile a real FSIM driver for each production buffer geometry."""
     root = Path(__file__).resolve().parents[3]
     tvm_root = Path(os.environ["TVM_PATH"])
     geometry = request.param
     build_dir = tmp_path_factory.mktemp("dwc_fsim")
-    cfg = [sys.executable, str(root / "config/vta_config.py"),
-           "--use-cfg=" + str(root / "config/vta_64mac.json")]
+    import json
+    production_cfg = json.loads((root / "config/vta_64mac.json").read_text())
+    production_cfg.update(zip(["LOG_BATCH", "LOG_BLOCK_IN", "LOG_BLOCK_OUT"], geometry))
+    config_path = build_dir / "geometry.json"
+    config_path.write_text(json.dumps(production_cfg))
+    cfg = [sys.executable, str(root / "config/vta_config.py"), "--use-cfg=" + str(config_path)]
     flags = shlex.split(subprocess.check_output(cfg + ["--backend-contract", "--defs"], text=True))
-    overrides = dict(zip(["VTA_LOG_BATCH", "VTA_LOG_BLOCK_IN", "VTA_LOG_BLOCK_OUT"], geometry))
-    flags = [flag for flag in flags if flag.split("=")[0][2:] not in overrides]
-    flags += ["-D" + key + "=" + str(value) for key, value in overrides.items()]
     binary = build_dir / "probe"
     command = [
         os.environ.get("CXX", "c++"), "-std=c++17", *flags,

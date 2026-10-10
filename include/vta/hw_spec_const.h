@@ -101,6 +101,11 @@
 /*! log2 of activation micro-op buffer depth */
 #define VTA_LOG_INP_BUFF_DEPTH \
     (VTA_LOG_INP_BUFF_SIZE - VTA_LOG_BATCH - VTA_LOG_BLOCK_IN - VTA_LOG_INP_WIDTH + 3)
+/*! log2 of DwC input subvector depth (one min(BLOCK_IN, BLOCK_OUT) slice) */
+#define VTA_LOG_INP_SUBVECTOR_DEPTH \
+    (VTA_LOG_INP_BUFF_SIZE - VTA_LOG_BATCH - \
+     ((VTA_LOG_BLOCK_IN < VTA_LOG_BLOCK_OUT) ? VTA_LOG_BLOCK_IN : VTA_LOG_BLOCK_OUT) - \
+     VTA_LOG_INP_WIDTH + 3)
 /*! On-chip accumulator buffer depth */
 #define VTA_ACC_BUFF_DEPTH (VTA_ACC_BUFF_SIZE / VTA_ACC_ELEM_BYTES)
 /*! log2 of on-chip accumulator buffer depth */

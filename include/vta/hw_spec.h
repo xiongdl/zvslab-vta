@@ -39,7 +39,8 @@ extern "C" {
 /*! GEMM Micro-op start position of the inp_idx field */
 #define VTA_UOP_GEM_1_0 (VTA_UOP_GEM_0_1 + 1)
 /*! GEMM Micro-op end position of the inp_idx field */
-#define VTA_UOP_GEM_1_1 (VTA_UOP_GEM_1_0 + VTA_LOG_INP_BUFF_DEPTH - 1)
+#define VTA_UOP_GEM_1_1 \
+    (VTA_UOP_GEM_1_0 + MAX(VTA_LOG_ACC_BUFF_DEPTH, VTA_LOG_INP_SUBVECTOR_DEPTH) - 1)
 /*! GEMM Micro-op start position of the wgt_idx field */
 #define VTA_UOP_GEM_2_0 (VTA_UOP_GEM_1_1 + 1)
 /*! GEMM Micro-op end position of the wgt_idx field */
@@ -52,7 +53,8 @@ extern "C" {
 /*! GEMM Micro-op start position of the inp_idx field */
 #define VTA_UOP_ALU_1_0 (VTA_UOP_ALU_0_1 + 1)
 /*! GEMM Micro-op end position of the inp_idx field */
-#define VTA_UOP_ALU_1_1 (VTA_UOP_ALU_1_0 + VTA_LOG_INP_BUFF_DEPTH - 1)
+#define VTA_UOP_ALU_1_1 \
+    (VTA_UOP_ALU_1_0 + MAX(VTA_LOG_ACC_BUFF_DEPTH, VTA_LOG_INP_SUBVECTOR_DEPTH) - 1)
 
 /*! \brief VTA generic instruction */
 typedef struct {
@@ -167,9 +169,9 @@ typedef struct {
   /*! \brief Inner loop accumulator memory index factor */
   uint64_t dst_factor_in  : VTA_LOG_ACC_BUFF_DEPTH;
   /*! \brief Outer loop input memory index factor */
-  uint64_t src_factor_out : VTA_LOG_INP_BUFF_DEPTH;
+  uint64_t src_factor_out : VTA_LOG_INP_SUBVECTOR_DEPTH;
   /*! \brief Inner loop input memory index factor */
-  uint64_t src_factor_in  : VTA_LOG_INP_BUFF_DEPTH;
+  uint64_t src_factor_in  : VTA_LOG_INP_SUBVECTOR_DEPTH;
   /*! \brief Outer loop weight memory index factor */
   uint64_t wgt_factor_out : VTA_LOG_WGT_BUFF_DEPTH;
   /*! \brief Inner loop weight memory index factor */
@@ -263,7 +265,7 @@ typedef struct {
   /*! \brief Destination index (indexes accum buffer) */
   uint32_t dst_idx    : VTA_LOG_ACC_BUFF_DEPTH;
   /*! \brief Source index (indexes input buffer for GEMM or accum buffer for ALU) */
-  uint32_t src_idx    : MAX(VTA_LOG_ACC_BUFF_DEPTH, VTA_LOG_INP_BUFF_DEPTH);
+  uint32_t src_idx    : MAX(VTA_LOG_ACC_BUFF_DEPTH, VTA_LOG_INP_SUBVECTOR_DEPTH);
   /*! \brief Weight index (indexes weight buffer) */
   uint32_t wgt_idx    : VTA_LOG_WGT_BUFF_DEPTH;
 } VTAUop;

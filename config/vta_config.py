@@ -108,6 +108,28 @@ def validate_geometry_config(cfg):
         raise VTAConfigError(
             "Missing VTA geometry config fields: {}".format(", ".join(missing))
         )
+    log_block_in = cfg.get("LOG_BLOCK_IN", cfg["LOG_BLOCK"])
+    log_block_out = cfg.get("LOG_BLOCK_OUT", cfg["LOG_BLOCK"])
+    input_index_bits = (cfg["LOG_INP_BUFF_SIZE"] - cfg["LOG_BATCH"]
+                        - min(log_block_in, log_block_out)
+                        - cfg["LOG_INP_WIDTH"] + 3)
+    acc_index_bits = (cfg["LOG_ACC_BUFF_SIZE"] - cfg["LOG_BATCH"]
+                      - log_block_out - cfg["LOG_ACC_WIDTH"] + 3)
+    wgt_index_bits = (cfg["LOG_WGT_BUFF_SIZE"] - log_block_out
+                      - log_block_in - cfg["LOG_WGT_WIDTH"] + 3)
+    uop_index_bits = cfg["LOG_UOP_BUFF_SIZE"] - 5 + 3
+    low_prefix_bits = 3 + 4 + 1 + uop_index_bits + uop_index_bits + 1 + 2 * 14
+    gemm_payload_bits = 2 * (acc_index_bits + input_index_bits + wgt_index_bits)
+    alu_payload_bits = 4 * acc_index_bits + 3 + 1 + 16
+    uop_payload_bits = acc_index_bits + max(acc_index_bits, input_index_bits) + wgt_index_bits
+    if min(input_index_bits, acc_index_bits, wgt_index_bits, uop_index_bits) < 0:
+        raise VTAConfigError("VTA buffer geometry produces a negative index width")
+    if low_prefix_bits > 64 or gemm_payload_bits > 64 or alu_payload_bits > 64:
+        raise VTAConfigError(
+            "VTA geometry exceeds the 128-bit instruction layout (low prefix, GEMM, or ALU payload)"
+        )
+    if uop_payload_bits > 32:
+        raise VTAConfigError("VTA geometry exceeds the 32-bit uop capacity")
     return cfg
 
 
@@ -115,15 +137,16 @@ def normalized_chisel_properties(cfg):
     """Return the normalized CoreParams consumed by TSIM Chisel generation."""
     validate_geometry_config(cfg)
     batch = 1 << cfg["LOG_BATCH"]
-    block = 1 << cfg["LOG_BLOCK"]
+    block_in = 1 << cfg.get("LOG_BLOCK_IN", cfg["LOG_BLOCK"])
+    block_out = 1 << cfg.get("LOG_BLOCK_OUT", cfg["LOG_BLOCK"])
     inp_bits = 1 << cfg["LOG_INP_WIDTH"]
     wgt_bits = 1 << cfg["LOG_WGT_WIDTH"]
     acc_bits = 1 << cfg["LOG_ACC_WIDTH"]
     out_bits = inp_bits
-    inp_mem_bits = batch * block * inp_bits
-    wgt_mem_bits = block * block * wgt_bits
-    acc_mem_bits = block * acc_bits
-    out_mem_bits = batch * block * out_bits
+    inp_mem_bits = batch * block_in * inp_bits
+    wgt_mem_bits = block_out * block_in * wgt_bits
+    acc_mem_bits = batch * block_out * acc_bits
+    out_mem_bits = batch * block_out * out_bits
     out_log_size = (
         cfg["LOG_ACC_BUFF_SIZE"]
         + cfg["LOG_INP_WIDTH"]
@@ -135,8 +158,8 @@ def normalized_chisel_properties(cfg):
 
     return {
         "BATCH": batch,
-        "BLOCK_IN": block,
-        "BLOCK_OUT": block,
+        "BLOCK_IN": block_in,
+        "BLOCK_OUT": block_out,
         "INP_BITS": inp_bits,
         "WGT_BITS": wgt_bits,
         "ACC_BITS": acc_bits,

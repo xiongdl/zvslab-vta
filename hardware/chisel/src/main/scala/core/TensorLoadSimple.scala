@@ -231,6 +231,21 @@ class TensorLoadSimple(tensorType: String = "none", debug: Boolean = false)(
     waddr_nxt := waddr_nxt + dec.xsize
   }
 
+  if (tensorType == "inp") {
+    val ram = Module(new InputScratchpad(1))
+    ram.io.read <> io.tensor.rd(0).idx
+    io.tensor.rd(0).data <> ram.io.result
+    val direct = io.tensor.wr(0)
+    ram.io.write(0).valid := Mux(state === sIdle,direct.valid,io.vme_rd.data.fire || isZeroPad)
+    ram.io.write(0).index := Mux(state === sIdle,direct.bits.idx,waddr_cur)
+    for(b <- 0 until tp.tensorLength; j <- 0 until tp.tensorWidth) {
+      val beat = j * tp.tensorElemBits / mp.dataBits
+      val offset = j * tp.tensorElemBits % mp.dataBits
+      ram.io.write(0).data(b)(j) := Mux(state === sIdle,direct.bits.data(b)(j),
+        Mux(isZeroPad,0.U,io.vme_rd.data.bits.data(offset+tp.tensorElemBits-1,offset)))
+      ram.io.write(0).mask(b)(j) := state === sIdle || (set === b.U && tag === beat.U)
+    }
+  } else {
   val tensorFile = Seq.fill(tp.tensorLength) {
     SyncReadMem(tp.memDepth, Vec(tp.numMemBlock, UInt(tp.memBlockBits.W)))
   }
@@ -285,6 +300,8 @@ class TensorLoadSimple(tensorType: String = "none", debug: Boolean = false)(
   rdata.zipWithIndex.foreach {
     case (r, i) =>
       io.tensor.rd(0).data.bits(i) := r.asUInt.asTypeOf(io.tensor.rd(0).data.bits(i))
+  }
+
   }
 
   // done

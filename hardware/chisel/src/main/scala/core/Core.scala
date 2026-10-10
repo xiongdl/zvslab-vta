@@ -20,6 +20,7 @@
 package vta.core
 
 import chisel3._
+import chisel3.util.log2Ceil
 import vta.util.config._
 import vta.shell._
 
@@ -45,6 +46,25 @@ case class CoreParams(
     outMemDepth: Int,
     instQueueEntries: Int
 ) {
+  val inpBankLanes = math.min(blockIn, blockOut)
+  val inpBankBits = inpBankLanes * inpBits
+  val inpSlices = blockIn / inpBankLanes
+  val inpBanksPerBatch = math.max(blockIn, blockOut) / inpBankLanes
+  val inpSubvectorDepth = inpMemDepth * inpSlices
+  val inpParallelBits = batch * math.max(blockIn, blockOut) * inpBits
+  private val accIndexBits = log2Ceil(accMemDepth)
+  private val inpIndexBits = log2Ceil(inpSubvectorDepth)
+  private val wgtIndexBits = log2Ceil(wgtMemDepth)
+  private val uopIndexBits = log2Ceil(uopMemDepth)
+  private val lowInstructionPrefixBits = 3 + 4 + 1 + uopIndexBits + (uopIndexBits + 1) + 2 * 14
+  require(lowInstructionPrefixBits <= 64,
+    "VTA instruction low fields exceed their 64-bit storage unit")
+  require(2 * (accIndexBits + inpIndexBits + wgtIndexBits) <= 64,
+    "VTA GEMM input/weight/accumulator fields exceed their 64-bit payload")
+  require(4 * accIndexBits + 3 + 1 + 16 <= 64,
+    "VTA ALU fields exceed their 64-bit payload")
+  require(accIndexBits + math.max(accIndexBits, inpIndexBits) + wgtIndexBits <= uopBits,
+    "VTA uop fields exceed the configured uop word")
   require(uopBits % 8 == 0,
     s"\n\n[VTA] [CoreParams] uopBits must be byte aligned\n\n")
 }

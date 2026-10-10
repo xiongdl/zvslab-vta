@@ -129,6 +129,22 @@ class TensorLoadNarrowVME(tensorType: String = "none", debug: Boolean = false)(
   //--- Write memory ---
   //--------------------
 
+  if (tensorType == "inp") {
+    val ram = Module(new InputScratchpad(1))
+    ram.io.read <> io.tensor.rd(0).idx
+    io.tensor.rd(0).data <> ram.io.result
+    val direct = io.tensor.wr(0)
+    ram.io.write(0).valid := Mux(state === sIdle,direct.valid,isZeroPadWrite || vmeDataFirePipe)
+    ram.io.write(0).index := Mux(state === sIdle,direct.bits.idx,Mux(isZeroPadWrite,zpDestIdx,rdDataDestIdx))
+    for(b <- 0 until tp.tensorLength; j <- 0 until tp.tensorWidth) {
+      val flat = b * tp.tensorWidth + j
+      val beat = flat * tp.tensorElemBits / mp.dataBits
+      val offset = flat * tp.tensorElemBits % mp.dataBits
+      ram.io.write(0).data(b)(j) := Mux(state === sIdle,direct.bits.data(b)(j),
+        Mux(isZeroPadWrite,0.U,vmeDataBitsPipe.data(offset+tp.tensorElemBits-1,offset)))
+      ram.io.write(0).mask(b)(j) := state === sIdle || isZeroPadWrite || rdDataDestCol === beat.U
+    }
+  } else {
   val memSizeRatio = tp.tsSizeRatio
   val splitDataFactor = tp.splitWidth * tp.splitLength
   val splitMemBlockFactor = if (splitDataFactor > memSizeRatio) {
@@ -286,6 +302,8 @@ class TensorLoadNarrowVME(tensorType: String = "none", debug: Boolean = false)(
           ShiftRegister(io.tensor.rd(grIdx).idx.bits, tp.readTensorLatency),
           ShiftRegister(io.tensor.rd(grIdx).idx.valid, tp.readTensorLatency, resetData = false.B, en = true.B))
       }).asTypeOf(io.tensor.rd(grIdx).data.bits)
+  }
+
   }
 
   // done

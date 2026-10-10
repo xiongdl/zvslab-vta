@@ -69,8 +69,8 @@ class PkgConfig(object):
         self.TARGET = cfg.get("TARGET")
 
         # Derived parameters
-        cfg["LOG_BLOCK_IN"] = cfg["LOG_BLOCK"]
-        cfg["LOG_BLOCK_OUT"] = cfg["LOG_BLOCK"]
+        cfg.setdefault("LOG_BLOCK_IN", cfg["LOG_BLOCK"])
+        cfg.setdefault("LOG_BLOCK_OUT", cfg["LOG_BLOCK"])
         cfg["LOG_OUT_WIDTH"] = cfg["LOG_INP_WIDTH"]
         cfg["LOG_OUT_BUFF_SIZE"] = (
             cfg["LOG_ACC_BUFF_SIZE"] +
@@ -124,6 +124,9 @@ class PkgConfig(object):
             cfg["LOG_INP_BUFF_SIZE"],
             cfg["LOG_WGT_BUFF_SIZE"],
             cfg["LOG_ACC_BUFF_SIZE"])
+
+        if cfg["LOG_BLOCK_IN"] != cfg["LOG_BLOCK_OUT"]:
+            self.bitstream += "_bi{}_bo{}".format(1 << cfg["LOG_BLOCK_IN"], 1 << cfg["LOG_BLOCK_OUT"])
 
         # Derive FPGA parameters from target
         #   - device:           part number

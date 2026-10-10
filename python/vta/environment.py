@@ -175,6 +175,15 @@ class Environment(object):
         self.WGT_ELEM_BYTES = self.WGT_ELEM_BITS // 8
         self.ACC_ELEM_BYTES = self.ACC_ELEM_BITS // 8
         self.OUT_ELEM_BYTES = self.OUT_ELEM_BITS // 8
+        self.INP_BUFF_DEPTH = self.INP_BUFF_SIZE // self.INP_ELEM_BYTES
+        self.INP_BANK_LANES = min(self.BLOCK_IN, self.BLOCK_OUT)
+        self.INP_BANK_BITS = self.INP_BANK_LANES * self.INP_WIDTH
+        self.INP_SLICES = self.BLOCK_IN // self.INP_BANK_LANES
+        self.INP_BANKS_PER_BATCH = max(self.BLOCK_IN, self.BLOCK_OUT) // self.INP_BANK_LANES
+        self.INP_SUBVECTOR_DEPTH = self.INP_BUFF_DEPTH * self.INP_SLICES
+        self.INP_BANK_COUNT = self.BATCH * self.INP_BANKS_PER_BATCH
+        self.INP_BANK_DEPTH = self.INP_SUBVECTOR_DEPTH // self.INP_BANKS_PER_BATCH
+        self.INP_PARALLEL_BITS = self.BATCH * max(self.BLOCK_IN, self.BLOCK_OUT) * self.INP_WIDTH
         # dtypes
         self.acc_dtype = "int%d" % self.ACC_WIDTH
         self.inp_dtype = "int%d" % self.INP_WIDTH

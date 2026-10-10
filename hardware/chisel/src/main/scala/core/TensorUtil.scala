@@ -192,7 +192,10 @@ class TensorParams(tensorType: String = "none")(implicit p: Parameters) extends 
       1
     }
 
-  val memAddrBits = log2Ceil(memDepth)
+  // DMA geometry above always describes a logical tensor, including input.
+  val logicalAddrBits = log2Ceil(memDepth)
+  val memAddrBits = if (tensorType == "inp") log2Ceil(p(CoreKey).inpSubvectorDepth) else logicalAddrBits
+  val readWidthSplit = if (tensorType == "inp") math.max(p(CoreKey).blockIn, p(CoreKey).blockOut) else tensorWidth / splitWidth
 
   val tensorSizeBits = tensorLength * tensorWidth * tensorElemBits
   val tsSizeRatio = tensorSizeBits / memBlockBits
@@ -260,7 +263,7 @@ class TensorMaster(tensorType: String = "none")
   val rd = Vec(splitLength * splitWidth, new Bundle {
     val idx = ValidIO(UInt(memAddrBits.W))
     val data = Flipped(
-      ValidIO(Vec(lenSplit, Vec(widthSplit, UInt(tensorElemBits.W)))))
+      ValidIO(Vec(lenSplit, Vec(readWidthSplit, UInt(tensorElemBits.W)))))
   })
   val wr = Vec(splitLength * splitWidth, ValidIO(new Bundle {
     val idx = UInt(memAddrBits.W)
@@ -296,7 +299,7 @@ class TensorClient(tensorType: String = "none")
   val rd = Vec(splitLength * splitWidth, new Bundle {
     val idx = Flipped(ValidIO(UInt(memAddrBits.W)))
     val data = ValidIO(
-      Vec(lenSplit, Vec(widthSplit, UInt(tensorElemBits.W))))
+      Vec(lenSplit, Vec(readWidthSplit, UInt(tensorElemBits.W))))
   })
   val wr = Vec(splitLength * splitWidth, Flipped(ValidIO(new Bundle {
     val idx = UInt(memAddrBits.W)
@@ -334,7 +337,7 @@ class TensorClient(tensorType: String = "none")
 class TensorMasterData(tensorType: String = "none")
   (implicit p: Parameters) extends TensorParams(tensorType) {
   val data = Flipped(
-    ValidIO(Vec(lenSplit, Vec(widthSplit, UInt(tensorElemBits.W)))))
+    ValidIO(Vec(lenSplit, Vec(readWidthSplit, UInt(tensorElemBits.W)))))
 }
 
 /** TensorClientData.
@@ -346,7 +349,7 @@ class TensorMasterData(tensorType: String = "none")
 class TensorClientData(tensorType: String = "none")
   (implicit p: Parameters) extends TensorParams(tensorType) {
   val data = ValidIO(
-    Vec(lenSplit, Vec(widthSplit, UInt(tensorElemBits.W))))
+    Vec(lenSplit, Vec(readWidthSplit, UInt(tensorElemBits.W))))
 }
 
 /** TensorPadCtrl. Zero-padding controller for TensorLoad. */

@@ -458,7 +458,9 @@ class TensorGemmSimple(debug: Boolean = false)(implicit p: Parameters) extends T
 
   // inp
   io.inp.rd(0).idx.valid := state === sReadTensor
-  io.inp.rd(0).idx.bits := uop_inp
+  // GEMM factors and uop sources remain in logical BLOCK_IN vectors.
+  // The input banks address min(BLOCK_IN, BLOCK_OUT) lane subvectors.
+  io.inp.rd(0).idx.bits := uop_inp * p(CoreKey).inpSlices.U
   io.inp.tieoffWrite() // read-only
 
   // wgt
@@ -614,7 +616,9 @@ class TensorGemmPipelinedSplit (implicit p: Parameters) extends TensorGemmIfc {
 
   require(io.inp.splitWidth == 1 && io.inp.splitLength == 1, "-F- Input split read not supported")
   io.inp.rd(0).idx.valid := delayed_valid
-  io.inp.rd(0).idx.bits := uop_inp
+  // GEMM factors and uop sources remain in logical BLOCK_IN vectors.
+  // The input banks address min(BLOCK_IN, BLOCK_OUT) lane subvectors.
+  io.inp.rd(0).idx.bits := uop_inp * p(CoreKey).inpSlices.U
   val delayed_uop_valid = RegNext(uop_valid, init=false.B) // memdelay
   // asset fires on emulated tensorRead Direct GEMM test TODO: fix memoryManager sram read
   // it works only for VTA_CORE_GEMM_INP_IDX_PIPE 0
