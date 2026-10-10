@@ -57,13 +57,22 @@ def test_rounding_is_part_of_cache_key_for_same_caller_signature(runtime_probe):
     assert [(row[2], row[3], row[4]) for row in alu_rows(result)] == [(5, 1, 37), (5, 2, 37)]
 
 
+def test_opcode_is_part_of_cache_key_for_same_signature_and_rounding(runtime_probe):
+    result = invoke(runtime_probe, "cache-opcode", slot=13)
+    assert result.returncode == 0, result.stderr
+    assert [(row[2], row[3], row[4]) for row in alu_rows(result)] == [(5, 0, 37), (6, 0, 37)]
+
+
 @pytest.mark.parametrize("kind,opcode,rounding", [
     ("new", 5, 3),
     ("legacy-mismatch", 2, 1),
     ("expected-mismatch", 5, 1),
+    ("opcode-mismatch", 6, 0),
     ("mixed", 5, 1),
 ])
 def test_invalid_rounding_or_kernel_mismatch_fails(runtime_probe, kind, opcode, rounding):
     result = invoke(runtime_probe, kind, opcode, rounding)
     assert result.returncode != 0
     assert "Check failed" in result.stderr or "Check failed" in result.stdout
+    if kind == "opcode-mismatch":
+        assert "ALU initializer opcode does not match expected opcode" in result.stderr

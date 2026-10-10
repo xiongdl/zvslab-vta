@@ -192,3 +192,48 @@ regenerated `reports/tsim/task5-validation.json`. The required generic TFLite
 count and max-difference now both describe default double rounding (0); explicit
 single-rounding fields report 13 differences and max absolute difference 1.
 CMSIS/FSIM and FSIM/TSIM counts remain zero.
+
+## Final whole-branch review fixwave
+
+The final review's four Important findings and one Minor finding are resolved.
+FSIM SHIFT now follows the RTL low-five-bit count contract for both directions;
+unsigned magnitude arithmetic defines `INT32_MIN` without signed overflow. The
+new `VTAPushALUOpEx(..., rounding, expected_opcode)` API keys cached kernels by
+signature, opcode, and rounding and checks the initializer against both
+expected values. The legacy `VTAPushALUOp` and `VTAUopPush` signatures and
+rounding-zero behavior remain covered. The shared range checker validates the
+default double-rounding pre-left shift as well as the single-rounding shift,
+using division bounds for both signed endpoints. The multiplier converter now
+matches TensorFlow 2.15 positive ties-away rounding and flushes shifts below
+-31, with literal edge expectations independent of the converter. The extra
+blank line at `backend_init.h` EOF has been removed.
+
+TDD red runs reproduced the defects: the range/multiplier selection failed on
+both TF 2.15 edge values and accepted overflowing double pre-left; the FSIM
+ALU/runtime run had 22 passes and failed only on large-count SHIFT and opcode
+cache reuse. After the fixes:
+
+- `bash scripts/build_vta_lib.sh --config "$PWD/vta/config/vta_64mac.json" --backend fsim --jobs 4` built the private FSIM library successfully.
+- `bash vta/tests/qconv2d/run_tests.sh --backend fsim --alu-only`: 25 passed.
+- `bash vta/tests/qconv2d/run_tests.sh --backend tsim --alu-only`: 25 passed.
+- Focused runtime capture tests: 8 passed, including same-handle/same-signature/same-rounding RMUL then RSFT capture, explicit initializer-opcode mismatch diagnostic, and legacy API behavior.
+- Focused range, converter, and pinned-fixture parameter checks: 13 passed. Full `--conv-only` runs also passed the new helper cases.
+- `bash vta/tests/qconv2d/run_tests.sh --backend fsim --conv-only`: 18 passed.
+- `bash vta/tests/qconv2d/run_tests.sh --backend tsim --conv-only`: 18 passed.
+- Reprofiled `/private/tmp/vta-final-review-checks/check.py`: FSIM and TSIM both returned `1 1 0 2 -7 -7 0 1` for the eight large-count SHIFT cases; runtime capture produced opcodes 5 then 6 at rounding 0 under the same handle and signature.
+- Root and VTA full-range `git diff --check` passed, including the earlier committed VTA changes.
+
+The regenerated ignored `reports/tsim/task5-validation.json` records 0
+CMSIS/FSIM and 0 FSIM/TSIM differences; default double rounding has 0
+TFLite/FSIM differences with maximum absolute difference 0. Single rounding
+retains 13 individually attributed TFLite differences, each with maximum
+absolute difference 1. The converter fix leaves the pinned 16 per-channel
+multiplier/shift values unchanged. Fixture SHA256 remains
+`91affaa44efd90848be4214cce93d8ca86f4e0110fd62b1ced6d5b4aab83638d` and
+logical instruction SHA256 remains
+`300a7619e44448203bbd61a5e4d717469b07a725775b9c501ecd6be92a55e9a9`. Final
+runtime/build hashes are recorded for both backend libraries: FSIM
+`0cfa583deb1e5362421fa838cd444b07d3a4b8b46132ed5938e9fe2840c48ebf`, TSIM
+`5b3fd9b613ba46eca279f25aea6f42f32761bdaf21caaff08537147d9ae861f8`, and
+unchanged Chisel hardware library
+`4570aa8efc3b054bc6feabf1ccfbb8df6674c1831b3b4743dc9d3ab1694ed53c`.

@@ -359,26 +359,29 @@ def test_rmul_and_rsft_support_immediate_and_per_lane_register_operands(alu_prob
 
 
 def test_shift_keeps_signed_left_and_right_semantics_for_imm_and_register(alu_probe, tmp_path):
-    values = [INT32_MIN, INT32_MAX, -7, -1, 0, 1, 7]
-    shifts = [-31, -2, -1, 0, 1, 2, 31]
+    shifts = [INT32_MIN, -33, -32, -31, -2, -1, 0, 1, 2, 31, 32, 33, INT32_MAX]
+    values = [1, 1, -7, INT32_MIN, -7, 7, 0, 1, -1, INT32_MAX, -7, 1, INT32_MIN]
     stages = [(OP_SHIFT, ROUND_NONE, 0, 0)]
     actual = run_probe(alu_probe, tmp_path, "shift-register", stages, list(zip(values, shifts)))
     expected = []
     for value, shift in zip(values, shifts):
         if shift >= 0:
-            expected.append(value >> shift)
+            expected.append(value >> (shift & 31))
         else:
-            expected.append(((value << -shift) + (1 << 31)) % (1 << 32) - (1 << 31))
+            count = (-shift) & 31
+            expected.append(((value << count) + (1 << 31)) % (1 << 32) - (1 << 31))
     assert actual == expected
 
-    for shift in (-31, -1, 0, 1, 31):
+    for shift in (-33, -32, -31, -1, 0, 1, 31, 32, 33):
         stages = [(OP_SHIFT, ROUND_NONE, 1, shift)]
-        cases = [(value, 0) for value in values]
+        cases = [(value, 0) for value in (INT32_MIN, INT32_MAX, -7, -1, 0, 1, 7)]
         actual = run_probe(alu_probe, tmp_path, f"shift-immediate-{shift}", stages, cases)
         if shift >= 0:
-            expected = [value >> shift for value in values]
+            expected = [value >> (shift & 31) for value, _ in cases]
         else:
-            expected = [((value << -shift) + (1 << 31)) % (1 << 32) - (1 << 31) for value in values]
+            count = (-shift) & 31
+            expected = [((value << count) + (1 << 31)) % (1 << 32) - (1 << 31)
+                        for value, _ in cases]
         assert actual == expected
 
 

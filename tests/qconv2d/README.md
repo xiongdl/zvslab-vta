@@ -76,6 +76,12 @@ selected backend ABI fingerprint and, for TSIM, initializes the hardware
 module from the active `VTA_PATH` in the same process before issuing
 instructions.
 
+`VTAPushALUOp` keeps its legacy C signature and per-generated-kernel cache
+behavior. New callers use `VTAPushALUOpEx(..., rounding, expected_opcode)`;
+its cache key includes the caller signature, expected opcode, and rounding,
+and the initializer must emit both expected fields. This makes opcode and
+rounding checks available even when the kernel is already cached.
+
 The shared command-queue runtime rejects RMUL/RSFT and nonzero rounding for
 the Xilinx PYNQ/Ultra96/ZCU104 and Intel DE10-Nano targets, whose hardware
 implementations still expose only the legacy ALU set. Intel's low-level OpenCL

@@ -56,13 +56,16 @@ int64_t ArithmeticShiftRight(int64_t value, uint32_t shift) {
 }
 
 int32_t Shift(int32_t value, int32_t amount) {
+  const uint32_t raw_amount = static_cast<uint32_t>(amount);
   if (amount >= 0) {
-    if (amount >= 32) return value < 0 ? -1 : 0;
-    return WrapInt32(ArithmeticShiftRight(value, static_cast<uint32_t>(amount)));
+    const uint32_t count = raw_amount & 31U;
+    return WrapInt32(ArithmeticShiftRight(value, count));
   }
-  const uint64_t left = static_cast<uint64_t>(-static_cast<int64_t>(amount));
-  if (left >= 32) return 0;
-  const uint32_t bits = static_cast<uint32_t>(value) << left;
+  // RTL uses the sign to select direction and the low five bits of the
+  // unsigned magnitude as the shift count. Unsigned subtraction also handles
+  // INT32_MIN without signed overflow.
+  const uint32_t count = (0U - raw_amount) & 31U;
+  const uint32_t bits = static_cast<uint32_t>(value) << count;
   int32_t result;
   std::memcpy(&result, &bits, sizeof(result));
   return result;

@@ -63,4 +63,3 @@ inline void InitializeSimulatorBackend() {
   CheckTVMStatus(TVMFuncCall(initialize, &argument, &type_code, 1, &result, &result_type),
                  "initializing TSIM hardware module");
 }
-

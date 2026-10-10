@@ -50,11 +50,28 @@ def test_multiplier_uses_tflite_q31_scale_conversion():
     assert (multiplier, shift) == (1 << 30, 0)
 
 
+@pytest.mark.parametrize("scale,expected", [
+    ((2**30 + 0.5) / 2**31, (1073741825, 0)),
+    (2**-33, (0, 0)),
+])
+def test_multiplier_matches_tensorflow_215_edge_rules(scale, expected):
+    # Expected values are taken from TensorFlow 2.15 QuantizeMultiplier:
+    # TfLiteRound is std::round (positive ties away), and shifts below -31 flush.
+    assert quantize_multiplier(scale) == expected
+
+
 def test_single_rounding_rejects_positive_shift_preleft_overflow():
     values = np.array([2**30], dtype=np.int64)
     shifts = np.array([0], dtype=np.int32)
     with pytest.raises(ValueError, match="pre-left"):
         check_requantize_range(values, shifts, "single")
+
+
+@pytest.mark.parametrize("value", [2**30, -(2**30) - 1])
+def test_double_rounding_rejects_positive_shift_preleft_overflow(value):
+    with pytest.raises(ValueError, match="pre-left"):
+        check_requantize_range(np.array([value], dtype=np.int32),
+                               np.array([1], dtype=np.int32), "double")
 
 
 @pytest.mark.parametrize("mode", ["double", "single"])
@@ -89,6 +106,7 @@ def test_requantize_range_accepts_supported_int32_boundaries():
     check_requantize_range(int32_limits, np.array([-31, -31, 30, 30]), "single")
     positive_shift_edges = np.array([[-(2**30), 2**30 - 1]], dtype=np.int32)
     check_requantize_range(positive_shift_edges, np.array([0, 0]), "single")
+    check_requantize_range(positive_shift_edges, np.array([1, 1]), "double")
 
 
 def test_rounding_attribution_rejects_accumulator_mismatch(tmp_path):
@@ -317,6 +335,7 @@ def test_real_per_channel_qconv2d_matches_cmsis_and_explains_tflite(
             vta_path = Path(os.environ["VTA_PATH"])
             library_suffix = "dylib" if sys.platform == "darwin" else "so"
             selected_library = vta_path / "build" / f"libvta_{backend}.{library_suffix}"
+            fsim_library = vta_path / "build" / f"libvta_fsim.{library_suffix}"
             hardware_library = vta_path / "build" / f"libvta_hw.{library_suffix}"
             config_path = Path(os.environ["VTA_CONFIG_FILE"])
             import tvm
@@ -350,6 +369,8 @@ def test_real_per_channel_qconv2d_matches_cmsis_and_explains_tflite(
                     "vta_backend": "tsim",
                     "backend_library": str(selected_library),
                     "backend_library_sha256": _sha256_file(selected_library),
+                    "fsim_backend_library": str(fsim_library),
+                    "fsim_backend_library_sha256": _sha256_file(fsim_library),
                     "hardware_library": str(hardware_library),
                     "hardware_library_sha256": _sha256_file(hardware_library),
                 },

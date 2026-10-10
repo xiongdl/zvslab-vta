@@ -600,18 +600,25 @@ class UopKernelMap {
     return &(kmap_[key]);
   }
 
-  // ALU rounding is a cache dimension, while the caller's signature remains
-  // unchanged for the initializer callback.
+  // The explicit ALU API keys signature, expected opcode, and rounding. The
+  // legacy API retains its historical signature/rounding-only cache slot.
   UopKernel** GetALU(void* signature, int nbytes, uint32_t rounding) {
+    return GetALU(signature, nbytes, kLegacyOpcodeKey, rounding);
+  }
+
+  UopKernel** GetALU(void* signature, int nbytes, uint32_t opcode, uint32_t rounding) {
+    CHECK_LE(opcode, kLegacyOpcodeKey);
     CHECK_LE(rounding, VTA_ALU_ROUND_AWAY);
     uint32_t key = GetKey(signature, nbytes);
     if (alu_kmap_.size() <= key) {
-      alu_kmap_.resize(key + 1, {{nullptr, nullptr, nullptr}});
+      alu_kmap_.resize(key + 1, {});
     }
-    return &(alu_kmap_[key][rounding]);
+    return &(alu_kmap_[key][opcode][rounding]);
   }
 
  private:
+  static constexpr uint32_t kLegacyOpcodeKey = VTA_ALU_OPCODE_RSFT + 1;
+
   uint32_t GetKey(void* signature, int nbytes) {
     uint32_t key = 0;
     CHECK(nbytes == 0 || nbytes == sizeof(int));
@@ -624,7 +631,9 @@ class UopKernelMap {
   }
 
   std::vector<UopKernel*> kmap_;
-  std::vector<std::array<UopKernel*, 3>> alu_kmap_;
+  // Opcode index 7 is reserved for the legacy API, which has no expected
+  // opcode argument. New explicit callers use opcode indices 0 through 6.
+  std::vector<std::array<std::array<UopKernel*, 3>, VTA_ALU_OPCODE_RSFT + 2>> alu_kmap_;
 };
 
 enum PipelineStage : int { kNoneStage = 0, kLoadStage = 1, kComputeStage = 2, kStoreStage = 3 };
@@ -1237,6 +1246,37 @@ class CommandQueue {
     this->CheckInsnOverFlow();
   }
 
+  void PushALUUop(void** uop_handle, int (*finit)(void*), void* signature, int nbytes,
+                  uint32_t rounding, uint32_t expected_opcode) {
+    CHECK_LE(expected_opcode, VTA_ALU_OPCODE_RSFT);
+    CHECK_LE(rounding, VTA_ALU_ROUND_AWAY);
+    CHECK(rounding == VTA_ALU_ROUND_NONE || expected_opcode == VTA_ALU_OPCODE_RMUL ||
+          expected_opcode == VTA_ALU_OPCODE_RSFT);
+    UopKernelMap** uptr = reinterpret_cast<UopKernelMap**>(uop_handle);
+    if (uptr[0] == nullptr) {
+      uptr[0] = new UopKernelMap();
+    }
+    UopKernel** kptr = uptr[0]->GetALU(signature, nbytes, expected_opcode, rounding);
+    if (kptr[0] == nullptr) {
+      record_kernel_ = new UopKernel(static_cast<char*>(signature), nbytes);
+      CHECK_EQ((*finit)(signature), 0);
+      CHECK_EQ(static_cast<UopKernel*>(record_kernel_)->opcode_, expected_opcode)
+          << "ALU initializer opcode does not match expected opcode";
+      CHECK_EQ(static_cast<UopKernel*>(record_kernel_)->rounding_, rounding)
+          << "ALU initializer rounding does not match expected rounding";
+      kptr[0] = static_cast<UopKernel*>(record_kernel_);
+      if (debug_flag_ & VTA_DEBUG_DUMP_UOP) {
+        record_kernel_->Dump();
+      }
+      record_kernel_ = nullptr;
+    }
+    CHECK_EQ(static_cast<UopKernel*>(kptr[0])->opcode_, expected_opcode)
+        << "Cached ALU opcode does not match expected opcode";
+    CHECK_EQ(static_cast<UopKernel*>(kptr[0])->rounding_, rounding);
+    this->PushALUUop(static_cast<UopKernel*>(kptr[0]));
+    this->CheckInsnOverFlow();
+  }
+
   static std::shared_ptr<CommandQueue>& ThreadLocal() {
     static std::shared_ptr<CommandQueue> inst = std::make_shared<CommandQueue>();
     if (inst == nullptr) {
@@ -1476,8 +1516,9 @@ int VTAPushALUOp(void** uop_handle, int (*finit)(void*), void* signature, int nb
 }
 
 int VTAPushALUOpEx(void** uop_handle, int (*finit)(void*), void* signature, int nbytes,
-                   uint32_t rounding) {
-  vta::CommandQueue::ThreadLocal()->PushALUUop(uop_handle, finit, signature, nbytes, rounding);
+                   uint32_t rounding, uint32_t expected_opcode) {
+  vta::CommandQueue::ThreadLocal()->PushALUUop(uop_handle, finit, signature, nbytes, rounding,
+                                               expected_opcode);
   return 0;
 }
 

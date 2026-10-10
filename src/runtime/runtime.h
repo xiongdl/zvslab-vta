@@ -224,7 +224,7 @@ TVM_DLL void VTAUopLoopEnd();
 TVM_DLL int VTAPushGEMMOp(void** uop_handle, int (*finit)(void*), void* signature, int nbytes);
 
 /*!
- * \brief Push ALU uop kernel into the command handle.
+ * \brief Push an ALU uop kernel using the legacy cache identity.
  * \param uop_handle The uop cache handle.
  * \param finit The initalization function to initialize uop.
  * \param signature The closure arguments of the finit.
@@ -232,8 +232,18 @@ TVM_DLL int VTAPushGEMMOp(void** uop_handle, int (*finit)(void*), void* signatur
  * \return 0 if success.
  */
 TVM_DLL int VTAPushALUOp(void** uop_handle, int (*finit)(void*), void* signature, int nbytes);
+/*!
+ * \brief Push an ALU kernel keyed by signature, expected opcode, and rounding.
+ * \param uop_handle The uop cache handle.
+ * \param finit The initialization function; it must emit the expected opcode and rounding.
+ * \param signature The closure arguments of the finit.
+ * \param nbytes Number of bytes in the closure arguments.
+ * \param rounding Expected ALU rounding mode.
+ * \param expected_opcode Expected ALU opcode.
+ * \return 0 if success.
+ */
 TVM_DLL int VTAPushALUOpEx(void** uop_handle, int (*finit)(void*), void* signature, int nbytes,
-                           uint32_t rounding);
+                           uint32_t rounding, uint32_t expected_opcode);
 
 /*!
  * \brief Push dependence token.

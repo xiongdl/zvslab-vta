@@ -68,19 +68,27 @@ int main(int argc, char** argv) {
   auto cmd = VTATLSCommandHandle(); void* handle = nullptr;
   if (!std::strcmp(kind, "cache")) {
     rounding = 1;
-    VTAPushALUOpEx(&handle, init, &slot, sizeof(slot), rounding);
+    VTAPushALUOpEx(&handle, init, &slot, sizeof(slot), rounding, opcode);
     rounding = 2;
-    VTAPushALUOpEx(&handle, init, &slot, sizeof(slot), rounding);
+    VTAPushALUOpEx(&handle, init, &slot, sizeof(slot), rounding, opcode);
+  } else if (!std::strcmp(kind, "cache-opcode")) {
+    rounding = 0; opcode = VTA_ALU_OPCODE_RMUL;
+    VTAPushALUOpEx(&handle, init, &slot, sizeof(slot), rounding, opcode);
+    opcode = VTA_ALU_OPCODE_RSFT;
+    VTAPushALUOpEx(&handle, init, &slot, sizeof(slot), rounding, opcode);
+  } else if (!std::strcmp(kind, "opcode-mismatch")) {
+    rounding = 0; opcode = VTA_ALU_OPCODE_RSFT;
+    VTAPushALUOpEx(&handle, init, &slot, sizeof(slot), rounding, VTA_ALU_OPCODE_RMUL);
   } else if (!std::strcmp(kind, "mixed")) {
-    VTAPushALUOpEx(&handle, init_mixed, &slot, sizeof(slot), rounding);
+    VTAPushALUOpEx(&handle, init_mixed, &slot, sizeof(slot), rounding, opcode);
   } else if (!std::strcmp(kind, "legacy-mismatch")) {
     VTAPushALUOp(&handle, init_bad_legacy_rounding, &slot, sizeof(slot));
   } else if (!std::strcmp(kind, "expected-mismatch")) {
-    VTAPushALUOpEx(&handle, init_legacy, &slot, sizeof(slot), rounding);
+    VTAPushALUOpEx(&handle, init_legacy, &slot, sizeof(slot), rounding, opcode);
   } else if (!std::strcmp(kind, "legacy")) {
     VTAPushALUOp(&handle, init_legacy, &slot, sizeof(slot));
   } else {
-    VTAPushALUOpEx(&handle, init, &slot, sizeof(slot), rounding);
+    VTAPushALUOpEx(&handle, init, &slot, sizeof(slot), rounding, opcode);
   }
   VTASynchronize(cmd, 0);
   for (const auto& item : captured) {
