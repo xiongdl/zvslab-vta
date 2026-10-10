@@ -38,6 +38,88 @@
 namespace vta {
 namespace sim {
 
+namespace {
+
+int32_t WrapInt32(int64_t value) {
+  const uint32_t bits = static_cast<uint32_t>(value);
+  int32_t result;
+  std::memcpy(&result, &bits, sizeof(result));
+  return result;
+}
+
+int64_t ArithmeticShiftRight(int64_t value, uint32_t shift) {
+  if (shift == 0) return value;
+  const int64_t divisor = int64_t{1} << shift;
+  int64_t quotient = value / divisor;
+  if (value % divisor < 0) --quotient;
+  return quotient;
+}
+
+int32_t Shift(int32_t value, int32_t amount) {
+  if (amount >= 0) {
+    if (amount >= 32) return value < 0 ? -1 : 0;
+    return WrapInt32(ArithmeticShiftRight(value, static_cast<uint32_t>(amount)));
+  }
+  const uint64_t left = static_cast<uint64_t>(-static_cast<int64_t>(amount));
+  if (left >= 32) return 0;
+  const uint32_t bits = static_cast<uint32_t>(value) << left;
+  int32_t result;
+  std::memcpy(&result, &bits, sizeof(result));
+  return result;
+}
+
+int32_t Q31Multiply(int32_t value, int32_t multiplier, uint32_t rounding) {
+  const int64_t product = static_cast<int64_t>(value) * multiplier;
+  int64_t quotient = ArithmeticShiftRight(product, 31);
+  const int64_t denominator = int64_t{1} << 31;
+  const int64_t remainder = product - quotient * denominator;
+  const int64_t half = denominator >> 1;
+  if ((rounding == VTA_ALU_ROUND_UP && remainder >= half) ||
+      (rounding == VTA_ALU_ROUND_AWAY &&
+       (remainder > half || (remainder == half && product >= 0)))) {
+    ++quotient;
+  }
+  return WrapInt32(quotient);
+}
+
+int32_t RoundedRightShift(int32_t value, int32_t shift, uint32_t rounding) {
+  CHECK_GE(shift, 0) << "RSFT shift must be in [0,31], got " << shift;
+  CHECK_LE(shift, 31) << "RSFT shift must be in [0,31], got " << shift;
+  if (shift == 0) return value;
+  const int64_t denominator = int64_t{1} << static_cast<uint32_t>(shift);
+  int64_t quotient = ArithmeticShiftRight(value, static_cast<uint32_t>(shift));
+  const int64_t remainder = static_cast<int64_t>(value) - quotient * denominator;
+  const int64_t half = denominator >> 1;
+  if ((rounding == VTA_ALU_ROUND_UP && remainder >= half) ||
+      (rounding == VTA_ALU_ROUND_AWAY &&
+       (remainder > half || (remainder == half && value >= 0)))) {
+    ++quotient;
+  }
+  return WrapInt32(quotient);
+}
+
+void ValidateALU(const VTAAluInsn* op) {
+  CHECK_LE(op->rounding, VTA_ALU_ROUND_AWAY)
+      << "Invalid ALU rounding mode " << op->rounding;
+  switch (op->alu_opcode) {
+    case VTA_ALU_OPCODE_MIN:
+    case VTA_ALU_OPCODE_MAX:
+    case VTA_ALU_OPCODE_ADD:
+    case VTA_ALU_OPCODE_SHR:
+    case VTA_ALU_OPCODE_MUL:
+      CHECK_EQ(op->rounding, VTA_ALU_ROUND_NONE)
+          << "Rounding is only supported by RMUL and RSFT";
+      break;
+    case VTA_ALU_OPCODE_RMUL:
+    case VTA_ALU_OPCODE_RSFT:
+      break;
+    default:
+      LOG(FATAL) << "Unknown ALU code " << op->alu_opcode;
+  }
+}
+
+}  // namespace
+
 /*! \brief debug flag for skipping computation */
 enum DebugFlagMask {
   kSkipExec = 1
@@ -518,10 +600,11 @@ class Device {
 
   template<bool use_imm>
   void RunALU_(const VTAAluInsn* op) {
+    ValidateALU(op);
     switch (op->alu_opcode) {
       case VTA_ALU_OPCODE_ADD: {
         return RunALULoop<use_imm>(op, [](int32_t x, int32_t y) {
-            return x + y;
+            return WrapInt32(static_cast<int64_t>(x) + y);
           });
       }
       case VTA_ALU_OPCODE_MAX: {
@@ -536,16 +619,22 @@ class Device {
       }
       case VTA_ALU_OPCODE_SHR: {
         return RunALULoop<use_imm>(op, [](int32_t x, int32_t y) {
-            if (y >= 0) {
-              return x >> y;
-            } else {
-              return x << (-y);
-            }
+            return Shift(x, y);
           });
       }
       case VTA_ALU_OPCODE_MUL: {
         return RunALULoop<use_imm>(op, [](int32_t x, int32_t y) {
-            return x * y;
+            return WrapInt32(static_cast<int64_t>(x) * y);
+          });
+      }
+      case VTA_ALU_OPCODE_RMUL: {
+        return RunALULoop<use_imm>(op, [op](int32_t x, int32_t y) {
+            return Q31Multiply(x, y, op->rounding);
+          });
+      }
+      case VTA_ALU_OPCODE_RSFT: {
+        return RunALULoop<use_imm>(op, [op](int32_t x, int32_t y) {
+            return RoundedRightShift(x, y, op->rounding);
           });
       }
       default: {

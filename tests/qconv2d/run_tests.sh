@@ -27,7 +27,7 @@ if [[ "${encoding_only}" == true ]]; then
   paths=("${script_dir}/test_encoding.py")
 elif [[ "${alu_only}" == true ]]; then
   suite="alu"
-  paths=("${script_dir}/test_runtime.py")
+  paths=("${script_dir}/test_runtime.py" "${script_dir}/test_alu_requantize.py")
 else
   suite="all"
   paths=("${script_dir}/test_encoding.py" "${script_dir}/test_runtime.py")

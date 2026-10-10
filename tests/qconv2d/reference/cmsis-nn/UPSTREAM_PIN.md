@@ -1,0 +1,27 @@
+# Upstream pin
+Repository: https://github.com/ARM-software/CMSIS-NN
+Tag: v8.0.0
+Commit: 13c97dbb6f781d4aab38ed34e6e441f42b79aff4
+Tag commit was resolved through GitHub fetch_commit from prefix 13c97db.
+All source/header files in this directory were fetched with ref=v8.0.0. SHA values below are GitHub blob SHA values.
+
+License/docs/config:
+8dada3edaf50dbc082c9a125058f25def75e625a LICENSE
+50448a6f7fb59e174f3d04fd05766aa3c0b2a5c3 README.md
+9dad8f9469f9905816ff6a2db4e1f48e80579eb3 ARM.CMSIS-NN.pdsc
+1582d73c7bf77201960c1e85cb1bd591502dd7f0 Include/Internal/arm_nn_config.h
+
+Headers:
+9a7ad47bf87321e2f87160a735b6b13c392c1166 Include/arm_nnfunctions.h
+df27c0de22617139fd3f885cce2e98ad1e2d32b4 Include/arm_nnsupportfunctions.h
+ee982d8671f21d7ad8ce4d77f5857b74891e0d82 Include/arm_nn_math_types.h
+7c0b3227883ec76eee41c6ea64d53cc69f22cc9c Include/arm_nn_types.h
+8db85caf46ef78f9e6ca91c36547385b097e3d62 Include/Internal/arm_nn_compiler.h
+
+Scalar qconv source set:
+83588ad9035d3075db3691b41731dff8e0fabef1 Source/ConvolutionFunctions/arm_convolve_s8.c
+58f6a1190374df02cf7fd3b1b1d24ac9b9b371b8 Source/ConvolutionFunctions/arm_convolve_get_buffer_sizes_s8.c
+d0f7bd96b3a2af1aec33240dc530a058953afc0c Source/ConvolutionFunctions/arm_nn_mat_mult_kernel_s8_s16.c
+7a400e129d5752b0a46d4ba8f5b3ce16efa31537 Source/ConvolutionFunctions/arm_nn_mat_mult_kernel_row_offset_s8_s16.c
+ab84370d2548e318c1063f8c9b40545864f78554 Source/NNSupportFunctions/arm_q7_to_q15_with_offset.c
+8b93ca4947f2c08456f5e769fe9625745455a504 Source/NNSupportFunctions/arm_nn_mat_mult_nt_t_s8.c
