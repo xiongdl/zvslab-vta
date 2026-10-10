@@ -23,10 +23,16 @@ export PYTHONPATH="${TVM_PATH}/python:${VTA_PATH}/python${PYTHONPATH:+:${PYTHONP
 python_bin="${repo_root}/.envs/tvm-vta-env/bin/python"
 [[ -x "${python_bin}" ]] || { echo "Missing environment Python: ${python_bin}" >&2; exit 1; }
 if [[ "${encoding_only}" == true ]]; then
+  suite="encoding"
   paths=("${script_dir}/test_encoding.py")
 elif [[ "${alu_only}" == true ]]; then
+  suite="alu"
   paths=("${script_dir}/test_runtime.py")
 else
+  suite="all"
   paths=("${script_dir}/test_encoding.py" "${script_dir}/test_runtime.py")
 fi
-"${python_bin}" -m pytest -p no:cacheprovider -v "${paths[@]}"
+mkdir -p "${script_dir}/reports"
+report_path="${script_dir}/reports/${backend}-${suite}.xml"
+echo "Writing JUnit results to ${report_path}"
+"${python_bin}" -m pytest -p no:cacheprovider -v --junitxml="${report_path}" "${paths[@]}"
