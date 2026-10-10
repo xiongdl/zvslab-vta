@@ -48,6 +48,40 @@ def test_single_rounding_rejects_positive_shift_preleft_overflow():
         check_requantize_range(values, shifts, "single")
 
 
+@pytest.mark.parametrize("mode", ["double", "single"])
+@pytest.mark.parametrize("shift", [-32, 31])
+def test_requantize_range_rejects_unsupported_shift(mode, shift):
+    with pytest.raises(ValueError, match="shift.*-31.*30"):
+        check_requantize_range(np.array([0], dtype=np.int32),
+                               np.array([shift], dtype=np.int32), mode)
+
+
+def test_requantize_range_rejects_int64_wrapping_preleft_input():
+    # The legacy int64 multiply computes 1 * 2**65, which wraps to zero.
+    with pytest.raises(ValueError, match="shift.*-31.*30"):
+        check_requantize_range(np.array([1], dtype=np.int32),
+                               np.array([64], dtype=np.int32), "single")
+
+
+def test_requantize_range_rejects_non_int32_accumulator():
+    with pytest.raises(ValueError, match="INT32"):
+        check_requantize_range(np.array([2**31], dtype=np.int64),
+                               np.array([0], dtype=np.int32), "single")
+
+
+def test_requantize_range_rejects_unknown_mode():
+    with pytest.raises(ValueError, match="unknown requantize mode"):
+        check_requantize_range(np.array([0], dtype=np.int32),
+                               np.array([0], dtype=np.int32), "other")
+
+
+def test_requantize_range_accepts_supported_int32_boundaries():
+    int32_limits = np.array([-(2**31), 2**31 - 1, -1, 0], dtype=np.int64)
+    check_requantize_range(int32_limits, np.array([-31, -31, 30, 30]), "single")
+    positive_shift_edges = np.array([[-(2**30), 2**30 - 1]], dtype=np.int32)
+    check_requantize_range(positive_shift_edges, np.array([0, 0]), "single")
+
+
 def test_rounding_attribution_rejects_accumulator_mismatch(tmp_path):
     fsim_dir, cmsis_dir = tmp_path / "fsim", tmp_path / "cmsis"
     fsim_dir.mkdir()
@@ -62,6 +96,38 @@ def test_rounding_attribution_rejects_accumulator_mismatch(tmp_path):
         zero_out.tofile(fsim_dir / f"{mode}-output.bin")
         zero_out.tofile(cmsis_dir / f"{mode}-output.bin")
     with pytest.raises(ValueError, match="accumulator differs"):
+        analyze(FIXTURE_DIR, fsim_dir, cmsis_dir)
+
+
+def test_rounding_attribution_rejects_one_unit_from_wrong_multiplier(
+        cmsis_conv_reference, tmp_path):
+    fixture = load_fixture(FIXTURE_DIR)
+    ref_dir, manifest = cmsis_conv_reference
+    bad_fixture = {key: value.copy() for key, value in fixture.items()}
+    bad_fixture["multiplier"][6] -= 150000
+    wrong_acc, wrong_single_output = _run_cmsis(
+        ref_dir / manifest["libraries"]["single"], bad_fixture
+    )
+    correct_acc, _ = _run_cmsis(
+        ref_dir / manifest["libraries"]["single"], fixture
+    )
+    assert np.array_equal(wrong_acc, correct_acc)
+    delta = wrong_single_output.astype(np.int16) - fixture["tflite_output"].astype(np.int16)
+    assert delta[0, 0, 24, 6] == -1
+    assert np.max(np.abs(delta)) == 1
+
+    fsim_dir, cmsis_dir = tmp_path / "wrong-param-fsim", tmp_path / "wrong-param-cmsis"
+    fsim_dir.mkdir()
+    cmsis_dir.mkdir()
+    double_acc, double_output = _run_cmsis(
+        ref_dir / manifest["libraries"]["double"], fixture
+    )
+    for directory in (fsim_dir, cmsis_dir):
+        double_acc.tofile(directory / "double-accumulator.bin")
+        double_output.tofile(directory / "double-output.bin")
+        wrong_acc.tofile(directory / "single-accumulator.bin")
+        wrong_single_output.tofile(directory / "single-output.bin")
+    with pytest.raises(ValueError, match="stage arithmetic"):
         analyze(FIXTURE_DIR, fsim_dir, cmsis_dir)
 
 

@@ -25,19 +25,36 @@ def load_fixture(path: Path) -> dict:
 
 
 def check_requantize_range(acc: np.ndarray, shifts: np.ndarray, mode: str) -> None:
-    """Reject values that violate the CMSIS scalar single-rounding pre-left range."""
-    acc = np.asarray(acc, dtype=np.int64)
-    shifts = np.asarray(shifts, dtype=np.int64)
+    """Validate supported CMSIS INT32 shifts and single-rounding pre-left range."""
     if mode not in ("double", "single"):
         raise ValueError(f"unknown requantize mode: {mode}")
-    if acc.shape[-1] != shifts.shape[-1]:
+    acc = np.asarray(acc)
+    shifts = np.asarray(shifts)
+    if acc.ndim == 0 or shifts.ndim != 1:
+        raise ValueError("accumulator must have a channel axis and shifts must be one-dimensional")
+    if not np.issubdtype(acc.dtype, np.integer):
+        raise ValueError("accumulator values must be integers in the INT32 range")
+    if not np.issubdtype(shifts.dtype, np.integer):
+        raise ValueError("shifts must be integers in [-31, 30]")
+    if acc.shape[-1] != shifts.size:
         raise ValueError("accumulator and per-channel shifts must have matching final axes")
+    if np.any(acc < -(1 << 31)) or np.any(acc > (1 << 31) - 1):
+        raise ValueError("accumulator values must fit INT32")
+    if np.any(shifts < -31) or np.any(shifts > 30):
+        raise ValueError("shifts must be in [-31, 30]")
+    # Cast only after validating bounds, so no out-of-range unsigned values can
+    # wrap during conversion to the signed intermediate type.
+    acc = acc.astype(np.int64, copy=False)
+    shifts = shifts.astype(np.int64, copy=False)
     if mode == "double":
         return
     for channel, shift in enumerate(shifts.reshape(-1)):
         if shift >= 0:
-            scaled = acc[..., channel] * (1 << (int(shift) + 1))
-            if np.any((scaled < -(1 << 31)) | (scaled > (1 << 31) - 1)):
+            factor = 1 << (int(shift) + 1)
+            min_input = -((1 << 31) // factor)
+            max_input = ((1 << 31) - 1) // factor
+            channel_acc = acc[..., channel]
+            if np.any((channel_acc < min_input) | (channel_acc > max_input)):
                 raise ValueError(
                     f"single-rounding pre-left overflows INT32 in channel {channel} "
                     f"for shift {int(shift)}"
