@@ -11,6 +11,7 @@ import vta.util.config._
 class TensorGemmInputGeometryTester(c: TensorGemmSimple, logicalInputs: Seq[Int], bi: Int, bo: Int)
   extends PeekPokeTester(c) {
   poke(c.io.start, 0)
+  poke(c.io.dec.op, 2)
   poke(c.io.dec.reset, 0)
   poke(c.io.dec.uop_begin, 0)
   poke(c.io.dec.uop_end, 1)
@@ -62,6 +63,7 @@ class TensorGemmInputGeometryTester(c: TensorGemmSimple, logicalInputs: Seq[Int]
   }
 
   poke(c.io.start, 1)
+  var writes = 0
   var checks = 0
   var cycles = 0
   val expected = bi * (bi + 1) / 2 // each output reads a distinct zeroed accumulator
@@ -73,6 +75,7 @@ class TensorGemmInputGeometryTester(c: TensorGemmSimple, logicalInputs: Seq[Int]
       checks += 1
     }
     if (peek(c.io.out.wr(0).valid) == 1) {
+      writes += 1
       for (lane <- 0 until c.io.out.wr(0).bits.data(0).size) {
         expect(c.io.out.wr(0).bits.data(0)(lane), expected)
       }
@@ -80,6 +83,7 @@ class TensorGemmInputGeometryTester(c: TensorGemmSimple, logicalInputs: Seq[Int]
     poke(c.io.start, 0)
     cycles += 1
   }
+  assert(writes == logicalInputs.length, s"expected ${logicalInputs.length} output writes, observed $writes")
   assert(checks == logicalInputs.length, s"expected ${logicalInputs.length} input reads, observed $checks")
   assert(peek(c.io.done) == 1, "GEMM did not finish")
 }

@@ -158,7 +158,7 @@ class Compute(debug: Boolean = false)(implicit val p: Parameters) extends Module
   io.vme_rd(1) <> tensorAcc.io.vme_rd
   io.acc_wr_event := tensorAcc.io.tensor.wr(topAccGrpIdx).valid
 
-  // gemm
+  // GEMM and DwC share dispatch, dependencies, scratchpads, and write timing.
   tensorGemm.io.start := RegNext(state === sIdle & start & dec.io.isGemm, init = false.B)
   tensorGemm.io.dec := inst_q.io.deq.bits.asTypeOf(new GemmDecode)
   tensorGemm.io.uop.data.valid := loadUop.io.uop.data.valid & dec.io.isGemm

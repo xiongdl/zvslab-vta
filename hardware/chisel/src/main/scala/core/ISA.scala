@@ -53,6 +53,7 @@ trait ISAConstants {
   val OP_G = 2.asUInt(OP_BITS.W)
   val OP_F = 3.asUInt(OP_BITS.W)
   val OP_A = 4.asUInt(OP_BITS.W)
+  val OP_D = 5.asUInt(OP_BITS.W)
   val OP_X = 5.asUInt(OP_BITS.W)
 
   val ALU_OP_NUM = 5

@@ -29,6 +29,7 @@ import vta.util.config._
 
 class TensorGemmTester(c: TensorGemmSimple) extends PeekPokeTester(c) {
   poke(c.io.start, 0)
+  poke(c.io.dec.op, 2)
   poke(c.io.dec.reset, 0)
   poke(c.io.dec.uop_begin, 0)
   poke(c.io.dec.uop_end, 1)
@@ -182,6 +183,7 @@ class TensorGemmIdxTester(c: TensorGemmSimple) extends PeekPokeTester(c) {
   val u1 = BigInt("100", 16)
   val u2 = BigInt("200", 16)
 
+  poke(c.io.dec.op, 2)
   poke(c.io.dec.reset, 0)
   poke(c.io.dec.uop_begin, uop_begin)
   poke(c.io.dec.uop_end, uop_end)
@@ -365,6 +367,7 @@ class TensorGemmIndexGeneratorTester(c: TensorGemmIndexGenerator) extends PeekPo
   val inp_1 = 2
   val wgt_1 = 4
 
+  poke(c.io.dec.op, 2)
   poke(c.io.dec.reset, 0)
   poke(c.io.dec.uop_begin, uop_begin)
   poke(c.io.dec.uop_end, uop_end)
@@ -453,6 +456,7 @@ class TensorGemmPipelinedTester(c: TensorGemmPipelinedSplit) extends PeekPokeTes
   val u1 = BigInt("100", 16)
   val u2 = BigInt("200", 16)
 
+  poke(c.io.dec.op, 2)
   poke(c.io.dec.reset, 0)
   poke(c.io.dec.uop_begin, uop_begin)
   poke(c.io.dec.uop_end, uop_end)
@@ -608,6 +612,7 @@ class TensorGemmResetTester(c: TensorGemm) extends PeekPokeTester(c) {
   val u2 = BigInt("200", 16)
   val dec_reset = 1
 
+  poke(c.io.dec.op, 2)
   poke(c.io.dec.reset, dec_reset)
   poke(c.io.dec.uop_begin, uop_begin)
   poke(c.io.dec.uop_end, uop_end)

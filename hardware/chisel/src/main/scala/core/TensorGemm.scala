@@ -93,6 +93,7 @@ class DotProduct(aBits: Int = 8, bBits: Int = 8, blockIn: Int = 16) extends Modu
     val a = Input(Vec(blockIn, SInt(aBits.W)))
     val b = Input(Vec(blockIn, SInt(bBits.W)))
     val y = Output(SInt(outBits.W))
+    val dwc = Input(Bool())
   })
   val s = Seq.tabulate(log2Ceil(blockIn + 1))(i =>
     pow(2, log2Ceil(blockIn) - i).toInt) // # of total layers
@@ -111,8 +112,8 @@ class DotProduct(aBits: Int = 8, bBits: Int = 8, blockIn: Int = 16) extends Modu
 
   // Vector MACs
   for (i <- 0 until s(0)) {
-    m(i).io.a := io.a(i)
-    m(i).io.b := io.b(i)
+    m(i).io.a := (if (i == 0) io.a(i) else Mux(io.dwc, 0.S, io.a(i)))
+    m(i).io.b := (if (i == 0) io.b(i) else Mux(io.dwc, 0.S, io.b(i)))
     m(i).io.c := 0.S
   }
 
@@ -134,6 +135,26 @@ class DotProduct(aBits: Int = 8, bBits: Int = 8, blockIn: Int = 16) extends Modu
   io.y := a(p - 1)(0).io.y
 }
 
+/** One shift register per channel, shared by all batches. Reload bypasses
+ * the register so the first tap uses the SRAM response without an extra stage.
+ */
+class DwcWeightBank(channels: Int, lanes: Int, bits: Int) extends Module {
+  val io = IO(new Bundle {
+    val clear = Input(Bool())
+    val consume = Input(Bool())
+    val reload = Input(Bool())
+    val memory = Input(Vec(channels, UInt((lanes * bits).W)))
+    val current = Output(Vec(channels, SInt(bits.W)))
+  })
+  val weights = RegInit(VecInit(Seq.fill(channels)(0.U((lanes * bits).W))))
+  for (c <- 0 until channels) {
+    val effective = Mux(io.reload, io.memory(c), weights(c))
+    io.current(c) := effective(bits - 1, 0).asSInt
+    when(io.clear) { weights(c) := 0.U }
+      .elsewhen(io.consume) { weights(c) := effective >> bits }
+  }
+}
+
 /** Perform matrix-vector-multiplication based on DotProduct */
 class MatrixVectorMultiplication(implicit p: Parameters) extends Module {
   val accBits = p(CoreKey).accBits
@@ -143,6 +164,7 @@ class MatrixVectorMultiplication(implicit p: Parameters) extends Module {
   val wgtBits = p(CoreKey).wgtBits
   val outBits = p(CoreKey).outBits
   val io = IO(new Bundle {
+    val dwc = Input(Bool())
     val reset = Input(Bool()) // FIXME: reset should be replaced by a load-acc instr
     val inp = new TensorMasterData(tensorType = "inp")
     val wgt = new TensorMasterData(tensorType = "wgt")
@@ -163,10 +185,11 @@ class MatrixVectorMultiplication(implicit p: Parameters) extends Module {
 
   for (b <- 0 until batch) {
     for (i <- 0 until size) {
+      dot(b)(i).io.dwc := io.dwc
       acc(b)(i).io.enq.valid := io.inp.data.valid & io.wgt.data.valid & io.acc_i.data.valid & ~io.reset
       acc(b)(i).io.enq.bits := io.acc_i.data.bits(b)(i)
       for (j <- 0 until p(CoreKey).blockIn) {
-        dot(b)(i).io.a(j) := io.inp.data.bits(b)(j).asSInt
+        dot(b)(i).io.a(j) := Mux(io.dwc, io.inp.data.bits(b)(i).asSInt, io.inp.data.bits(b)(j).asSInt)
         dot(b)(i).io.b(j) := io.wgt.data.bits(i)(j).asSInt // all batches get the same weight - reuse
       }
       add(b)(i) := acc(b)(i).io.deq.bits.asSInt + dot(b)(i).io.y
@@ -180,7 +203,7 @@ class MatrixVectorMultiplication(implicit p: Parameters) extends Module {
 }
 
 /** Perform matrix-vector-multiplication based on DotProduct */
-class MatrixVectorMultiplicationBypass(implicit p: Parameters) extends Module {
+class MatrixVectorMultiplicationBypass(group: Int = 0)(implicit p: Parameters) extends Module {
   val accBits = p(CoreKey).accBits
   val blockOut = p(CoreKey).blockOut / p(CoreKey).blockOutFactor
   val blockIn = p(CoreKey).blockIn
@@ -190,6 +213,7 @@ class MatrixVectorMultiplicationBypass(implicit p: Parameters) extends Module {
   val outBits = p(CoreKey).outBits
   val io = IO(new Bundle {
     val valid_reset = Input(Bool())
+    val dwc = Input(Bool())
     val inp = new TensorMasterData(tensorType = "inp")
     val wgt = new TensorMasterData(tensorType = "wgt")
     val acc_i = new TensorMasterData(tensorType = "acc")
@@ -204,8 +228,9 @@ class MatrixVectorMultiplicationBypass(implicit p: Parameters) extends Module {
   io.out.data.bits := DontCare // out is not fully initialized by a single module
   for (b <- 0 until batch) {
     for (i <- 0 until blockOut) {
+      dot(b)(i).io.dwc := io.dwc
       for (j <- 0 until blockIn) {
-        dot(b)(i).io.a(j) := io.inp.data.bits(b)(j).asSInt
+        dot(b)(i).io.a(j) := Mux(io.dwc, io.inp.data.bits(b)(group * blockOut + i).asSInt, io.inp.data.bits(b)(j).asSInt)
         dot(b)(i).io.b(j) := io.wgt.data.bits(i)(j).asSInt
       }
       val byp = Mux(io.bypass_cond, last_acc_write(b)(i), io.acc_i.data.bits(b)(i).asSInt)
@@ -333,6 +358,7 @@ class TensorGemmSimple(debug: Boolean = false)(implicit p: Parameters) extends T
   io.state := state
   val mvc = Module(new MatrixVectorMultiplication)
   val dec = io.dec
+  val dwc = dec.op === OP_D
   val uop_idx = Reg(chiselTypeOf(dec.uop_end))
   val uop_end = dec.uop_end
   val uop_acc = Reg(chiselTypeOf(dec.uop_end))
@@ -463,13 +489,24 @@ class TensorGemmSimple(debug: Boolean = false)(implicit p: Parameters) extends T
   io.inp.rd(0).idx.valid := state === sReadTensor
   // GEMM factors and uop sources remain in logical BLOCK_IN vectors.
   // The input banks address min(BLOCK_IN, BLOCK_OUT) lane subvectors.
-  assert(!io.inp.rd(0).idx.valid || uop_inp < p(CoreKey).inpMemDepth.U,
-    "GEMM input source exceeds the logical input tensor depth")
-  io.inp.rd(0).idx.bits := uop_inp * p(CoreKey).inpSlices.U
+  assert(!io.inp.rd(0).idx.valid || uop_inp < Mux(dwc, p(CoreKey).inpSubvectorDepth.U, p(CoreKey).inpMemDepth.U),
+    "Input source exceeds the mode-specific tensor depth")
+  io.inp.rd(0).idx.bits := Mux(dwc, uop_inp, uop_inp * p(CoreKey).inpSlices.U)
   io.inp.tieoffWrite() // read-only
 
-  // wgt
-  io.wgt.rd(0).idx.valid := state === sReadTensor
+  // wgt: state advances independently of the cached entry's read enable.
+  val entryValid = RegInit(false.B)
+  val entry = Reg(chiselTypeOf(uop_wgt))
+  val tapInEntry = RegInit(0.U(log2Ceil(p(CoreKey).blockIn).W))
+  val reload = !entryValid || uop_idx === dec.uop_begin || entry =/= uop_wgt || tapInEntry === 0.U
+  when(state === sIdle) { entryValid := false.B; tapInEntry := 0.U }
+  when(state === sReadTensor && dwc) {
+    entryValid := true.B
+    entry := uop_wgt
+    tapInEntry := Mux(reload, 1.U, tapInEntry + 1.U)
+  }
+  val responseReload = RegNext(state === sReadTensor && reload, init = false.B)
+  io.wgt.rd(0).idx.valid := state === sReadTensor && (!dwc || reload)
   io.wgt.rd(0).idx.bits := uop_wgt
   io.wgt.tieoffWrite() // read-only
 
@@ -480,7 +517,19 @@ class TensorGemmSimple(debug: Boolean = false)(implicit p: Parameters) extends T
   // mvc
   mvc.io.reset := dec.reset & state === sExe
   mvc.io.inp.data <> io.inp.rd(0).data
-  mvc.io.wgt.data <> io.wgt.rd(0).data
+  mvc.io.dwc := dwc
+  val weights = Module(new DwcWeightBank(p(CoreKey).blockOut, p(CoreKey).blockIn, p(CoreKey).wgtBits))
+  weights.io.clear := io.start
+  weights.io.reload := responseReload
+  weights.io.consume := dwc && io.inp.rd(0).data.valid && !dec.reset
+  for (lane <- 0 until p(CoreKey).blockOut) {
+    weights.io.memory(lane) := io.wgt.rd(0).data.bits(lane).asUInt
+    for (k <- 0 until p(CoreKey).blockIn) {
+      mvc.io.wgt.data.bits(lane)(k) := Mux(dwc,
+        (if (k == 0) weights.io.current(lane).asUInt else 0.U), io.wgt.rd(0).data.bits(lane)(k))
+    }
+  }
+  mvc.io.wgt.data.valid := Mux(dwc, io.inp.rd(0).data.valid, io.wgt.rd(0).data.valid)
   mvc.io.acc_i.data <> io.acc.rd(0).data
 
   // acc_o
@@ -565,6 +614,8 @@ class TensorGemmPipelinedSplit (implicit p: Parameters) extends TensorGemmIfc {
   val inpReadIdxLatency = 0
   val uopReadLatency = 0
 
+  val dwc = io.dec.op === OP_D
+  val kernelStart = ShiftRegister(m.io.valid && m.io.uop_idx === io.dec.uop_begin, uopReadLatency + 1, resetData = false.B, en = true.B)
   val delayed_valid = ShiftRegister(m.io.valid, uopReadLatency + 1, resetData = false.B, en = true.B)
   val delayed_acc_i = ShiftRegister(m.io.acc_i, uopReadLatency + 1)
   val delayed_inp_i = ShiftRegister(m.io.inp_i, uopReadLatency + 1)
@@ -623,22 +674,35 @@ class TensorGemmPipelinedSplit (implicit p: Parameters) extends TensorGemmIfc {
   io.inp.rd(0).idx.valid := delayed_valid
   // GEMM factors and uop sources remain in logical BLOCK_IN vectors.
   // The input banks address min(BLOCK_IN, BLOCK_OUT) lane subvectors.
-  assert(!io.inp.rd(0).idx.valid || uop_inp < p(CoreKey).inpMemDepth.U,
-    "GEMM input source exceeds the logical input tensor depth")
-  io.inp.rd(0).idx.bits := uop_inp * p(CoreKey).inpSlices.U
+  assert(!io.inp.rd(0).idx.valid || uop_inp < Mux(dwc, p(CoreKey).inpSubvectorDepth.U, p(CoreKey).inpMemDepth.U),
+    "Input source exceeds the mode-specific tensor depth")
+  io.inp.rd(0).idx.bits := Mux(dwc, uop_inp, uop_inp * p(CoreKey).inpSlices.U)
   val delayed_uop_valid = RegNext(uop_valid, init=false.B) // memdelay
   // asset fires on emulated tensorRead Direct GEMM test TODO: fix memoryManager sram read
   // it works only for VTA_CORE_GEMM_INP_IDX_PIPE 0
   assert(io.inp.rd(0).data.valid === delayed_uop_valid)
+  // Reload is decided at issue, then follows the fixed SRAM response stage.
+  val entryValid = RegInit(false.B)
+  val previousEntry = Reg(chiselTypeOf(uop_wgt))
+  val tapInEntry = RegInit(0.U(log2Ceil(p(CoreKey).blockIn).W))
+  val reload = uop_valid && (kernelStart || !entryValid || previousEntry =/= uop_wgt || tapInEntry === 0.U)
+  when(io.start) { entryValid := false.B; tapInEntry := 0.U }
+  when(uop_valid && dwc) {
+    entryValid := true.B
+    previousEntry := uop_wgt
+    tapInEntry := Mux(reload, 1.U, tapInEntry + 1.U)
+  }
+  val responseReload = ShiftRegister(reload, 1 + scratchpadReadLatency, resetData = false.B, en = true.B)
+  val responseReset = ShiftRegister(m.io.valid && io.dec.reset, 2 + uopReadLatency + inpReadIdxLatency + scratchpadReadLatency, resetData = false.B, en = true.B)
   for (idx <- 0 until numMVMs) {
     io.acc.rd(idx).idx.valid := RegNext(acc_idx_pipe.io.deq.valid, init = false.B)
     io.acc.rd(idx).idx.bits := RegNext(acc_idx_pipe.io.deq.bits)
 
     // delay wgt read by input result delay latency
-    io.wgt.rd(idx).idx.valid := ShiftRegister(uop_valid, scratchpadReadLatency)
+    io.wgt.rd(idx).idx.valid := ShiftRegister(uop_valid && (!dwc || reload), scratchpadReadLatency)
     io.wgt.rd(idx).idx.bits := ShiftRegister(uop_wgt, scratchpadReadLatency)
 
-    assert(io.wgt.rd(idx).data.valid === ShiftRegister(delayed_uop_valid, scratchpadReadLatency))
+    assert(io.wgt.rd(idx).data.valid === ShiftRegister(io.wgt.rd(idx).idx.valid, 1, resetData = false.B, en = true.B))
   }
   io.wgt.tieoffWrite()
   io.inp.tieoffWrite()
@@ -694,7 +758,7 @@ class TensorGemmPipelinedSplit (implicit p: Parameters) extends TensorGemmIfc {
   // define MVC groups operating on a subset of acc elements
   // each MVM generates only a part of acc bits while has whole inteface defined !!!
   // those bits are lower bits in acc/out interface
-  val mvc = for (idx <- 0 until numMVMs) yield {Module(new MatrixVectorMultiplicationBypass)}
+  val mvc = for (idx <- 0 until numMVMs) yield {Module(new MatrixVectorMultiplicationBypass(idx))}
 
   require(io.out.splitWidth == 1 && io.out.splitLength == 1, "-F- Out split write is not supported")
   for (idx1 <- 0 until numMVMs) {
@@ -710,7 +774,19 @@ class TensorGemmPipelinedSplit (implicit p: Parameters) extends TensorGemmIfc {
     // wire to each mvm
     mvc(idx1).io.inp.data :=
       ShiftRegister(inpRdData0(idx1/splitFactorL1), mvmInpRdLatency) // delay to deliver over distance
-    mvc(idx1).io.wgt.data := io.wgt.rd(idx1).data // wgt read idx is delayed instead of data
+    mvc(idx1).io.dwc := dwc
+    val weights = Module(new DwcWeightBank(numOuts, p(CoreKey).blockIn, p(CoreKey).wgtBits))
+    weights.io.clear := io.start
+    weights.io.consume := dwc && mvc(idx1).io.inp.data.valid && !responseReset
+    weights.io.reload := responseReload
+    for (lane <- 0 until numOuts) {
+      weights.io.memory(lane) := io.wgt.rd(idx1).data.bits(lane).asUInt
+      for (k <- 0 until p(CoreKey).blockIn) {
+        mvc(idx1).io.wgt.data.bits(lane)(k) := Mux(dwc,
+          (if (k == 0) weights.io.current(lane).asUInt else 0.U), io.wgt.rd(idx1).data.bits(lane)(k))
+      }
+    }
+    mvc(idx1).io.wgt.data.valid := Mux(dwc, mvc(idx1).io.inp.data.valid, io.wgt.rd(idx1).data.valid)
     mvc(idx1).io.acc_i.data.valid := io.acc.rd(idx1).data.valid
     assert(mvc(idx1).io.acc_o.data.valid === (wrpipe(idx1).io.deq.valid | mvc(idx1).io.valid_reset))
     for(accLenIdx <- 0 until mvc(idx1).io.acc_o.lenSplit) {

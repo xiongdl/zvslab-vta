@@ -69,6 +69,7 @@ class AdderTest extends GenericTest("AdderTest", (p:Parameters) => new Adder(),
   (c:Adder) => new AdderTester(c))
 
 class DotProductTester(c: DotProduct) extends PeekPokeTester(c) {
+  poke(c.io.dwc, 0)
   for {i<- 0 until 16} {
     poke(c.io.a(i), if (i %2 == 0) 1 else -1)
     poke(c.io.b(i), i)

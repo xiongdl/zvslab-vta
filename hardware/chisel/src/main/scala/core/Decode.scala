@@ -145,7 +145,7 @@ class FetchDecode(implicit p: Parameters) extends Module {
 
   val isLoadOp = taskOpcode === OP_L
   val isStoreOp = taskOpcode === OP_S
-  val isGemmOp = taskOpcode === OP_G
+  val isGemmOp = (taskOpcode === OP_G || taskOpcode === OP_D)
   val isFinishOp = taskOpcode === OP_F
   val isAluOp = taskOpcode === OP_A
 
@@ -212,7 +212,7 @@ class ComputeDecode(implicit p: Parameters) extends Module {
   io.isSync := dec.op === OP_L &&
     (dec.id === M_ID_A || dec.id === M_ID_A_8BIT || dec.id === M_ID_U) && dec.xsize === 0.U
   io.isAlu := dec.op === OP_A && alu.alu_op < ALU_OP_NUM.U
-  io.isGemm := dec.op === OP_G
+  io.isGemm := dec.op === OP_G || dec.op === OP_D
   io.isFinish := dec.op === OP_F
 }
 
