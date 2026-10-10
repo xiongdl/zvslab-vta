@@ -139,23 +139,33 @@ def gemm(env, mock=False):
     )
 
 
-def dwc(env, mock=False):
+def dwc(env, mock=False, packed=False):
     """One native depthwise tap, with an extent-one reduction for accumulation.
 
     The caller supplies kernel taps in row-major order. Each weight channel
     has BLOCK_IN packed kernel positions; this intrinsic selects a tap from
     that strided entry while hardware consumes its current lowest element.
     Input address units differ from DMA only when BLOCK_IN > BLOCK_OUT.
+    ``packed=True`` matches the adjacent physical BI vectors for BO > BI.
     """
     from .transform import dwc_uop_push
 
-    inp = te.placeholder((env.BATCH, env.BLOCK_OUT), env.inp_dtype, name=env.inp_scope)
+    inp_shape = (
+        (env.BLOCK_OUT // env.BLOCK_IN, env.BATCH, env.BLOCK_IN)
+        if packed and env.BLOCK_OUT > env.BLOCK_IN
+        else (env.BATCH, env.BLOCK_OUT)
+    )
+    inp = te.placeholder(inp_shape, env.inp_dtype, name=env.inp_scope)
     wgt = te.placeholder((env.BLOCK_OUT, 1), env.wgt_dtype, name=env.wgt_scope)
     k = te.reduce_axis((0, 1), name="tap")
     out = te.compute(
         (env.BATCH, env.BLOCK_OUT),
         lambda b, c: te.sum(
-            inp[b, c].astype(env.acc_dtype) * wgt[c, k].astype(env.acc_dtype), axis=k
+            (
+                inp[c // env.BLOCK_IN, b, c % env.BLOCK_IN]
+                if len(inp_shape) == 3 else inp[b, c]
+            ).astype(env.acc_dtype) * wgt[c, k].astype(env.acc_dtype),
+            axis=k,
         ),
         name="dwc_out",
     )

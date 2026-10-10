@@ -187,6 +187,32 @@ def FoldUopLoop():
             and stmt.value.value == env.dev.vta_push_uop.value
         ):
             body = stmt.body
+            # Runtime kernels have one reset flag. Tensorized reduction init
+            # and updates must form separate instructions, retaining the whole
+            # unrolled tap range in the update kernel.
+            if isinstance(body, tvm.tir.SeqStmt):
+                groups = []
+                flag = None
+                for item in body.seq:
+                    call = item.value if isinstance(item, tvm.tir.Evaluate) else None
+                    if (
+                        isinstance(call, tvm.tir.Call)
+                        and isinstance(call.op, tvm.ir.Op)
+                        and call.op.name == "tir.vta.uop_push"
+                        and int(call.args[0]) == env.dev.UOP_MODE_DWC
+                    ):
+                        reset = int(call.args[1])
+                    else:
+                        reset = flag
+                    if reset != flag or not groups:
+                        groups.append([])
+                        flag = reset
+                    groups[-1].append(item)
+                if len(groups) > 1:
+                    return tvm.tir.SeqStmt([
+                        tvm.tir.AttrStmt(stmt.node, stmt.attr_key, stmt.value, tvm.tir.stmt_seq(*group))
+                        for group in groups
+                    ])
             begins = []
             ends = []
             try:
@@ -493,6 +519,29 @@ def InjectSkipCopy():
     return tvm.tir.transform.prim_func_pass(_ftransform, opt_level=0, name="tir.vta.InjectSkipCopy")
 
 
+def BridgeDMAQueueDependencies():
+    """Route nonadjacent load/store synchronization through the compute queue."""
+    def transform(func, _mod, _ctx):
+        def rewrite(stmt):
+            call = stmt.value
+            if not isinstance(call, tvm.tir.Call) or not isinstance(call.op, tvm.ir.Op):
+                return stmt
+            if call.op.name not in ('tir.vta.coproc_dep_push', 'tir.vta.coproc_dep_pop'):
+                return stmt
+            source, dest = map(int, call.args)
+            if {source, dest} != {1, 3}:
+                return stmt
+            if call.op.name.endswith('push'):
+                return tvm.tir.SeqStmt([
+                    tvm.tir.Evaluate(tvm.tir.call_intrin("int32", "tir.vta.coproc_dep_push", source, 2)),
+                    tvm.tir.Evaluate(tvm.tir.call_intrin("int32", "tir.vta.coproc_dep_pop", source, 2)),
+                    tvm.tir.Evaluate(tvm.tir.call_intrin("int32", "tir.vta.coproc_dep_push", 2, dest)),
+                ])
+            return tvm.tir.Evaluate(tvm.tir.call_intrin("int32", "tir.vta.coproc_dep_pop", 2, dest))
+        return func.with_body(tvm.tir.stmt_functor.ir_transform(func.body, None, rewrite, ["tir.Evaluate"]))
+    return tvm.tir.transform.prim_func_pass(transform, 0, "tir.vta.BridgeDMAQueueDependencies")
+
+
 def InjectCoProcSync():
     """Pass inject coproc sync
 
@@ -526,6 +575,7 @@ def InjectCoProcSync():
         [
             tvm.tir.transform.prim_func_pass(_ftransform, 0, "tir.vta.InjectCoProcSync"),
             tvm.tir.transform.CoProcSync(),
+            BridgeDMAQueueDependencies(),
         ],
         opt_level=0,
         name="tir.vta.InjectCoProcSync",
