@@ -207,10 +207,10 @@ def test_generated_header_is_one_stable_compile_time_source(tmp_path, default_co
         "\n"
         "#include <stdint.h>\n"
         "\n"
-        "#define VTA_ABI_SCHEMA_VERSION 1\n"
+        "#define VTA_ABI_SCHEMA_VERSION {}\n"
         "#define VTA_ABI_FINGERPRINT UINT64_C(0x{})\n"
         "\n"
-        "#endif  // VTA_ABI_CONFIG_H_\n".format(fingerprint)
+        "#endif  // VTA_ABI_CONFIG_H_\n".format(_load_config_tool().ABI_SCHEMA_VERSION, fingerprint)
     )
 
 

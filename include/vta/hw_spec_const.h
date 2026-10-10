@@ -140,6 +140,33 @@
 #define VTA_ALU_OPCODE_SHR 3
 /*! ALU opcode: mul */
 #define VTA_ALU_OPCODE_MUL 4
+/*! ALU opcode: Q31 multiply */
+#define VTA_ALU_OPCODE_RMUL 5
+/*! ALU opcode: rounded right shift */
+#define VTA_ALU_OPCODE_RSFT 6
+
+/*! ALU rounding mode: truncate without rounding */
+#define VTA_ALU_ROUND_NONE 0
+/*! ALU rounding mode: nearest, ties toward positive infinity */
+#define VTA_ALU_ROUND_UP 1
+/*! ALU rounding mode: nearest, ties away from zero */
+#define VTA_ALU_ROUND_AWAY 2
+/*! ALU rounding field width */
+#define VTA_ALU_ROUNDING_BIT_WIDTH 2
+
+/* C uint64_t bitfields start the factor group in the next 64-bit allocation unit. */
+#define VTA_ALU_FACTOR_FIELDS_OFFSET \
+  (((VTA_OPCODE_BIT_WIDTH + 4 + 1 + VTA_LOG_UOP_BUFF_DEPTH + (VTA_LOG_UOP_BUFF_DEPTH + 1) + \
+     2 * VTA_LOOP_ITER_WIDTH + 63) / 64) * 64)
+/*! ALU opcode bit offset in the 128-bit instruction. */
+#define VTA_ALU_OPCODE_BIT_OFFSET \
+  (VTA_ALU_FACTOR_FIELDS_OFFSET + 4 * VTA_LOG_ACC_BUFF_DEPTH)
+/*! ALU rounding bit offset follows opcode, use_imm, and the immediate. */
+#define VTA_ALU_ROUNDING_BIT_OFFSET \
+  (VTA_ALU_OPCODE_BIT_OFFSET + VTA_ALU_OPCODE_BIT_WIDTH + 1 + VTA_ALUOP_IMM_BIT_WIDTH)
+#if (VTA_ALU_ROUNDING_BIT_OFFSET + VTA_ALU_ROUNDING_BIT_WIDTH) > (VTA_INS_WIDTH - 2)
+#error "VTA ALU rounding field must leave at least two reserved instruction bits"
+#endif
 
 /*! Memory type field bitwidth */
 #define VTA_MEMOP_ID_BIT_WIDTH 3

@@ -22,7 +22,7 @@ import os
 import sys
 
 
-ABI_SCHEMA_VERSION = 1
+ABI_SCHEMA_VERSION = 2
 ABI_DEFINITION_KEYS = (
     "LOG_INP_WIDTH",
     "LOG_WGT_WIDTH",

@@ -88,6 +88,11 @@ class DevContext(object):
     ALU_OPCODE_ADD = 2
     ALU_OPCODE_SHR = 3
     ALU_OPCODE_MUL = 4
+    ALU_OPCODE_RMUL = 5
+    ALU_OPCODE_RSFT = 6
+    ALU_ROUND_NONE = 0
+    ALU_ROUND_UP = 1
+    ALU_ROUND_AWAY = 2
     # Task queue id (pipeline stage)
     QID_LOAD_INP = 1
     QID_LOAD_WGT = 1

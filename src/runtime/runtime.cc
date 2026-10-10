@@ -36,6 +36,7 @@
 #include <vta/runtime.h>
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstring>
 #include <memory>
@@ -296,9 +297,12 @@ class UopKernel {
    * \param imm_val Immediate value in ALU mode.
    */
   void Push(uint32_t mode, uint32_t reset_out, uint32_t dst_index, uint32_t src_index,
-            uint32_t wgt_index, uint32_t opcode, uint32_t use_imm, int32_t imm_val) {
+            uint32_t wgt_index, uint32_t opcode, uint32_t use_imm, int32_t imm_val,
+            uint32_t rounding) {
     // The loop nest structure
     CHECK_LE(mode, VTA_UOP_MODE_DWC);
+    CHECK_LE(rounding, VTA_ALU_ROUND_AWAY);
+    CHECK(mode == VTA_UOP_MODE_ALU || rounding == VTA_ALU_ROUND_NONE);
     // DwC tap sequences accumulate to the same destination on consecutive uops.
     if (mode != VTA_UOP_MODE_DWC) VerifyDep(dst_index);
     VTAUop op;
@@ -320,14 +324,19 @@ class UopKernel {
     }
     // Check kernel op and imm/imm_val in ALU mode
     if (mode == VTA_UOP_MODE_ALU) {
+      CHECK_LE(opcode, VTA_ALU_OPCODE_RSFT);
+      CHECK(rounding == VTA_ALU_ROUND_NONE || opcode == VTA_ALU_OPCODE_RMUL ||
+            opcode == VTA_ALU_OPCODE_RSFT);
       if (opcode_ == 0xFFFFFFFF) {
         opcode_ = opcode;
         use_imm_ = use_imm;
         imm_val_ = imm_val;
+        rounding_ = rounding;
       } else {
         CHECK(opcode_ == opcode);
         CHECK(use_imm_ == use_imm);
         CHECK(imm_val_ == imm_val);
+        CHECK(rounding_ == rounding);
       }
     }
   }
@@ -349,6 +358,7 @@ class UopKernel {
   uint32_t reset_out_{0xFFFFFFFF};
   bool use_imm_{false};
   int16_t imm_val_{0};
+  uint32_t rounding_{0xFFFFFFFF};
 
  private:
   // Verify that we don't write to the same acc_mem index two cycles in a row
@@ -572,6 +582,26 @@ class UopKernelMap {
  public:
   // Simple hash map
   UopKernel** Get(void* signature, int nbytes) {
+    uint32_t key = GetKey(signature, nbytes);
+    if (kmap_.size() <= key) {
+      kmap_.resize(key + 1, nullptr);
+    }
+    return &(kmap_[key]);
+  }
+
+  // ALU rounding is a cache dimension, while the caller's signature remains
+  // unchanged for the initializer callback.
+  UopKernel** GetALU(void* signature, int nbytes, uint32_t rounding) {
+    CHECK_LE(rounding, VTA_ALU_ROUND_AWAY);
+    uint32_t key = GetKey(signature, nbytes);
+    if (alu_kmap_.size() <= key) {
+      alu_kmap_.resize(key + 1, {{nullptr, nullptr, nullptr}});
+    }
+    return &(alu_kmap_[key][rounding]);
+  }
+
+ private:
+  uint32_t GetKey(void* signature, int nbytes) {
     uint32_t key = 0;
     CHECK(nbytes == 0 || nbytes == sizeof(int));
     if (nbytes == sizeof(int)) {
@@ -579,14 +609,11 @@ class UopKernelMap {
       key = key + 1;
     }
     CHECK_LT(key, 100);
-    if (kmap_.size() <= key) {
-      kmap_.resize(key + 1, nullptr);
-    }
-    return &(kmap_[key]);
+    return key;
   }
 
- private:
   std::vector<UopKernel*> kmap_;
+  std::vector<std::array<UopKernel*, 3>> alu_kmap_;
 };
 
 enum PipelineStage : int { kNoneStage = 0, kLoadStage = 1, kComputeStage = 2, kStoreStage = 3 };
@@ -1178,12 +1205,13 @@ class CommandQueue {
     this->CheckInsnOverFlow();
   }
 
-  void PushALUUop(void** uop_handle, int (*finit)(void*), void* signature, int nbytes) {
+  void PushALUUop(void** uop_handle, int (*finit)(void*), void* signature, int nbytes,
+                  uint32_t rounding) {
     UopKernelMap** uptr = reinterpret_cast<UopKernelMap**>(uop_handle);
     if (uptr[0] == nullptr) {
       uptr[0] = new UopKernelMap();
     }
-    UopKernel** kptr = uptr[0]->Get(signature, nbytes);
+    UopKernel** kptr = uptr[0]->GetALU(signature, nbytes, rounding);
     if (kptr[0] == nullptr) {
       record_kernel_ = new UopKernel(static_cast<char*>(signature), nbytes);
       CHECK_EQ((*finit)(signature), 0);
@@ -1193,6 +1221,7 @@ class CommandQueue {
       }
       record_kernel_ = nullptr;
     }
+    CHECK_EQ(static_cast<UopKernel*>(kptr[0])->rounding_, rounding);
     this->PushALUUop(static_cast<UopKernel*>(kptr[0]));
     this->CheckInsnOverFlow();
   }
@@ -1263,6 +1292,7 @@ class CommandQueue {
     insn->alu_opcode = kernel->opcode_;
     insn->use_imm = kernel->use_imm_;
     insn->imm = kernel->imm_val_;
+    insn->rounding = kernel->rounding_;
     const std::vector<UopKernel::LoopEntry>& loop = kernel->loop();
     if (loop.size() == 0) {
       insn->iter_out = 1;
@@ -1403,8 +1433,16 @@ void VTAStoreBuffer2D(VTACommandHandle cmd, uint32_t src_sram_index, uint32_t sr
 
 void VTAUopPush(uint32_t mode, uint32_t reset_out, uint32_t dst_index, uint32_t src_index,
                 uint32_t wgt_index, uint32_t opcode, uint32_t use_imm, int32_t imm_val) {
+  VTAUopPushEx(mode, reset_out, dst_index, src_index, wgt_index, opcode, use_imm, imm_val,
+               VTA_ALU_ROUND_NONE);
+}
+
+void VTAUopPushEx(uint32_t mode, uint32_t reset_out, uint32_t dst_index, uint32_t src_index,
+                  uint32_t wgt_index, uint32_t opcode, uint32_t use_imm, int32_t imm_val,
+                  uint32_t rounding) {
   vta::CommandQueue::ThreadLocal()->record_kernel()->Push(mode, reset_out, dst_index, src_index,
-                                                          wgt_index, opcode, use_imm, imm_val);
+                                                          wgt_index, opcode, use_imm, imm_val,
+                                                          rounding);
 }
 
 void VTAUopLoopBegin(uint32_t extent, uint32_t dst_factor, uint32_t src_factor,
@@ -1421,7 +1459,14 @@ int VTAPushGEMMOp(void** uop_handle, int (*finit)(void*), void* signature, int n
 }
 
 int VTAPushALUOp(void** uop_handle, int (*finit)(void*), void* signature, int nbytes) {
-  vta::CommandQueue::ThreadLocal()->PushALUUop(uop_handle, finit, signature, nbytes);
+  vta::CommandQueue::ThreadLocal()->PushALUUop(uop_handle, finit, signature, nbytes,
+                                               VTA_ALU_ROUND_NONE);
+  return 0;
+}
+
+int VTAPushALUOpEx(void** uop_handle, int (*finit)(void*), void* signature, int nbytes,
+                   uint32_t rounding) {
+  vta::CommandQueue::ThreadLocal()->PushALUUop(uop_handle, finit, signature, nbytes, rounding);
   return 0;
 }
 

@@ -242,6 +242,8 @@ typedef struct {
   uint64_t use_imm        : 1;
   /*! \brief Immediate value: allow negative value */
   int64_t imm            : VTA_ALUOP_IMM_BIT_WIDTH;
+  /*! \brief ALU rounding mode */
+  uint64_t rounding      : VTA_ALU_ROUNDING_BIT_WIDTH;
 } VTAAluInsn;
 
 /*! \brief VTA ALU instruction converter */

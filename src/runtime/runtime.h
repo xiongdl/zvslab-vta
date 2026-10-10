@@ -194,6 +194,9 @@ TVM_DLL void VTAStoreBuffer2D(VTACommandHandle cmd, uint32_t src_sram_index,
  */
 TVM_DLL void VTAUopPush(uint32_t mode, uint32_t reset_out, uint32_t dst_index, uint32_t src_index,
                         uint32_t wgt_index, uint32_t opcode, uint32_t use_imm, int32_t imm_val);
+TVM_DLL void VTAUopPushEx(uint32_t mode, uint32_t reset_out, uint32_t dst_index,
+                          uint32_t src_index, uint32_t wgt_index, uint32_t opcode,
+                          uint32_t use_imm, int32_t imm_val, uint32_t rounding);
 
 /*!
  * \brief Mark start of a micro op loop.
@@ -229,6 +232,8 @@ TVM_DLL int VTAPushGEMMOp(void** uop_handle, int (*finit)(void*), void* signatur
  * \return 0 if success.
  */
 TVM_DLL int VTAPushALUOp(void** uop_handle, int (*finit)(void*), void* signature, int nbytes);
+TVM_DLL int VTAPushALUOpEx(void** uop_handle, int (*finit)(void*), void* signature, int nbytes,
+                           uint32_t rounding);
 
 /*!
  * \brief Push dependence token.

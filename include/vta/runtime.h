@@ -43,6 +43,20 @@ extern "C" {
  */
 int VTACheckConfig(uint64_t expected_fingerprint);
 
+/*! Legacy micro-op push, equivalent to VTAUopPushEx with rounding=NONE. */
+void VTAUopPush(uint32_t mode, uint32_t reset_out, uint32_t dst_index, uint32_t src_index,
+                uint32_t wgt_index, uint32_t opcode, uint32_t use_imm, int32_t imm_val);
+
+/*! Push one micro-op with an explicit ALU rounding mode. */
+void VTAUopPushEx(uint32_t mode, uint32_t reset_out, uint32_t dst_index, uint32_t src_index,
+                  uint32_t wgt_index, uint32_t opcode, uint32_t use_imm, int32_t imm_val,
+                  uint32_t rounding);
+
+/*! Push an ALU kernel with rounding included in its cache identity. */
+int VTAPushALUOp(void** uop_handle, int (*finit)(void*), void* signature, int nbytes);
+int VTAPushALUOpEx(void** uop_handle, int (*finit)(void*), void* signature, int nbytes,
+                   uint32_t rounding);
+
 #ifdef __cplusplus
 }
 #endif
