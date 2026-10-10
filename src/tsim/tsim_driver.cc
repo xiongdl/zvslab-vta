@@ -22,6 +22,8 @@
 #include <vta/driver.h>
 #include <vta/dpi/module.h>
 
+#include <cstdio>
+
 #include "../vmem/virtual_memory.h"
 
 namespace vta {
@@ -122,8 +124,7 @@ class Device {
     this->Launch(insn_phy_addr,
                  insn_count,
                  wait_cycles);
-    this->WaitForCompletion(wait_cycles);
-    return 0;
+    return this->WaitForCompletion(wait_cycles, insn_count) ? 0 : 1;
   }
 
  private:
@@ -146,15 +147,27 @@ class Device {
     dpi_->WriteReg(0x00, 0x1);
   }
 
-  void WaitForCompletion(uint32_t wait_cycles) {
-    uint32_t i, val;
-    for (i = 0; i < wait_cycles; i++) {
-      val = dpi_->ReadReg(0x00);
-      val &= 0x2;
-      if (val == 0x2) break;  // finish
+  bool WaitForCompletion(uint32_t wait_cycles, uint32_t insn_count) {
+    uint32_t val = 0;
+    bool completed = false;
+    for (uint32_t i = 0; i < wait_cycles; ++i) {
+      val = dpi_->ReadReg(0x00) & 0x2;
+      if (val == 0x2) {
+        completed = true;
+        break;  // finish
+      }
     }
-    prof_->Update(0, dpi_->ReadReg(0x04));
+    const uint32_t cycle_count = dpi_->ReadReg(0x04);
+    prof_->Update(0, cycle_count);
     dpi_->SimWait();
+    if (!completed) {
+      std::fprintf(stderr,
+                   "TSIM timeout: completion bit not set after %u status polls "
+                   "(instructions=%u, status=0x%x, cycle_count=%u)\n",
+                   wait_cycles, insn_count, val, cycle_count);
+      return false;
+    }
+    return true;
   }
 
   // Profiler

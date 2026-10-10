@@ -237,3 +237,39 @@ runtime/build hashes are recorded for both backend libraries: FSIM
 `5b3fd9b613ba46eca279f25aea6f42f32761bdaf21caaff08537147d9ae861f8`, and
 unchanged Chisel hardware library
 `4570aa8efc3b054bc6feabf1ccfbb8df6674c1831b3b4743dc9d3ab1694ed53c`.
+
+
+## TSIM completion timeout follow-up
+
+The final TSIM acceptance run exposed an intermittent 100,000-case mismatch
+whose original cause is still unproven. During diagnosis, a one-status-poll
+TSIM run showed that the driver returned success even though the completion bit
+was clear (`done=0`, `cycle_count=0`). The driver now returns the existing
+nonzero timeout status and prints a diagnostic containing the status-poll
+budget, instruction count, final status, and hardware `cycle_count`; the
+existing pause behavior is unchanged. The runtime already checks that
+`VTADeviceRun` returns zero before resetting instruction buffers.
+
+Both ALU and convolution probes now use a default budget of 100,000 status
+polls and still stop at the first observed completion. A diagnostic run of
+full 2,048-case chunks observed 8,407 hardware cycles and 394–974 host status
+reads before completion. These are different units; the budget is more than
+102 times the highest observed status-read count. The original zero-output
+chunk did not recur during exact replay or the final fixed-seed run, so timeout
+is a demonstrated false-success mode but is not established as the cause of
+that earlier mismatch.
+
+- A one-case TSIM probe with `--wait-cycles 1` fails with a nonzero status and
+  the `TSIM timeout` diagnostic. Before the fix, this same regression returned
+  success with completion clear.
+- `bash vta/tests/qconv2d/run_tests.sh --backend tsim`: 47 passed in 39.94 s,
+  including the timeout regression, 100,000 fixed-seed cases per rounding
+  mode, and the convolution checks.
+- The FSIM ABI/link smoke passed (1 test); no FSIM library rebuild was needed
+  for this TSIM-driver-only follow-up.
+- Final backend hashes: TSIM
+  `206bbe5e0a114a4c710b8c65711c8b9c477d312bdc110c6c9ac8ea8f7635b048`, FSIM
+  `0cfa583deb1e5362421fa838cd444b07d3a4b8b46132ed5938e9fe2840c48ebf`, and
+  unchanged Chisel hardware `4570aa8efc3b054bc6feabf1ccfbb8df6674c1831b3b4743dc9d3ab1694ed53c`.
+  The ignored `reports/tsim/task5-validation.json` metadata matches these
+  library hashes and records zero FSIM/TSIM mismatches.

@@ -32,6 +32,8 @@
 #include <string>
 #include <vector>
 
+constexpr uint32_t kProbeWaitCycles = 100000;
+
 struct Stage {
   uint32_t opcode;
   uint32_t rounding;
@@ -185,7 +187,8 @@ static void AppendSnapshot(std::vector<VTAGenericInsn>* instructions, Buffer& ou
   }
 }
 
-static void Execute(const std::string& input_path, const std::string& output_path) {
+static void Execute(const std::string& input_path, const std::string& output_path,
+                    uint32_t wait_cycles) {
   std::vector<Stage> stages;
   std::vector<int32_t> input_values = ReadCases(input_path, &stages);
   CheckBackendABI();
@@ -287,7 +290,7 @@ static void Execute(const std::string& input_path, const std::string& output_pat
     Buffer stream(instructions.size() * sizeof(VTAGenericInsn));
     std::memcpy(stream.data, instructions.data(), instructions.size() * sizeof(VTAGenericInsn));
     int status = VTADeviceRun(device, VTAMemGetPhyAddr(stream.data),
-                              static_cast<uint32_t>(instructions.size()), 1000);
+                              static_cast<uint32_t>(instructions.size()), wait_cycles);
     if (status != 0) {
       VTADeviceFree(device);
       throw std::runtime_error("VTADeviceRun failed");
@@ -328,12 +331,27 @@ int main(int argc, char** argv) {
     std::cerr << "alu_probe: backend accepted an invalid ABI fingerprint\n";
     return 0;
   }
-  if (argc != 3) {
-    std::cerr << "usage: alu_probe INPUT.txt OUTPUT.txt\n";
+  std::string input_path;
+  std::string output_path;
+  uint32_t wait_cycles = kProbeWaitCycles;
+  if (argc == 3) {
+    input_path = argv[1];
+    output_path = argv[2];
+  } else if (argc == 5 && std::string(argv[1]) == "--wait-cycles") {
+    const unsigned long parsed_wait_cycles = std::stoul(argv[2]);
+    if (parsed_wait_cycles > std::numeric_limits<uint32_t>::max()) {
+      std::cerr << "alu_probe: wait cycle budget exceeds uint32\n";
+      return 2;
+    }
+    wait_cycles = static_cast<uint32_t>(parsed_wait_cycles);
+    input_path = argv[3];
+    output_path = argv[4];
+  } else {
+    std::cerr << "usage: alu_probe [--wait-cycles N] INPUT.txt OUTPUT.txt\n";
     return 2;
   }
   try {
-    Execute(argv[1], argv[2]);
+    Execute(input_path, output_path, wait_cycles);
   } catch (const std::exception& error) {
     std::cerr << "alu_probe: " << error.what() << '\n';
     return 2;

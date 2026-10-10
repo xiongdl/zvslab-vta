@@ -165,6 +165,19 @@ def test_probe_rejects_wrong_backend_abi(alu_probe):
     assert "backend ABI mismatch" in result.stderr
 
 
+def test_tsim_reports_short_completion_timeout(alu_probe, tmp_path):
+    if os.environ.get("VTA_BACKEND", "fsim") != "tsim":
+        pytest.skip("TSIM completion polling is backend-specific")
+    input_path = tmp_path / "short-timeout.in"
+    output_path = tmp_path / "short-timeout.out"
+    write_probe_input(input_path, [(OP_SHIFT, ROUND_NONE, 0, 0)], [(123, 0)])
+    result = subprocess.run(
+        [str(alu_probe), "--wait-cycles", "1", str(input_path), str(output_path)],
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0, "TSIM returned success before the one-case stream completed"
+    assert "TSIM timeout" in result.stderr
+
+
 def assert_cmsis_equal(probe, function, mode, work_dir, name, cases):
     actual = [None] * len(cases)
     for sign_group, selected in (("right", [(i, case) for i, case in enumerate(cases) if case[2] < 0]),

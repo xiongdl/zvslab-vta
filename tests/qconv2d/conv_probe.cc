@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 
+constexpr uint32_t kProbeWaitCycles = 100000;
+
 struct Buffer {
   explicit Buffer(size_t bytes) : data(VTAMemAlloc(bytes, VTA_NOT_CACHED)), size(bytes) {
     if (!data) throw std::bad_alloc();
@@ -90,7 +92,7 @@ static int RunDevice(VTADeviceHandle device, Buffer& stream,
     }
   }
   const int status = VTADeviceRun(device, VTAMemGetPhyAddr(stream.data),
-                                  instructions.size(), 1000);
+                                  instructions.size(), kProbeWaitCycles);
   if (debug) std::cerr << "end " << phase << " status=" << status << "\n";
   return status;
 }
