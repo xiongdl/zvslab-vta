@@ -128,7 +128,9 @@ Both ALU rounding modes ran 100,000 fixed-seed full-INT32 inputs. The
 convolution compared every INT32 accumulator and final INT8 output. The TSIM
 JSON records zero CMSIS/FSIM, FSIM/TSIM, and TFLite/FSIM differences for the
 default double-rounding mode; the single-rounding TFLite comparison has 13
-differences, each exactly one output unit. Its 13-entry evidence table matches
+differences, each exactly one output unit. The generic TFLite count and maximum
+absolute difference refer to default double rounding; separate single-rounding
+fields record its count and per-mode maximum. Its 13-entry evidence table matches
 the input, weights, bias, accumulator, multiplier, shift, zero point, and
 activation and shows the differing Q31/final-shift rounding increments.
 
@@ -155,9 +157,38 @@ FSIM/RTL immediate-read convention; snapshot and convolution clamp operations
 use dedicated in-place uops. Chunk size includes per-stage, copy, and snapshot
 uop banks. The non-target runtime rejects unsupported opcode/rounding on
 Xilinx and Intel targets. Intel's old kernel has opcode-4 MUL but not RMUL,
-RSFT, or rounding. Xilinx also asserts these restrictions in HLS C simulation;
-a synthesized direct raw-driver rejection was not validated with its vendor
-toolchain, so only the shared runtime API's rejection is claimed there.
+RSFT, or rounding. Xilinx `VTADeviceRun` now scans raw instructions in the
+tracked CMA buffer and rejects unsupported ALU opcodes or nonzero rounding
+before enqueue. HLS assertions remain a C/HLS simulation defense; the
+pre-enqueue check does not depend on synthesized HLS assertion behavior.
 
 The final Task 5 run modified no files under `vta/apps`; generated reports and
 logs remain ignored. `git diff --check` passed.
+
+## Review follow-up
+
+The default `scripts/test_vta_fsim.sh` and `scripts/test_vta_tsim.sh` lists do
+not include `test_dwc.py`; the DwC evidence was therefore collected separately
+after the Task 5 changes using the final `vta_64mac` libraries:
+
+- `env VTA_BACKEND=fsim VTA_PATH="$PWD/vta" TVM_PATH="$PWD/tvm" VTA_CONFIG_FILE="$PWD/vta/config/vta_64mac.json" PYTHONPATH="$PWD/vta/python:$PWD/tvm/python" /Users/xdl/Projects/codex-tvm-vta/.envs/tvm-vta-env/bin/python -m pytest -q vta/tests/python/unittest/test_dwc.py`: 29 passed in 10.64 s.
+- The same command with `VTA_BACKEND=tsim`: 29 passed in 8.21 s.
+- `test_depthwise_conv2d.py::test_real_kws_layer_signed_int32` on FSIM and TSIM, with the same `vta_64mac` config and geometry `[8,8]`: 1 passed on each backend (2.96 s and 3.23 s). The FSIM acceptance summary reported 9,000 DwC operations and 8,000 output bytes.
+
+Xilinx `VTADeviceRun` now resolves the raw instruction physical range only
+within registered CMA allocations, checks the full stream length including
+offset, and rejects unsupported opcode or nonzero rounding before writing
+device registers. Allocation registration, lookup, and removal are protected
+by a mutex. The focused host test
+`pytest -q vta/tests/python/unittest/test_pynq_alu_guard.py` passed and covers
+legacy opcodes 0–4, RMUL rejection, nonzero-rounding rejection, and CMA range
+boundaries. The PYNQ driver passed host `-fsyntax-only` compilation with the
+64mac ABI and temporary declarations for the unavailable board-only CMA API;
+no Xilinx vendor/device toolchain was available.
+
+After correcting the final report summary, `bash
+vta/tests/qconv2d/run_tests.sh --backend tsim --conv-only` passed 14 tests and
+regenerated `reports/tsim/task5-validation.json`. The required generic TFLite
+count and max-difference now both describe default double rounding (0); explicit
+single-rounding fields report 13 differences and max absolute difference 1.
+CMSIS/FSIM and FSIM/TSIM counts remain zero.

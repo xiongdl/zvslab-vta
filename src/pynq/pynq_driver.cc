@@ -21,19 +21,58 @@
  */
 
 #include <vta/driver.h>
+#include <vta/hw_spec.h>
+#include <map>
+#include <mutex>
 #include <thread>
 #include <time.h>
 #include "pynq_driver.h"
+#include "pynq_insn_guard.h"
+
+namespace {
+struct CmaAllocation {
+  void* virtual_address;
+  size_t size;
+};
+
+std::map<vta_phy_addr_t, CmaAllocation> cma_allocations;
+std::mutex cma_allocations_mutex;
+
+void* FindCmaAllocation(vta_phy_addr_t physical_address, size_t size) {
+  std::lock_guard<std::mutex> lock(cma_allocations_mutex);
+  auto allocation = cma_allocations.upper_bound(physical_address);
+  if (allocation == cma_allocations.begin()) return nullptr;
+  --allocation;
+  if (!VTAIsPynqCmaRangeValid(allocation->first, allocation->second.size,
+                              physical_address, size)) {
+    return nullptr;
+  }
+  const uint64_t offset = static_cast<uint64_t>(physical_address) -
+                          static_cast<uint64_t>(allocation->first);
+  return static_cast<uint8_t*>(allocation->second.virtual_address) + offset;
+}
+}  // namespace
 
 
 void* VTAMemAlloc(size_t size, int cached) {
   assert(size <= VTA_MAX_XFER);
   // Rely on the pynq-specific cma library
-  return cma_alloc(size, cached);
+  void* buf = cma_alloc(size, cached);
+  if (buf != nullptr) {
+    const vta_phy_addr_t physical_address = cma_get_phy_addr(buf);
+    std::lock_guard<std::mutex> lock(cma_allocations_mutex);
+    cma_allocations[physical_address] = {buf, size};
+  }
+  return buf;
 }
 
 void VTAMemFree(void* buf) {
   // Rely on the pynq-specific cma library
+  if (buf != nullptr) {
+    const vta_phy_addr_t physical_address = cma_get_phy_addr(buf);
+    std::lock_guard<std::mutex> lock(cma_allocations_mutex);
+    cma_allocations.erase(physical_address);
+  }
   cma_free(buf);
 }
 
@@ -113,6 +152,31 @@ class VTADevice {
   int Run(vta_phy_addr_t insn_phy_addr,
           uint32_t insn_count,
           uint32_t wait_cycles) {
+    const uint64_t insn_bytes_64 =
+        static_cast<uint64_t>(insn_count) * VTA_INS_ELEM_BYTES;
+    if (insn_bytes_64 > SIZE_MAX) {
+      fprintf(stderr, "PYNQ VTADeviceRun: instruction stream size overflows size_t\n");
+      return -1;
+    }
+    const size_t insn_bytes = static_cast<size_t>(insn_bytes_64);
+    void* insns = FindCmaAllocation(insn_phy_addr, insn_bytes);
+    if (insns == nullptr) {
+      fprintf(stderr,
+              "PYNQ VTADeviceRun: instruction stream is outside a tracked CMA allocation\n");
+      return -1;
+    }
+    uint32_t invalid_index = 0;
+    uint32_t invalid_opcode = 0;
+    uint32_t invalid_rounding = 0;
+    if (!VTAValidatePynqInsnStream(insns, insn_count, &invalid_index,
+                                  &invalid_opcode, &invalid_rounding)) {
+      fprintf(stderr,
+              "PYNQ VTADeviceRun: rejecting unsupported ALU instruction %u "
+              "(opcode=%u, rounding=%u); legacy Xilinx hardware supports "
+              "ALU opcodes MIN/MAX/ADD/SHIFT/MUL with rounding=0\n",
+              invalid_index, invalid_opcode, invalid_rounding);
+      return -1;
+    }
     VTAWriteMappedReg(vta_fetch_handle_, VTA_FETCH_INSN_COUNT_OFFSET, insn_count);
     VTAWriteMappedReg(vta_fetch_handle_, VTA_FETCH_INSN_ADDR_OFFSET, insn_phy_addr);
     VTAWriteMappedReg(vta_load_handle_, VTA_LOAD_INP_ADDR_OFFSET, 0);

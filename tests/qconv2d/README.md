@@ -80,6 +80,7 @@ The shared command-queue runtime rejects RMUL/RSFT and nonzero rounding for
 the Xilinx PYNQ/Ultra96/ZCU104 and Intel DE10-Nano targets, whose hardware
 implementations still expose only the legacy ALU set. Intel's low-level OpenCL
 driver also validates raw instruction streams before enqueueing them. The
-Xilinx HLS source asserts this restriction in C/HLS simulation; a direct raw
-stream sent around the shared runtime has no validated hardware error
-response, so that low-level bypass is not a supported rejection interface.
+Xilinx PYNQ driver validates raw instruction streams from tracked CMA buffers
+before enqueueing them; it rejects unsupported opcode/rounding with a specific
+error. Xilinx HLS assertions remain as a C/HLS simulation check. The host guard
+does not depend on synthesized HLS assertion behavior.

@@ -283,7 +283,12 @@ def test_real_per_channel_qconv2d_matches_cmsis_and_explains_tflite(
             "instruction_sha256": instruction_hash,
             "cmsis_fsim_mismatch_count": 0 if backend == "fsim" else None,
             "tflite_fsim_mismatch_count": report["tflite_comparison"]["double"]["difference_count"],
-            "tflite_max_abs_diff": report["tflite_comparison"]["single"]["max_absolute_difference"],
+            "tflite_max_abs_diff": report["tflite_comparison"]["double"]["max_absolute_difference"],
+            "tflite_single_fsim_mismatch_count": report["tflite_comparison"]["single"]["difference_count"],
+            "tflite_max_abs_diff_by_rounding_mode": {
+                mode: report["tflite_comparison"][mode]["max_absolute_difference"]
+                for mode in ("double", "single")
+            },
             "rounding_evidence": report["tflite_single_difference_attribution"],
         })
         if backend == "tsim":
@@ -322,6 +327,10 @@ def test_real_per_channel_qconv2d_matches_cmsis_and_explains_tflite(
                     alu_report["fsim_tsim_mismatch_count"]),
                 "tflite_fsim_mismatch_count": report["tflite_fsim_mismatch_count"],
                 "tflite_max_abs_diff": report["tflite_max_abs_diff"],
+                "tflite_single_fsim_mismatch_count": report[
+                    "tflite_single_fsim_mismatch_count"],
+                "tflite_max_abs_diff_by_rounding_mode": report[
+                    "tflite_max_abs_diff_by_rounding_mode"],
                 "fixture_sha256": fixture_hash,
                 "instruction_sha256": instruction_hash,
                 "rounding_evidence": report["rounding_evidence"],
