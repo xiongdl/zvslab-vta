@@ -26,75 +26,133 @@ import vta.util.config._
 /** ALU datapath */
 class Alu(implicit p: Parameters) extends Module {
   val aluBits = p(CoreKey).accBits
+  val shiftBits = log2Ceil(aluBits)
   val io = IO(new Bundle {
     val opcode = Input(UInt(C_ALU_OP_BITS.W))
+    val rounding = Input(UInt(C_ALU_ROUND_BITS.W))
     val a = Input(SInt(aluBits.W))
     val b = Input(SInt(aluBits.W))
     val y = Output(SInt(aluBits.W))
+    val legal = Output(Bool())
   })
 
-  // FIXME: the following three will change once we support properly SHR and SHL
-  val ub = io.b.asUInt
-  val width = log2Ceil(aluBits)
-  val m = ~ub(width - 1, 0) + 1.U
+  require(aluBits == 32, "RMUL and RSFT require 32-bit accumulator elements")
+  val isRmul = io.opcode === ALU_OP(5)
+  val isRsft = io.opcode === ALU_OP(6)
+  val isKnownOpcode = io.opcode < ALU_OP_NUM.U
+  val roundingIsZero = io.rounding === 0.U
+  val roundingIsSupported = io.rounding =/= 3.U
+  val rsftCountIsLegal = io.b >= 0.S && io.b <= 31.S
 
-  val n = ub(width - 1, 0)
-  // opcode - min:0, max:1, add:2, shr:3, shl:4
-  val fop = Seq(Mux(io.a < io.b, io.a, io.b), Mux(io.a < io.b, io.b, io.a),
-    io.a + io.b, io.a >> n, io.a << m)
+  io.legal := isKnownOpcode &&
+    Mux(isRmul || isRsft, roundingIsSupported, roundingIsZero) &&
+    (!isRsft || rsftCountIsLegal)
 
+  val rightShiftAmount = io.b.asUInt(shiftBits - 1, 0)
+  val leftShiftAmount = (-io.b).asUInt(shiftBits - 1, 0)
+  val rightShift = io.a >> rightShiftAmount
+  val leftShift = (io.a.asUInt << leftShiftAmount)(aluBits - 1, 0).asSInt
+  val shiftResult = Mux(io.b < 0.S, leftShift, rightShift)
+
+  val product = io.a * io.b
+  val mulLow = product.asUInt(aluBits - 1, 0).asSInt
+  val productBits = product.asUInt
+  val productRemainderHalfBit = productBits(30)
+  val productRemainderLowBits = productBits(29, 0)
+  val productAboveHalf = productRemainderHalfBit && productRemainderLowBits.orR
+  val productExactlyHalf = productRemainderHalfBit && !productRemainderLowBits.orR
+  val rmulRoundUp = productRemainderHalfBit
+  val rmulRoundAway = productAboveHalf || (productExactlyHalf && !product(2 * aluBits - 1))
+  val rmulIncrement = Mux(io.rounding === 1.U, rmulRoundUp,
+    Mux(io.rounding === 2.U, rmulRoundAway, false.B))
+  val q31Quotient = product >> 31
+  val q31Increment = Mux(rmulIncrement,
+    1.S((2 * aluBits).W), 0.S((2 * aluBits).W))
+  val rmulResult = (q31Quotient + q31Increment).asUInt(aluBits - 1, 0).asSInt
+
+  val rsftShiftAmount = io.b.asUInt(shiftBits - 1, 0)
+  val safeRsftShiftAmount = Mux(rsftShiftAmount === 0.U, 1.U, rsftShiftAmount)
+  val discardedMask = (1.U(aluBits.W) << safeRsftShiftAmount) - 1.U
+  val discardedBits = io.a.asUInt & discardedMask
+  val rsftHalf = 1.U(aluBits.W) << (safeRsftShiftAmount - 1.U)
+  val rsftAboveHalf = discardedBits > rsftHalf
+  val rsftAtHalf = discardedBits === rsftHalf
+  val rsftRoundUp = discardedBits >= rsftHalf
+  val rsftRoundAway = rsftAboveHalf || (rsftAtHalf && io.a >= 0.S)
+  val rsftIncrement = Mux(io.rounding === 1.U, rsftRoundUp,
+    Mux(io.rounding === 2.U, rsftRoundAway, false.B))
+  val rsftQuotient = io.a >> rsftShiftAmount
+  val rsftResult = (rsftQuotient.asUInt + rsftIncrement.asUInt).asSInt
+
+  val fop = Seq(
+    Mux(io.a < io.b, io.a, io.b),
+    Mux(io.a < io.b, io.b, io.a),
+    io.a + io.b,
+    shiftResult,
+    mulLow,
+    rmulResult,
+    Mux(rsftShiftAmount === 0.U, io.a, rsftResult))
   val opmux = Seq.tabulate(ALU_OP_NUM)(i => ALU_OP(i) -> fop(i))
-  io.y := MuxLookup(io.opcode, io.a, opmux)
+  io.y := Mux(io.legal, MuxLookup(io.opcode, 0.S(aluBits.W), opmux), 0.S(aluBits.W))
 }
 
 /** Pipelined ALU */
 class AluReg(implicit p: Parameters) extends Module {
   val io = IO(new Bundle {
     val opcode = Input(UInt(C_ALU_OP_BITS.W))
+    val rounding = Input(UInt(C_ALU_ROUND_BITS.W))
     val a = Flipped(ValidIO(UInt(p(CoreKey).accBits.W)))
     val b = Flipped(ValidIO(UInt(p(CoreKey).accBits.W)))
     val y = ValidIO(UInt(p(CoreKey).accBits.W))
+    val legal = Output(Bool())
   })
   val alu = Module(new Alu)
   val rA = RegEnable(io.a.bits, io.a.valid)
   val rB = RegEnable(io.b.bits, io.b.valid)
-  val valid = RegNext(io.b.valid)
+  val rOpcode = RegEnable(io.opcode, io.b.valid)
+  val rRounding = RegEnable(io.rounding, io.b.valid)
+  val valid = RegNext(io.b.valid, init=false.B)
 
-  alu.io.opcode := io.opcode
-
-  // register input
+  alu.io.opcode := rOpcode
+  alu.io.rounding := rRounding
   alu.io.a := rA.asSInt
   alu.io.b := rB.asSInt
 
-  // output
   io.y.valid := valid
   io.y.bits := alu.io.y.asUInt
+  io.legal := alu.io.legal
 }
 
 /** Vector of pipeline ALUs */
 class AluVector(implicit p: Parameters) extends Module {
   val io = IO(new Bundle {
     val opcode = Input(UInt(C_ALU_OP_BITS.W))
+    val rounding = Input(UInt(C_ALU_ROUND_BITS.W))
     val acc_a = new TensorMasterData(tensorType = "acc")
     val acc_b = new TensorMasterData(tensorType = "acc")
     val acc_y = new TensorClientData(tensorType = "acc")
     val out = new TensorClientData(tensorType = "out")
+    val legal = Output(Bool())
   })
   val blockOut = p(CoreKey).blockOut
   val f = Seq.fill(blockOut)(Module(new AluReg))
   val valid = Wire(Vec(blockOut, Bool()))
+  val legal = Wire(Vec(blockOut, Bool()))
   for (i <- 0 until blockOut) {
     f(i).io.opcode := io.opcode
+    f(i).io.rounding := io.rounding
     f(i).io.a.valid := io.acc_a.data.valid
     f(i).io.a.bits := io.acc_a.data.bits(0)(i)
     f(i).io.b.valid := io.acc_b.data.valid
     f(i).io.b.bits := io.acc_b.data.bits(0)(i)
     valid(i) := f(i).io.y.valid
+    legal(i) := f(i).io.legal
     io.acc_y.data.bits(0)(i) := f(i).io.y.bits
     io.out.data.bits(0)(i) := f(i).io.y.bits
   }
   io.acc_y.data.valid := valid.asUInt.andR
   io.out.data.valid := valid.asUInt.andR
+  io.legal := legal.asUInt.andR
 }
 
 class TensorAluIndexGenerator(debug: Boolean = false)(implicit p: Parameters) extends Module {
@@ -287,6 +345,7 @@ class TensorAluPipelined(debug: Boolean = false)(implicit p: Parameters) extends
   require(io.out.splitWidth == 1 && io.out.splitLength == 1, "-F- Out split write is not supported")
   val numVecUnits = dataSplitFactor
   val outData = Wire(chiselTypeOf(io.out.wr(0).bits.data))
+  val aluLegal = Wire(Vec(numVecUnits, Bool()))
   val dataRemapB = Wire(Vec(numVecUnits, chiselTypeOf(io.acc.rd(0).data.bits)))
   val dataRemapA = Wire(Vec(numVecUnits, chiselTypeOf(io.acc.rd(0).data.bits)))
   // numVecUnits is a pow of 2
@@ -325,13 +384,11 @@ class TensorAluPipelined(debug: Boolean = false)(implicit p: Parameters) extends
     val tensorOpBits_piped = ShiftRegister(
     decSplit0(idx/(numVecUnits/decSplitNb0)).alu_op,
     if(aluDataReadPipeDelay < 2) aluDataReadPipeDelay else aluDataReadPipeDelay -1)
-    val isSHR = (tensorOpBits_piped === ALU_OP(3))
-    val neg_shift = isSHR & tensorImmBits_piped(C_ALU_IMM_BITS - 1)
-    val fixme_alu_op = Mux(
-      neg_shift,
-      ALU_OP(4), // use opcode = 4 for left shift
-      tensorOpBits_piped)
-    alu.io.opcode := fixme_alu_op
+    val tensorRoundingBitsPiped = ShiftRegister(
+      decSplit0(idx/(numVecUnits/decSplitNb0)).alu_rounding,
+      if(aluDataReadPipeDelay < 2) aluDataReadPipeDelay else aluDataReadPipeDelay -1)
+    alu.io.opcode := tensorOpBits_piped
+    alu.io.rounding := tensorRoundingBitsPiped
 
     assert(!valid_r3 || io.acc.rd(idx).data.valid)
 
@@ -357,7 +414,8 @@ class TensorAluPipelined(debug: Boolean = false)(implicit p: Parameters) extends
       save_src)
 
     assert(alu.io.acc_y.data.valid === valid_r4)
-    io.acc.wr(idx).valid := valid_r4
+    aluLegal(idx) := alu.io.legal
+    io.acc.wr(idx).valid := valid_r4 && alu.io.legal
     io.acc.wr(idx).bits.idx := dst_idx_r4
 
     for(aluLenIdx <- 0 until alu.io.acc_y.lenSplit) {
@@ -378,7 +436,8 @@ class TensorAluPipelined(debug: Boolean = false)(implicit p: Parameters) extends
   }
 
 // comment for split write
-  io.out.wr(0).valid := valid_r4
+  val allAluLegal = aluLegal.asUInt.andR
+  io.out.wr(0).valid := valid_r4 && allAluLegal
   io.out.wr(0).bits.idx := dst_idx_r4
   io.out.wr(0).bits.data := outData
   io.out.tieoffRead()
@@ -520,11 +579,8 @@ class TensorAluOrig(debug: Boolean = false)(implicit p: Parameters) extends Tens
     }
 
     // alu
-    val isSHR = (dec.alu_op === ALU_OP(3))
-    val isSHL = isSHR & dec.alu_imm(C_ALU_IMM_BITS - 1)
-    // opcode - min:0, max:1, add:2, shr:3, shl:4
-    val fixme_alu_op = Cat(isSHL, Mux(isSHL, 0.U, dec.alu_op(1, 0)))
-    alu.io.opcode := fixme_alu_op
+    alu.io.opcode := dec.alu_op
+    alu.io.rounding := dec.alu_rounding
     alu.io.acc_a.data.valid := io.acc.rd(idx).data.valid & state === sReadTensorB
     alu.io.acc_a.data.bits <> io.acc.rd(idx).data.bits
     alu.io.acc_b.data.valid := Mux(dec.alu_use_imm,
@@ -535,12 +591,12 @@ class TensorAluOrig(debug: Boolean = false)(implicit p: Parameters) extends Tens
       io.acc.rd(idx).data.bits)
 
     // acc (output)
-    io.acc.wr(idx).valid := alu.io.acc_y.data.valid
+    io.acc.wr(idx).valid := alu.io.acc_y.data.valid && alu.io.legal
     io.acc.wr(idx).bits.idx := uop_dst
     io.acc.wr(idx).bits.data <> alu.io.acc_y.data.bits
 
     // out
-    io.out.wr(idx).valid := alu.io.out.data.valid
+    io.out.wr(idx).valid := alu.io.out.data.valid && alu.io.legal
     io.out.wr(idx).bits.idx := uop_dst
     io.out.wr(idx).bits.data <> alu.io.out.data.bits
   }

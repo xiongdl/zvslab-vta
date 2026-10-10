@@ -44,6 +44,7 @@ trait ISAConstants {
   val C_ITER_BITS = 14
   val C_ALU_OP_BITS = 3
   val C_ALU_IMM_BITS = 16
+  val C_ALU_ROUND_BITS = 2
 
   val Y = true.B
   val N = false.B
@@ -56,7 +57,7 @@ trait ISAConstants {
   val OP_D = 5.asUInt(OP_BITS.W)
   val OP_X = 5.asUInt(OP_BITS.W)
 
-  val ALU_OP_NUM = 5
+  val ALU_OP_NUM = 7
   val ALU_OP = Enum(ALU_OP_NUM)
 
   val M_ID_U = 0.asUInt(M_ID_BITS.W)
@@ -112,12 +113,17 @@ object InstructionLayout {
   }
 
   def aluHighPaddingBits(p: Parameters): Int = {
-    val payload = 4 * accIndexBits(p) + C_ALU_OP_BITS + 1 + C_ALU_IMM_BITS
-    INST_BITS - (lowPrefixBits(p) + midPaddingBits(p) + payload)
+    val payload = 4 * accIndexBits(p) + C_ALU_OP_BITS + 1 + C_ALU_IMM_BITS + C_ALU_ROUND_BITS
+    val padding = INST_BITS - (lowPrefixBits(p) + midPaddingBits(p) + payload)
+    require(padding >= 0, "ALU instruction layout has no room for the rounding field")
+    padding
   }
 
   def aluOpcodeLsb(p: Parameters): Int =
     lowPrefixBits(p) + midPaddingBits(p) + 4 * accIndexBits(p)
+
+  def aluRoundingLsb(p: Parameters): Int =
+    aluOpcodeLsb(p) + C_ALU_OP_BITS + 1 + C_ALU_IMM_BITS
 
   private def lowPrefixBits(p: Parameters): Int =
     OP_BITS + depBits + resetBits + uopIndexBits(p) + uopEndBits(p) + 2 * C_ITER_BITS

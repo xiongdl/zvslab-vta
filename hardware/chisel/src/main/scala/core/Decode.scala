@@ -93,6 +93,7 @@ class GemmDecode(implicit p: Parameters) extends Bundle {
  */
 class AluDecode(implicit p: Parameters) extends Bundle {
   val empty_1 = UInt(InstructionLayout.aluHighPaddingBits(p).W)
+  val alu_rounding = UInt(C_ALU_ROUND_BITS.W)
   val alu_imm = UInt(C_ALU_IMM_BITS.W)
   val alu_use_imm = Bool()
   val alu_op = UInt(C_ALU_OP_BITS.W)

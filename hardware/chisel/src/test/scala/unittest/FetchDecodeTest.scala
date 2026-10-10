@@ -33,10 +33,12 @@ class AluDecodeProbe(implicit p: Parameters) extends Module {
     val inst = Input(UInt(128.W))
     val opcode = Output(UInt(3.W))
     val immediate = Output(UInt(16.W))
+    val rounding = Output(UInt(2.W))
   })
   val dec = io.inst.asTypeOf(new AluDecode)
   io.opcode := dec.alu_op
   io.immediate := dec.alu_imm
+  io.rounding := dec.alu_rounding
 }
 
 class UopDecodeProbe(implicit p: Parameters) extends Module {
@@ -111,6 +113,7 @@ class FetchDecodeTest extends AnyFlatSpec with ChiselScalatestTester {
   private val aluMul = 4
   // VTAAluInsn.alu_opcode follows the C ABI layout for vta_64mac.json.
   private val aluOpcodeLsb = 104
+  private val aluRoundingLsb = 124
   private val expectedUopIndexBits = log2Ceil(p(CoreKey).uopMemDepth)
   private val expectedUopEndBits = expectedUopIndexBits + 1
 
@@ -145,6 +148,23 @@ class FetchDecodeTest extends AnyFlatSpec with ChiselScalatestTester {
       c.io.inst.poke(inst.U(instBits.W))
       c.io.opcode.expect(aluAdd.U)
       c.io.immediate.expect(0x3456.U)
+    }
+  }
+
+  it should "decode the two rounding bits after the legacy ALU immediate" in {
+    assert(InstructionLayout.aluRoundingLsb(p) == aluRoundingLsb)
+    test(new AluDecodeProbe) { c =>
+      for (rounding <- 0 to 2) {
+        val inst = instruction(taskAlu,
+          (aluShift, aluOpcodeLsb, 3),
+          (1, 107, 1),
+          (0x3456, 108, 16),
+          (rounding, aluRoundingLsb, 2))
+        c.io.inst.poke(inst.U(instBits.W))
+        c.io.opcode.expect(aluShift.U)
+        c.io.immediate.expect(0x3456.U)
+        c.io.rounding.expect(rounding.U)
+      }
     }
   }
 
@@ -217,7 +237,9 @@ class FetchDecodeTest extends AnyFlatSpec with ChiselScalatestTester {
         instruction(taskAlu, (aluMax, aluOpcodeLsb, 3), (0x2345, 108, 16)),
         instruction(taskAlu, (aluAdd, aluOpcodeLsb, 3), (0x3456, 108, 16)),
         instruction(taskAlu, (aluShift, aluOpcodeLsb, 3), (0x4567, 108, 16)),
-        instruction(taskAlu, (aluMul, aluOpcodeLsb, 3), (0x5678, 108, 16))
+        instruction(taskAlu, (aluMul, aluOpcodeLsb, 3), (0x5678, 108, 16)),
+        instruction(taskAlu, (5, aluOpcodeLsb, 3), (0x6789, 108, 16), (1, aluRoundingLsb, 2)),
+        instruction(taskAlu, (6, aluOpcodeLsb, 3), (0x789a, 108, 16), (2, aluRoundingLsb, 2))
       )
 
       instructions.take(2).foreach { inst =>
@@ -243,7 +265,7 @@ class FetchDecodeTest extends AnyFlatSpec with ChiselScalatestTester {
       expectRoute(c, instruction(taskStore, (memIdWeight, 7, 3), (0, 80, 16)),
         load = false, compute = false, store = false)
       expectRoute(c,
-        instruction(taskAlu, (5, aluOpcodeLsb, 3), (0x4567, 108, 16)),
+        instruction(taskAlu, (7, aluOpcodeLsb, 3), (0x4567, 108, 16)),
         load = false, compute = false, store = false)
     }
   }

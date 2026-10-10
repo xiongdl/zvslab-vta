@@ -27,10 +27,11 @@ import org.scalatest.flatspec.AnyFlatSpec
 import vta.DefaultPynqConfig
 
 class GenericTest[T <: Module, P <: PeekPokeTester[T], C <: Parameters](
-    tag : String, dutFactory : (Parameters) => T, testerFactory : (T) => P
+    tag : String, dutFactory : (Parameters) => T, testerFactory : (T) => P,
+    testConfig: Parameters = new DefaultPynqConfig
   ) extends AnyFlatSpec with ChiselScalatestTester {
 
-  implicit val p: Parameters = new DefaultPynqConfig
+  implicit val p: Parameters = testConfig
   val defaultOpts = Seq(TreadleBackendAnnotation)
 
   behavior of tag

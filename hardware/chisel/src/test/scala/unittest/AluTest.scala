@@ -48,17 +48,24 @@ object Alu_ref {
       for (i <- 0 until size) {
         res(i) = a(i) + b(i)
       }
-    } else if (opcode == 3) { // right shift
+    } else if (opcode == 3) { // signed right shift or wrapped left shift
       for (i <- 0 until size) {
-        res(i) = a(i) >> (b(i) & mask).toInt
+        val amount = ((if (b(i) < 0) -b(i) else b(i)) & mask).toInt
+        res(i) = if (b(i) < 0) a(i) << amount else a(i) >> amount
       }
-    } else if (opcode == 4) { // left shift
-      // HLS shift left by >> negative number
-      // b always < 0 when opcode == 4
+    } else if (opcode == 4) { // signed multiply, low 32 bits
       for (i <- 0 until size) {
-        res(i) = a(i) << ((-1*b(i)) & mask).toInt
+        res(i) = a(i) * b(i)
       }
-    } else { // default
+    } else if (opcode == 5) { // Q31 multiply, truncating
+      for (i <- 0 until size) {
+        res(i) = (BigInt(a(i)) * BigInt(b(i)) >> 31).toInt
+      }
+    } else if (opcode == 6) { // arithmetic right shift
+      for (i <- 0 until size) {
+        res(i) = a(i) >> b(i)
+      }
+    } else {
       for (i <- 0 until size) {
         res(i) = 0
       }
@@ -76,7 +83,7 @@ class AluVectorTester(c: AluVector, seed: Int = 47) extends PeekPokeTester(c) {
     val bits = c.io.acc_a.tensorElemBits
     val dataGen = new RandomArray(c.blockOut, bits, r)
     val in_a = dataGen.any
-    val in_b = if (op != 4) dataGen.any else dataGen.negative
+    val in_b = if (op == 6) Array.fill(c.blockOut)(r.nextInt(32)) else dataGen.any
     val mask = Helper.getMask(bits)
     val res = Alu_ref.alu(op, in_a, in_b, bits)
 
@@ -85,6 +92,7 @@ class AluVectorTester(c: AluVector, seed: Int = 47) extends PeekPokeTester(c) {
       poke(c.io.acc_b.data.bits(0)(i), in_b(i) & mask)
     }
     poke(c.io.opcode, op)
+    poke(c.io.rounding, 0)
 
     poke(c.io.acc_a.data.valid, 1)
     poke(c.io.acc_b.data.valid, 1)
