@@ -115,4 +115,4 @@ class AluVectorTester(c: AluVector, seed: Int = 47) extends PeekPokeTester(c) {
 }
 
 class AluTest extends GenericTest("AluTest", (p:Parameters) =>
-  new AluVector()(p), (c:AluVector) => new AluVectorTester(c, 48))
+  new AluVector(None)(p), (c:AluVector) => new AluVectorTester(c, 48))

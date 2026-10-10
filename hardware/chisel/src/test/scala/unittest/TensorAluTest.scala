@@ -259,10 +259,13 @@ class TensorAluPipelinedTest extends GenericTest("TensorAluPipelined", (p:Parame
   new TensorAlu()(p), (c:TensorAlu) => new TensorAluPipelinedTester(c),
   new DefaultTsimConfig)
 
-class TensorAluPathRequantizeTester[T <: TensorAluIfc](c: T) extends PeekPokeTester[T](c) {
+class TensorAluPathRequantizeTester[T <: TensorAluIfc](
+    c: T,
+    mixedGroupOnly: Boolean = false) extends PeekPokeTester[T](c) {
   private val dstAddresses = Seq(0, 1, 2, 3).map(BigInt(_))
   private val srcAddresses = Seq(4, 5, 6, 7).map(BigInt(_))
-  private val accMemory = mutable.Map.empty[BigInt, Int].withDefaultValue(0)
+  private val accMemory = mutable.Map.empty[BigInt, Seq[Int]].withDefaultValue(
+    Seq.fill(c.io.acc.tensorWidth)(0))
   private var pendingUop = false
   private val pendingAcc = Array.fill[Option[BigInt]](c.io.acc.rd.length)(None)
   private val ioEvents = mutable.ArrayBuffer.empty[String]
@@ -299,9 +302,16 @@ class TensorAluPathRequantizeTester[T <: TensorAluIfc](c: T) extends PeekPokeTes
     for (group <- 0 until c.io.acc.rd.length) {
       val response = pendingAcc(group)
       poke(c.io.acc.rd(group).data.valid, response.isDefined)
-      val value = response.map(address => accMemory(address)).getOrElse(0)
-      c.io.acc.rd(group).data.bits.foreach(_.foreach(lane => poke(lane, wordBits(value))))
-      response.foreach(address => record(s"acc response group=$group address=$address value=$value"))
+      val values = response.map(address => accMemory(address)).getOrElse(
+        Seq.fill(c.io.acc.tensorWidth)(0))
+      val groupValues = values.slice(group * c.io.acc.widthSplit, (group + 1) * c.io.acc.widthSplit)
+      c.io.acc.rd(group).data.bits.zipWithIndex.foreach { case (row, rowIndex) =>
+        row.zipWithIndex.foreach { case (lane, laneIndex) =>
+          poke(lane, wordBits(groupValues(rowIndex * c.io.acc.widthSplit + laneIndex)))
+        }
+      }
+      response.foreach(address => record(
+        s"acc response group=$group address=$address values=$groupValues"))
     }
     if (pendingUop) record("uop response index=0")
   }
@@ -322,26 +332,30 @@ class TensorAluPathRequantizeTester[T <: TensorAluIfc](c: T) extends PeekPokeTes
     valid: Bool,
     index: UInt,
     data: Vec[Vec[UInt]],
-    expected: Map[BigInt, Int],
+    expected: Map[BigInt, Seq[Int]],
     dataMask: BigInt,
-    writes: mutable.Set[BigInt]): Unit = {
+    writes: mutable.Set[BigInt],
+    laneOffset: Int = 0): Unit = {
     if (peek(valid) != 0) {
       val address = peek(index)
       assert(expected.contains(address), s"unexpected TensorAlu write at $address")
-      val value = wordBits(expected(address)) & dataMask
-      val actual = data.map(_.map(lane => peek(lane)))
-      assert(actual.flatten.forall(_ == value),
-        s"TensorAlu write address=$address data=$actual expected=$value; IO: ${ioEvents.mkString(" | ")}")
+      val expectedLanes = expected(address)
+        .slice(laneOffset, laneOffset + data.head.length).map(wordBits(_) & dataMask)
+      val actual = data.map(_.map(lane => peek(lane))).flatten
+      assert(actual == expectedLanes,
+        s"TensorAlu write address=$address data=$actual expected=$expectedLanes; " +
+          s"IO: ${ioEvents.mkString(" | ")}")
       record(s"write address=$address data=$actual")
       writes += address
     }
   }
 
-  private def cycle(expected: Map[BigInt, Int], writes: mutable.Set[BigInt]): Boolean = {
+  private def cycle(expected: Map[BigInt, Seq[Int]], writes: mutable.Set[BigInt]): Boolean = {
     val doneBeforeEdge = peek(c.io.done) != 0
     for (group <- 0 until c.io.acc.wr.length) {
       checkWrite(c.io.acc.wr(group).valid, c.io.acc.wr(group).bits.idx,
-        c.io.acc.wr(group).bits.data, expected, accDataMask, writes)
+        c.io.acc.wr(group).bits.data, expected, accDataMask, writes,
+        laneOffset = group * c.io.acc.widthSplit)
     }
     for (group <- 0 until c.io.out.wr.length) {
       checkWrite(c.io.out.wr(group).valid, c.io.out.wr(group).bits.idx,
@@ -351,7 +365,8 @@ class TensorAluPathRequantizeTester[T <: TensorAluIfc](c: T) extends PeekPokeTes
     val doneAfterEdge = peek(c.io.done) != 0
     for (group <- 0 until c.io.acc.wr.length) {
       checkWrite(c.io.acc.wr(group).valid, c.io.acc.wr(group).bits.idx,
-        c.io.acc.wr(group).bits.data, expected, accDataMask, writes)
+        c.io.acc.wr(group).bits.data, expected, accDataMask, writes,
+        laneOffset = group * c.io.acc.widthSplit)
     }
     for (group <- 0 until c.io.out.wr.length) {
       checkWrite(c.io.out.wr(group).valid, c.io.out.wr(group).bits.idx,
@@ -367,15 +382,21 @@ class TensorAluPathRequantizeTester[T <: TensorAluIfc](c: T) extends PeekPokeTes
     rounding: Int,
     lhs: Option[Int],
     rhs: Int,
-    result: Option[Int]): Unit = {
+    result: Option[Int],
+    rhsByLane: Option[Seq[Int]] = None,
+    resultByLane: Option[Seq[Int]] = None): Unit = {
     ioEvents.clear()
     record(s"command opcode=$opcode rounding=$rounding lhs=$lhs rhs=$rhs result=$result")
     setDecode(opcode, rounding)
     for (i <- dstAddresses.indices) {
-      lhs.foreach(value => accMemory(dstAddresses(i)) = value)
-      accMemory(srcAddresses(i)) = rhs
+      lhs.foreach(value => accMemory(dstAddresses(i)) = Seq.fill(c.io.acc.tensorWidth)(value))
+      accMemory(srcAddresses(i)) = rhsByLane.getOrElse(
+        Seq.fill(c.io.acc.tensorWidth)(rhs))
     }
-    val expected = result.map(value => dstAddresses.map(_ -> value).toMap).getOrElse(Map.empty)
+    val resultValues = resultByLane.orElse(result.map(
+      value => Seq.fill(c.io.acc.tensorWidth)(value)))
+    val expected: Map[BigInt, Seq[Int]] = resultValues.map(
+      values => dstAddresses.map(_ -> values).toMap).getOrElse(Map.empty)
     val writes = mutable.Set.empty[BigInt]
     poke(c.io.start, 1)
     var done = cycle(expected, writes)
@@ -399,17 +420,28 @@ class TensorAluPathRequantizeTester[T <: TensorAluIfc](c: T) extends PeekPokeTes
   for (group <- 0 until c.io.acc.rd.length) poke(c.io.acc.rd(group).data.valid, 0)
   step(1)
 
-  runCommand(opcode = 3, rounding = 0, lhs = Some(-3), rhs = -2, result = Some(-12))
-  runCommand(opcode = 4, rounding = 0, lhs = Some(-3), rhs = 7, result = Some(-21))
+  if (mixedGroupOnly) {
+    val legalShifts = Seq.tabulate(c.io.acc.tensorWidth)(_ % 4)
+    val legalResults = legalShifts.map(5 >> _)
+    runCommand(opcode = 6, rounding = 0, lhs = Some(5), rhs = 1, result = None,
+      rhsByLane = Some(legalShifts), resultByLane = Some(legalResults))
 
-  // Two loop dimensions exercise src/dst loop factors while each lane keeps its own value.
-  runCommand(opcode = 5, rounding = 1, lhs = Some(1), rhs = 1 << 30, result = Some(1))
-  runCommand(opcode = 6, rounding = 2, lhs = None, rhs = 1, result = Some(1))
-  runCommand(opcode = 5, rounding = 0, lhs = Some(1), rhs = 1 << 30, result = Some(0))
-  runCommand(opcode = 6, rounding = 1, lhs = None, rhs = 1, result = Some(0))
+    val mixedShifts = legalShifts.updated(c.io.acc.widthSplit, 32)
+    runCommand(opcode = 6, rounding = 1, lhs = Some(5), rhs = 1, result = None,
+      rhsByLane = Some(mixedShifts))
+  } else {
+    runCommand(opcode = 3, rounding = 0, lhs = Some(-3), rhs = -2, result = Some(-12))
+    runCommand(opcode = 4, rounding = 0, lhs = Some(-3), rhs = 7, result = Some(-21))
 
-  runCommand(opcode = 6, rounding = 2, lhs = Some(5), rhs = 32, result = None)
-  runCommand(opcode = 5, rounding = 3, lhs = Some(5), rhs = 1 << 30, result = None)
+    // Two loop dimensions exercise src/dst loop factors while each lane keeps its own value.
+    runCommand(opcode = 5, rounding = 1, lhs = Some(1), rhs = 1 << 30, result = Some(1))
+    runCommand(opcode = 6, rounding = 2, lhs = None, rhs = 1, result = Some(1))
+    runCommand(opcode = 5, rounding = 0, lhs = Some(1), rhs = 1 << 30, result = Some(0))
+    runCommand(opcode = 6, rounding = 1, lhs = None, rhs = 1, result = Some(0))
+
+    runCommand(opcode = 6, rounding = 2, lhs = Some(5), rhs = 32, result = None)
+    runCommand(opcode = 5, rounding = 3, lhs = Some(5), rhs = 1 << 30, result = None)
+  }
 }
 
 class TensorAluPipelinedRequantizeTest extends GenericTest("TensorAluPipelinedRequantize",
@@ -421,3 +453,16 @@ class TensorAluOrigRequantizeTest extends GenericTest("TensorAluOrigRequantize",
   (p: Parameters) => new TensorAluOrig()(p),
   (c: TensorAluOrig) => new TensorAluPathRequantizeTester(c),
   new DefaultTsimConfig)
+
+private object TensorAluSplitGroupTestConfig {
+  private val base = new DefaultTsimConfig
+  val factorTwo: Parameters = base.alterPartial {
+    case CoreKey => base(CoreKey).copy(blockOutFactor = 2)
+  }
+}
+
+class TensorAluPipelinedMixedGroupRequantizeTest extends GenericTest(
+  "TensorAluPipelinedMixedGroupRequantize",
+  (p: Parameters) => new TensorAlu()(p),
+  (c: TensorAlu) => new TensorAluPathRequantizeTester(c, mixedGroupOnly = true),
+  TensorAluSplitGroupTestConfig.factorTwo)

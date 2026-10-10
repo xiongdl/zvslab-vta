@@ -131,7 +131,7 @@ class AluRequantizeTest extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "AluRequantize"
 
   it should "match reproducible CMSIS-NN double- and single-rounding vectors through per-lane RMUL and RSFT" in {
-    test(new AluVector) { c =>
+    test(new AluVector()) { c =>
       val cases = cmsisGoldens
       assert(cases.size >= c.blockOut, s"need at least ${c.blockOut} fixed CMSIS lanes")
       val modes = Seq(
@@ -173,7 +173,7 @@ class AluRequantizeTest extends AnyFlatSpec with ChiselScalatestTester {
   }
 
   it should "round full signed Q31 products for every rounding mode" in {
-    test(new AluVector) { c =>
+    test(new AluVector()) { c =>
       val values = Seq(Int.MinValue, Int.MinValue + 1, -1073741825, -7, -3, -1, 0,
         1, 3, 7, 1073741825, Int.MaxValue)
       val multipliers = Seq(Int.MinValue, Int.MaxValue, 1879048193, 1 << 30, 1 << 30,
@@ -194,7 +194,7 @@ class AluRequantizeTest extends AnyFlatSpec with ChiselScalatestTester {
   }
 
   it should "use each lane's own shift for signed RSFT ties, zero, and shift 31" in {
-    test(new AluVector) { c =>
+    test(new AluVector()) { c =>
       val values = Seq(5, 7, -5, -7, 15, -15, Int.MaxValue, Int.MinValue, 1, -1)
       val shifts = Seq(0, 2, 1, 1, 2, 2, 31, 31, 1, 31)
       for (rounding <- 0 to 2) {

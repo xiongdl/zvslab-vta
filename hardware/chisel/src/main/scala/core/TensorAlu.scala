@@ -124,7 +124,7 @@ class AluReg(implicit p: Parameters) extends Module {
 }
 
 /** Vector of pipeline ALUs */
-class AluVector(implicit p: Parameters) extends Module {
+class AluVector(groupWidth: Option[Int] = None)(implicit p: Parameters) extends Module {
   val io = IO(new Bundle {
     val opcode = Input(UInt(C_ALU_OP_BITS.W))
     val rounding = Input(UInt(C_ALU_ROUND_BITS.W))
@@ -134,7 +134,9 @@ class AluVector(implicit p: Parameters) extends Module {
     val out = new TensorClientData(tensorType = "out")
     val legal = Output(Bool())
   })
-  val blockOut = p(CoreKey).blockOut
+  val blockOut = groupWidth.getOrElse(p(CoreKey).blockOut)
+  require(blockOut > 0 && blockOut <= p(CoreKey).blockOut,
+    "ALU group width must be within the configured blockOut width")
   val f = Seq.fill(blockOut)(Module(new AluReg))
   val valid = Wire(Vec(blockOut, Bool()))
   val legal = Wire(Vec(blockOut, Bool()))
@@ -149,6 +151,9 @@ class AluVector(implicit p: Parameters) extends Module {
     legal(i) := f(i).io.legal
     io.acc_y.data.bits(0)(i) := f(i).io.y.bits
     io.out.data.bits(0)(i) := f(i).io.y.bits
+  }
+  for (i <- blockOut until io.out.tensorWidth) {
+    io.out.data.bits(0)(i) := 0.U
   }
   io.acc_y.data.valid := valid.asUInt.andR
   io.out.data.valid := valid.asUInt.andR
@@ -346,6 +351,7 @@ class TensorAluPipelined(debug: Boolean = false)(implicit p: Parameters) extends
   val numVecUnits = dataSplitFactor
   val outData = Wire(chiselTypeOf(io.out.wr(0).bits.data))
   val aluLegal = Wire(Vec(numVecUnits, Bool()))
+  val allAluLegal = Wire(Bool())
   val dataRemapB = Wire(Vec(numVecUnits, chiselTypeOf(io.acc.rd(0).data.bits)))
   val dataRemapA = Wire(Vec(numVecUnits, chiselTypeOf(io.acc.rd(0).data.bits)))
   // numVecUnits is a pow of 2
@@ -357,7 +363,7 @@ class TensorAluPipelined(debug: Boolean = false)(implicit p: Parameters) extends
   }
 
   for (idx <- 0 until numVecUnits) {
-    val alu = Module(new AluVector)
+    val alu = Module(new AluVector(Some(p(CoreKey).blockOut / dataSplitFactor)))
 
     for(aluLenIdx <- 0 until alu.io.acc_b.lenSplit) {
       for(aluWdtIdx <- 0 until alu.io.acc_b.widthSplit) {
@@ -415,7 +421,7 @@ class TensorAluPipelined(debug: Boolean = false)(implicit p: Parameters) extends
 
     assert(alu.io.acc_y.data.valid === valid_r4)
     aluLegal(idx) := alu.io.legal
-    io.acc.wr(idx).valid := valid_r4 && alu.io.legal
+    io.acc.wr(idx).valid := valid_r4 && allAluLegal
     io.acc.wr(idx).bits.idx := dst_idx_r4
 
     for(aluLenIdx <- 0 until alu.io.acc_y.lenSplit) {
@@ -436,7 +442,7 @@ class TensorAluPipelined(debug: Boolean = false)(implicit p: Parameters) extends
   }
 
 // comment for split write
-  val allAluLegal = aluLegal.asUInt.andR
+  allAluLegal := aluLegal.asUInt.andR
   io.out.wr(0).valid := valid_r4 && allAluLegal
   io.out.wr(0).bits.idx := dst_idx_r4
   io.out.wr(0).bits.data := outData
@@ -460,7 +466,7 @@ class TensorAluOrig(debug: Boolean = false)(implicit p: Parameters) extends Tens
   val sIdle :: sReadUop :: sComputeIdx :: sReadTensorA :: sReadTensorB :: sExe :: Nil =
     Enum(6)
   val state = RegInit(sIdle)
-  val alu = Module(new AluVector)
+  val alu = Module(new AluVector())
   val dec = io.dec
   val uop_idx = Reg(chiselTypeOf(dec.uop_end))
   val uop_end = dec.uop_end
