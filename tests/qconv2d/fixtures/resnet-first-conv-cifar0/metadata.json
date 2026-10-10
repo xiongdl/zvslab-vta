@@ -1,0 +1,114 @@
+{
+  "driver_fixture_sha256": "1521fe79ba0c6ce5a262392318d14e8e162f85086e8f22520aaa43f58eb8162f",
+  "fixture_sha256": "91affaa44efd90848be4214cce93d8ca86f4e0110fd62b1ced6d5b4aab83638d",
+  "input_preprocessing": "uint8 pixel values minus 128, cast int8",
+  "input_sha256": "9f2b799d8a7d23ea057764d98841e08038753212d8fcb06b4b8f28a859926511",
+  "input_source": "/Users/xdl/Projects/codex-tvm-vta/.envs/cifar-10-batches-py/test_batch",
+  "model": "/Users/xdl/Projects/codex-tvm-vta/.envs/tiny-v1.4/benchmark/training/image_classification/trained_models/pretrainedResnet_quant.tflite",
+  "model_sha256": "3c002613d1b2475eb51dd78dfb85a546c8ae658dee71cf6ade43b022fe205415",
+  "operator": {
+    "dilation": [
+      1,
+      1
+    ],
+    "fused_activation": "RELU",
+    "index": 0,
+    "name": "CONV_2D",
+    "padding": "SAME",
+    "stride": [
+      1,
+      1
+    ]
+  },
+  "quantization": {
+    "bias_scale": [
+      8.9026361820288e-05,
+      2.816817504935898e-05,
+      7.0185364165809e-05,
+      9.306446008849889e-05,
+      7.543717947555706e-05,
+      5.3322684834711254e-05,
+      7.52353880670853e-05,
+      0.00011739469482563436,
+      5.2109058742644265e-05,
+      5.2464638429228216e-05,
+      2.5116405595326796e-05,
+      4.9105568905361e-05,
+      7.889515109127387e-05,
+      1.4430916962737683e-05,
+      2.677156044228468e-05,
+      0.00016691285418346524
+    ],
+    "bias_zero_point": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "input_scale": 1.0,
+    "input_zero_point": -128,
+    "output_scale": 0.039393551647663116,
+    "output_zero_point": -128,
+    "weight_quantized_dimension": 0,
+    "weight_scale": [
+      8.9026361820288e-05,
+      2.816817504935898e-05,
+      7.0185364165809e-05,
+      9.306446008849889e-05,
+      7.543717947555706e-05,
+      5.3322684834711254e-05,
+      7.52353880670853e-05,
+      0.00011739469482563436,
+      5.2109058742644265e-05,
+      5.2464638429228216e-05,
+      2.5116405595326796e-05,
+      4.9105568905361e-05,
+      7.889515109127387e-05,
+      1.4430916962737683e-05,
+      2.677156044228468e-05,
+      0.00016691285418346524
+    ],
+    "weight_zero_point": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "runtime": {
+    "numpy": "1.26.4",
+    "python": "3.11.16",
+    "tensorflow": "2.15.0"
+  },
+  "sample_index": 0,
+  "tensor_indices": {
+    "bias": 3,
+    "input": 0,
+    "output": 22,
+    "weight": 8
+  }
+}
