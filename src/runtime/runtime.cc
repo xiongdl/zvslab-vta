@@ -327,6 +327,17 @@ class UopKernel {
       CHECK_LE(opcode, VTA_ALU_OPCODE_RSFT);
       CHECK(rounding == VTA_ALU_ROUND_NONE || opcode == VTA_ALU_OPCODE_RMUL ||
             opcode == VTA_ALU_OPCODE_RSFT);
+#if defined(VTA_TARGET_PYNQ) || defined(VTA_TARGET_ULTRA96) || defined(VTA_TARGET_ZCU104)
+      CHECK(opcode <= VTA_ALU_OPCODE_MUL)
+          << "Xilinx FPGA VTA target does not support RMUL or RSFT";
+      CHECK_EQ(rounding, VTA_ALU_ROUND_NONE)
+          << "Xilinx FPGA VTA target does not support ALU rounding modes";
+#elif defined(VTA_TARGET_DE10_NANO)
+      CHECK(opcode <= VTA_ALU_OPCODE_MUL)
+          << "Intel FPGA VTA target does not support RMUL or RSFT";
+      CHECK_EQ(rounding, VTA_ALU_ROUND_NONE)
+          << "Intel FPGA VTA target does not support ALU rounding modes";
+#endif
       if (opcode_ == 0xFFFFFFFF) {
         opcode_ = opcode;
         use_imm_ = use_imm;

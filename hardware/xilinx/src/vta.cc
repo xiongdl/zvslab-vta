@@ -334,6 +334,13 @@ void alu(
 #pragma HLS INLINE
 
   VTAAluInsn insn = *((VTAAluInsn *) &insn_raw);
+  // This HLS implementation supports only the legacy ALU set. Keep the
+  // boundary explicit so RMUL/RSFT or rounding cannot fall through as a
+  // successful instruction with an unwritten output tensor.
+  assert(insn.alu_opcode <= VTA_ALU_OPCODE_MUL &&
+         "Xilinx VTA ALU supports MIN/MAX/ADD/SHIFT/MUL only");
+  assert(insn.rounding == VTA_ALU_ROUND_NONE &&
+         "Xilinx VTA ALU does not support rounding modes");
 
   // Loop offset
   acc_idx_T dst_offset_out = 0;

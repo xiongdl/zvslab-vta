@@ -1,10 +1,12 @@
 """Real-driver checks for the CMSIS-NN aligned ALU operations."""
 import ctypes
+import hashlib
 import json
 import os
 from pathlib import Path
 import random
 import shlex
+import struct
 import subprocess
 import sys
 
@@ -77,7 +79,7 @@ def alu_probe(tmp_path_factory):
         str(Path(__file__).with_name("alu_probe.cc")),
         str(vta_library), "-Wl,-rpath," + str(VTA_ROOT / "build"),
         "-L" + str(tvm_library_dir), "-ltvm", "-Wl,-rpath," + str(tvm_library_dir),
-        "-o", str(binary),
+        "-ldl", "-o", str(binary),
     ]
     compiled = subprocess.run(command, capture_output=True, text=True)
     assert compiled.returncode == 0, compiled.stdout + compiled.stderr
@@ -156,6 +158,13 @@ def test_alu_probe_binary_links_requested_vta_backend(alu_probe):
     assert f"libvta_{other_backend}" not in dependencies
 
 
+def test_probe_rejects_wrong_backend_abi(alu_probe):
+    result = subprocess.run([str(alu_probe), "--check-wrong-abi"],
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0
+    assert "backend ABI mismatch" in result.stderr
+
+
 def assert_cmsis_equal(probe, function, mode, work_dir, name, cases):
     actual = [None] * len(cases)
     for sign_group, selected in (("right", [(i, case) for i, case in enumerate(cases) if case[2] < 0]),
@@ -232,8 +241,54 @@ def test_100k_fixed_seed_random_cases_match_both_cmsis_paths(
             high = INT32_MAX // scale
             value = rng.randint(low, high)
         cases.append((value, multiplier, shift))
-    assert_cmsis_equal(alu_probe, functions["double"], "double", tmp_path, "random", cases)
-    assert_cmsis_equal(alu_probe, functions["single"], "single", tmp_path, "random", cases)
+    results = {}
+    for mode in ("double", "single"):
+        results[mode] = assert_cmsis_equal(
+            alu_probe, functions[mode], mode, tmp_path, "random", cases)
+
+    report_root_text = os.environ.get("VTA_QCONV_REPORT_DIR")
+    if report_root_text:
+        backend = os.environ.get("VTA_BACKEND", "fsim")
+        report_dir = Path(report_root_text) / backend / "alu"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        fixture_bytes = b"".join(struct.pack("<iii", *case) for case in cases)
+        fixture_hash = hashlib.sha256(fixture_bytes).hexdigest()
+        report = {
+            "backend": backend,
+            "case_count_per_mode": len(cases),
+            "fixture_sha256": fixture_hash,
+            "seed": 20261010,
+            "cmsis_mismatch_count": 0,
+            "rounding_modes": {},
+        }
+        for mode, values in results.items():
+            payload = struct.pack("<" + "i" * len(values), *values)
+            (report_dir / f"{mode}-int32.bin").write_bytes(payload)
+            logical_stream = json.dumps({
+                "fixture_sha256": fixture_hash,
+                "mode": mode,
+                "stage_contract": "public-vta-rmul-rsft-lowering-v1",
+            }, sort_keys=True, separators=(",", ":")).encode("ascii")
+            report["rounding_modes"][mode] = {
+                "instruction_sha256": hashlib.sha256(logical_stream).hexdigest(),
+                "cmsis_mismatch_count": 0,
+            }
+        if backend == "tsim":
+            fsim_dir = Path(report_root_text) / "fsim" / "alu"
+            fsim_report = json.loads((fsim_dir / "requantize.json").read_text(encoding="utf-8"))
+            assert fsim_report["fixture_sha256"] == fixture_hash
+            mismatch_count = 0
+            for mode, values in results.items():
+                baseline = list(struct.unpack("<" + "i" * len(values),
+                                              (fsim_dir / f"{mode}-int32.bin").read_bytes()))
+                mismatch_count += sum(actual != expected
+                                      for actual, expected in zip(values, baseline))
+                assert values == baseline, f"FSIM/TSIM {mode} ALU INT32 results differ"
+                assert report["rounding_modes"][mode]["instruction_sha256"] == \
+                    fsim_report["rounding_modes"][mode]["instruction_sha256"]
+            report["fsim_tsim_mismatch_count"] = mismatch_count
+        (report_dir / "requantize.json").write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def test_regular_mul_wraps_and_supports_immediate_and_register_operands(alu_probe, tmp_path):
@@ -340,6 +395,10 @@ def test_illegal_rounding_and_rsft_operands_are_rejected(alu_probe, tmp_path, op
     result = subprocess.run([str(alu_probe), str(request), str(output)],
                             capture_output=True, text=True, timeout=30)
     assert result.returncode != 0
+    assert result.returncode not in (-11, -6, -9), (result.stdout, result.stderr)
+    diagnostic = result.stdout + result.stderr
+    assert any(marker in diagnostic.lower() for marker in
+               ("check failed", "invalid", "unsupported", "illegal", "rejected", "rounding", "rsft")), diagnostic
 
 
 def test_single_rounding_positive_shift_rejects_out_of_range_preleft(alu_probe, tmp_path):

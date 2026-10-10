@@ -21,6 +21,7 @@
 #include <dmlc/logging.h>
 #include <vta/hw_spec.h>
 #include <cstring>
+#include <iostream>
 #include <numeric>
 
 #define CL_STATUS_SUCCESS(x) ((x) == CL_SUCCESS)
@@ -207,6 +208,25 @@ int OCLFPGADevice::executeInstructions(focl_mem_off_t offset, size_t count) {
   unsigned int argi;
   unsigned int insn_offset = offset / VTA_INS_ELEM_BYTES;
   unsigned int insn_count = count;
+  // The Intel OpenCL kernel predates RMUL/RSFT and does not decode rounding.
+  // Reject these instructions on the host before the device can silently
+  // leave the corresponding output tensor unwritten.
+  for (size_t index = 0; index < count; ++index) {
+    VTAGenericInsn generic{};
+    readMem(offset + index * VTA_INS_ELEM_BYTES, &generic, sizeof(generic));
+    if (generic.opcode != VTA_OPCODE_ALU) continue;
+    const auto& alu = reinterpret_cast<const VTAAluInsn&>(generic);
+    if (alu.alu_opcode > VTA_ALU_OPCODE_MUL) {
+      std::cerr << "Intel FPGA backend rejects unsupported ALU opcode "
+                << alu.alu_opcode << std::endl;
+      return -1;
+    }
+    if (alu.rounding != VTA_ALU_ROUND_NONE) {
+      std::cerr << "Intel FPGA backend rejects unsupported ALU rounding mode "
+                << alu.rounding << std::endl;
+      return -1;
+    }
+  }
   const size_t global_work_size = 1;
   const size_t local_work_size = 1;
 

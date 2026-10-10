@@ -20,6 +20,7 @@
 // File-driven ALU execution through the production VTA driver and FSIM library.
 #include <vta/driver.h>
 #include <vta/hw_spec.h>
+#include "backend_init.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -104,6 +105,23 @@ static VTAGenericInsn Alu(uint32_t opcode, uint32_t rounding, uint32_t use_imm,
   return insn;
 }
 
+static void ValidateStage(const Stage& stage, int32_t operand) {
+  if (stage.opcode > VTA_ALU_OPCODE_RSFT) {
+    throw std::invalid_argument("unsupported ALU opcode " + std::to_string(stage.opcode));
+  }
+  if (stage.rounding > VTA_ALU_ROUND_AWAY) {
+    throw std::invalid_argument("invalid ALU rounding mode " + std::to_string(stage.rounding));
+  }
+  const bool requantize_opcode = stage.opcode == VTA_ALU_OPCODE_RMUL ||
+                                 stage.opcode == VTA_ALU_OPCODE_RSFT;
+  if (!requantize_opcode && stage.rounding != VTA_ALU_ROUND_NONE) {
+    throw std::invalid_argument("rounding is only supported by RMUL and RSFT");
+  }
+  if (stage.opcode == VTA_ALU_OPCODE_RSFT && (operand < 0 || operand > 31)) {
+    throw std::invalid_argument("RSFT shift must be in [0,31]");
+  }
+}
+
 static std::vector<int32_t> ReadCases(const std::string& input_path,
                                       std::vector<Stage>* stages) {
   std::ifstream input(input_path);
@@ -136,13 +154,22 @@ static std::vector<int32_t> ReadCases(const std::string& input_path,
   }
   std::string trailing;
   if (input >> trailing) throw std::runtime_error("unexpected data after ALU cases");
+  for (uint64_t index = 0; index < case_count; ++index) {
+    for (uint32_t stage = 0; stage < stage_count; ++stage) {
+      const Stage& description = (*stages)[stage];
+      const int32_t operand = description.use_imm
+          ? description.immediate
+          : inputs[index * (stage_count + 1) + stage + 1];
+      ValidateStage(description, operand);
+    }
+  }
   return inputs;
 }
 
 static void AppendSnapshot(std::vector<VTAGenericInsn>* instructions, Buffer& output,
                           uint32_t vector_count, uint32_t total_vectors,
                           uint32_t global_vector, uint32_t scratch_base,
-                          uint32_t uop_begin, uint32_t uop_end) {
+                          uint32_t snapshot_uop_begin, uint32_t snapshot_uop_end) {
   for (uint32_t byte = 0; byte < 4; ++byte) {
     const bool has_shift_after = byte < 3;
     VTAGenericInsn store = Memory(VTA_OPCODE_STORE, VTA_MEM_ID_OUT, output, vector_count,
@@ -153,7 +180,7 @@ static void AppendSnapshot(std::vector<VTAGenericInsn>* instructions, Buffer& ou
     instructions->push_back(store);
     if (has_shift_after) {
       instructions->push_back(Alu(VTA_ALU_OPCODE_SHR, VTA_ALU_ROUND_NONE, 1, 8,
-                                  uop_begin, uop_end, true, true));
+                                  snapshot_uop_begin, snapshot_uop_end, true, true));
     }
   }
 }
@@ -161,23 +188,27 @@ static void AppendSnapshot(std::vector<VTAGenericInsn>* instructions, Buffer& ou
 static void Execute(const std::string& input_path, const std::string& output_path) {
   std::vector<Stage> stages;
   std::vector<int32_t> input_values = ReadCases(input_path, &stages);
+  CheckBackendABI();
+  InitializeSimulatorBackend();
   const uint32_t stage_count = static_cast<uint32_t>(stages.size());
   const uint32_t lane_count = VTA_BATCH * VTA_BLOCK_OUT;
   const uint32_t total_cases = static_cast<uint32_t>(input_values.size() / (stage_count + 1));
   const uint32_t total_vectors = (total_cases + lane_count - 1) / lane_count;
   const uint32_t vectors_per_chunk = std::min<uint32_t>(
-      VTA_ACC_BUFF_DEPTH / 3, VTA_UOP_BUFF_DEPTH / 2);
+      VTA_ACC_BUFF_DEPTH / 3, VTA_UOP_BUFF_DEPTH / (stage_count + 2));
   if (vectors_per_chunk == 0) throw std::runtime_error("VTA SRAM geometry cannot fit ALU probe");
 
   Buffer accumulator((stage_count + 2) * vectors_per_chunk * VTA_ACC_ELEM_BYTES);
-  Buffer microops(2 * vectors_per_chunk * VTA_UOP_ELEM_BYTES);
+  Buffer microops((stage_count + 2) * vectors_per_chunk * VTA_UOP_ELEM_BYTES);
   auto* acc = static_cast<int32_t*>(accumulator.data);
   auto* uops = static_cast<VTAUop*>(microops.data);
   std::vector<int32_t> results(total_cases);
 
   const uint32_t scratch_base = 2 * vectors_per_chunk;
-  const uint32_t copy_uop_begin = vectors_per_chunk;
-  const uint32_t copy_uop_end = 2 * vectors_per_chunk;
+  const uint32_t copy_uop_begin = stage_count * vectors_per_chunk;
+  const uint32_t copy_uop_end = copy_uop_begin + vectors_per_chunk;
+  const uint32_t snapshot_uop_begin = copy_uop_end;
+  const uint32_t snapshot_uop_end = snapshot_uop_begin + vectors_per_chunk;
   const uint32_t zero_tile_offset = (stage_count + 1) * vectors_per_chunk;
   VTADeviceHandle device = VTADeviceAlloc();
   if (device == nullptr) throw std::runtime_error("VTADeviceAlloc failed");
@@ -189,12 +220,12 @@ static void Execute(const std::string& input_path, const std::string& output_pat
     std::memset(chunk_output.data, 0, chunk_output.size);
     const uint64_t chunk_case_base = static_cast<uint64_t>(global_vector) * lane_count;
     for (uint32_t vector = 0; vector < vector_count; ++vector) {
-      uops[vector].dst_idx = vector;
-      uops[vector].src_idx = vectors_per_chunk + vector;
-      uops[vector].wgt_idx = 0;
       uops[copy_uop_begin + vector].dst_idx = scratch_base + vector;
       uops[copy_uop_begin + vector].src_idx = vector;
       uops[copy_uop_begin + vector].wgt_idx = 0;
+      uops[snapshot_uop_begin + vector].dst_idx = scratch_base + vector;
+      uops[snapshot_uop_begin + vector].src_idx = scratch_base + vector;
+      uops[snapshot_uop_begin + vector].wgt_idx = 0;
       for (uint32_t lane = 0; lane < lane_count; ++lane) {
         const uint64_t case_index = chunk_case_base + static_cast<uint64_t>(vector) * lane_count + lane;
         const uint64_t local_index = static_cast<uint64_t>(vector) * lane_count + lane;
@@ -207,7 +238,7 @@ static void Execute(const std::string& input_path, const std::string& output_pat
     }
     instructions.push_back(Memory(VTA_OPCODE_LOAD, VTA_MEM_ID_ACC, accumulator, vector_count));
     instructions.push_back(Memory(VTA_OPCODE_LOAD, VTA_MEM_ID_UOP, microops,
-                                  2 * vectors_per_chunk));
+                                  (stage_count + 2) * vectors_per_chunk));
 
     for (uint32_t stage_index = 0; stage_index < stage_count; ++stage_index) {
       const uint32_t source_offset = (stage_index + 1) * vectors_per_chunk;
@@ -223,8 +254,17 @@ static void Execute(const std::string& input_path, const std::string& output_pat
       instructions.push_back(Memory(VTA_OPCODE_LOAD, VTA_MEM_ID_ACC, accumulator,
                                     vector_count, source_offset, vectors_per_chunk));
       const Stage& stage = stages[stage_index];
+      const uint32_t stage_uop_begin = stage_index * vectors_per_chunk;
+      for (uint32_t vector = 0; vector < vector_count; ++vector) {
+        uops[stage_uop_begin + vector].dst_idx = vector;
+        uops[stage_uop_begin + vector].src_idx = stage.use_imm
+            ? vector
+            : vectors_per_chunk + vector;
+        uops[stage_uop_begin + vector].wgt_idx = 0;
+      }
       instructions.push_back(Alu(stage.opcode, stage.rounding, stage.use_imm,
-                                 stage.immediate, 0, vector_count));
+                                 stage.immediate, stage_uop_begin,
+                                 stage_uop_begin + vector_count));
     }
 
     // ADD reads and writes its destination, so initialize scratch for every chunk
@@ -235,7 +275,8 @@ static void Execute(const std::string& input_path, const std::string& output_pat
     instructions.push_back(Alu(VTA_ALU_OPCODE_ADD, VTA_ALU_ROUND_NONE, 0, 0,
                                copy_uop_begin, active_copy_uop_end, true, false));
     AppendSnapshot(&instructions, chunk_output, vector_count, vector_count, 0,
-                   scratch_base, copy_uop_begin, active_copy_uop_end);
+                   scratch_base, snapshot_uop_begin,
+                   snapshot_uop_begin + vector_count);
 
     // VTADeviceRun is a completion boundary. Keep each SRAM-reusing chunk in
     // its own run so stores from one chunk cannot race the next chunk's loads.
@@ -277,6 +318,16 @@ static void Execute(const std::string& input_path, const std::string& output_pat
 }
 
 int main(int argc, char** argv) {
+  if (argc == 2 && std::string(argv[1]) == "--check-wrong-abi") {
+    try {
+      CheckBackendABI(VTA_ABI_FINGERPRINT ^ 1);
+    } catch (const std::exception& error) {
+      std::cerr << "alu_probe: " << error.what() << '\n';
+      return 1;
+    }
+    std::cerr << "alu_probe: backend accepted an invalid ABI fingerprint\n";
+    return 0;
+  }
   if (argc != 3) {
     std::cerr << "usage: alu_probe INPUT.txt OUTPUT.txt\n";
     return 2;

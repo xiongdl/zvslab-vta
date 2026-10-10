@@ -35,10 +35,51 @@ bash vta/tests/qconv2d/run_tests.sh --backend fsim
 
 Use `--backend tsim` to run the same fixture against TSIM. `--conv-only` runs
 just the convolution tests. JUnit results and the generated
-`reports/<backend>-qconv2d/qconv2d-rounding.json` are local ignored reports.
+`reports/<backend>/` summaries and binary results are local ignored reports.
 The JSON records per-mode CMSIS/driver difference counts and, for each of the
 13 single-rounding versus TFLite output differences, the coordinate,
 accumulator, channel multiplier/shift, complete product, Q31 remainder, and
 both rounding-stage results. Default double rounding matches TFLite exactly;
 single rounding remains an independently named CMSIS mode and matches CMSIS
 exactly while differing from TFLite at those 13 rounding boundaries by one.
+
+The full cross-backend acceptance must run FSIM first and TSIM second, each in
+its own process so the probes load the selected backend independently:
+
+```sh
+bash vta/tests/qconv2d/run_tests.sh --backend fsim
+bash vta/tests/qconv2d/run_tests.sh --backend tsim
+```
+
+Both runs use fixed seed `20261010` for 100,000 INT32 cases in each rounding
+mode. The TSIM run compares every ALU result and every convolution accumulator
+and output byte against the saved FSIM run. It also verifies matching fixture
+and logical instruction SHA256 values. Results and JSON summaries are written
+under `reports/fsim/` and `reports/tsim/`; these reports are ignored and are
+not source inputs. `reports/tsim/task5-validation.json` records CMSIS/FSIM,
+FSIM/TSIM, and TFLite/FSIM mismatch counts, source/runtime and hardware-library
+metadata, and the attribution for all 13 single-rounding differences.
+
+The standalone regression entry points include the same ALU and convolution
+tests alongside the legacy hardware and runtime checks:
+
+```sh
+bash scripts/test_vta_fsim.sh
+bash scripts/test_vta_tsim.sh
+```
+
+The ALU probe accepts opcodes MIN through RSFT, requires rounding modes 0–2
+only for RMUL/RSFT, restricts RSFT operands to 0–31, and requires signed
+16-bit immediate values. Positive single-rounding shifts are accepted only
+when the required pre-left shift stays in INT32. Probe startup checks the
+selected backend ABI fingerprint and, for TSIM, initializes the hardware
+module from the active `VTA_PATH` in the same process before issuing
+instructions.
+
+The shared command-queue runtime rejects RMUL/RSFT and nonzero rounding for
+the Xilinx PYNQ/Ultra96/ZCU104 and Intel DE10-Nano targets, whose hardware
+implementations still expose only the legacy ALU set. Intel's low-level OpenCL
+driver also validates raw instruction streams before enqueueing them. The
+Xilinx HLS source asserts this restriction in C/HLS simulation; a direct raw
+stream sent around the shared runtime has no validated hardware error
+response, so that low-level bypass is not a supported rejection interface.

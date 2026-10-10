@@ -114,3 +114,50 @@ encoding-check subprocess could not create `.pkl_memoize_py3`; pytest teardown
 also could not write `reports/fsim-all.xml`. The suite was rerun with managed
 worktree write authorization, which allowed both artifacts to be created; the
 encoding check then passed and the complete result was 39 passed.
+
+## Task 5: FSIM/TSIM exact parity and entry points
+
+Final code was validated in independent backend processes, in this order:
+
+- `bash vta/tests/qconv2d/run_tests.sh --backend fsim`: 40 passed in 14.83 s.
+- `bash vta/tests/qconv2d/run_tests.sh --backend tsim`: 40 passed in 36.98 s.
+- `bash scripts/test_vta_fsim.sh`: 71 passed in 37.12 s.
+- `bash scripts/test_vta_tsim.sh`: 52 passed in 45.10 s.
+
+Both ALU rounding modes ran 100,000 fixed-seed full-INT32 inputs. The
+convolution compared every INT32 accumulator and final INT8 output. The TSIM
+JSON records zero CMSIS/FSIM, FSIM/TSIM, and TFLite/FSIM differences for the
+default double-rounding mode; the single-rounding TFLite comparison has 13
+differences, each exactly one output unit. Its 13-entry evidence table matches
+the input, weights, bias, accumulator, multiplier, shift, zero point, and
+activation and shows the differing Q31/final-shift rounding increments.
+
+Final fixture SHA256 is
+`91affaa44efd90848be4214cce93d8ca86f4e0110fd62b1ced6d5b4aab83638d`; logical
+instruction SHA256 is
+`300a7619e44448203bbd61a5e4d717469b07a725775b9c501ecd6be92a55e9a9`. The
+report identifies CMSIS-NN 8.0.0 at
+`13c97dbb6f781d4aab38ed34e6e441f42b79aff4`, model SHA256
+`3c002613d1b2475eb51dd78dfb85a546c8ae658dee71cf6ade43b022fe205415`, input
+SHA256 `9f2b799d8a7d23ea057764d98841e08038753212d8fcb06b4b8f28a859926511`,
+TVM 0.17.0, and the VTA 64mac config SHA256
+`23b338eacdf5747610d90fd17296e3d0d4236ce416191b7c1cfc597cd67991fa`. The
+selected TSIM library is `vta/build/libvta_tsim.dylib` (SHA256
+`5b3fd9b613ba46eca279f25aea6f42f32761bdaf21caaff08537147d9ae861f8`); its
+hardware library is `vta/build/libvta_hw.dylib` (SHA256
+`4570aa8efc3b054bc6feabf1ccfbb8df6674c1831b3b4743dc9d3ab1694ed53c`). Full
+machine-readable metadata and all rounding evidence are retained in the
+ignored generated file `vta/tests/qconv2d/reports/tsim/task5-validation.json`.
+
+The probes initialize `vta.tsim` in their own process and verify the selected
+backend ABI. Immediate uops use matching source/destination indices for the
+FSIM/RTL immediate-read convention; snapshot and convolution clamp operations
+use dedicated in-place uops. Chunk size includes per-stage, copy, and snapshot
+uop banks. The non-target runtime rejects unsupported opcode/rounding on
+Xilinx and Intel targets. Intel's old kernel has opcode-4 MUL but not RMUL,
+RSFT, or rounding. Xilinx also asserts these restrictions in HLS C simulation;
+a synthesized direct raw-driver rejection was not validated with its vendor
+toolchain, so only the shared runtime API's rejection is claimed there.
+
+The final Task 5 run modified no files under `vta/apps`; generated reports and
+logs remain ignored. `git diff --check` passed.

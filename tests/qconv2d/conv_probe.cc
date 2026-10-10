@@ -1,6 +1,7 @@
 /* Execute tiled int8 convolution through the production VTA driver. */
 #include <vta/driver.h>
 #include <vta/hw_spec.h>
+#include "backend_init.h"
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -96,12 +97,19 @@ static int RunDevice(VTADeviceHandle device, Buffer& stream,
 
 static void Run(const std::string& fixture_dir, const std::string& mode,
                 const std::string& output_dir) {
+  CheckBackendABI();
+  InitializeSimulatorBackend();
   if (mode != "double" && mode != "single") throw std::runtime_error("mode must be double|single");
   constexpr uint32_t kPixels = 32 * 32;
   constexpr uint32_t kChannels = 16;
   constexpr uint32_t kTaps = 9;
   constexpr uint32_t kTile = 64;
   constexpr uint32_t kAluUopBegin = kTile * kTaps;
+  constexpr uint32_t kSnapshotUopBegin = kAluUopBegin + kTile;
+  constexpr uint32_t kUopEnd = kSnapshotUopBegin + kTile;
+  constexpr uint32_t kRmulUopBegin = 0;
+  constexpr uint32_t kRsftUopBegin = kTile;
+  constexpr uint32_t kImmediateUopBegin = 2 * kTile;
   constexpr uint32_t kAccParamBase = 2 * kTile;
   constexpr uint32_t kAccCopyBase = 3 * kTile;
   constexpr uint32_t kAccVectors = 4 * kTile;
@@ -110,7 +118,7 @@ static void Run(const std::string& fixture_dir, const std::string& mode,
     throw std::runtime_error("conv_probe requires vta_64mac batch=1 and 8x8 GEMM blocks");
   }
   if (VTA_INP_BUFF_DEPTH < kTile * kTaps || VTA_ACC_BUFF_DEPTH < kAccVectors ||
-      VTA_UOP_BUFF_DEPTH < kAluUopBegin + 2 * kTile) {
+      VTA_UOP_BUFF_DEPTH < kUopEnd) {
     throw std::runtime_error("64mac SRAM cannot fit 64-position qconv tile");
   }
   std::ifstream input_file(fixture_dir + "/fixture.bin", std::ios::binary);
@@ -130,7 +138,7 @@ static void Run(const std::string& fixture_dir, const std::string& mode,
   Buffer inp(inp_vectors * VTA_INP_ELEM_BYTES);
   Buffer wgt(kTaps * VTA_WGT_ELEM_BYTES);
   Buffer acc(kAccVectors * VTA_ACC_ELEM_BYTES);
-  Buffer uop((kAluUopBegin + kTile) * VTA_UOP_ELEM_BYTES);
+  Buffer uop(kUopEnd * VTA_UOP_ELEM_BYTES);
   Buffer out(4 * kTile * VTA_OUT_ELEM_BYTES);
   auto* inp_data = static_cast<int8_t*>(inp.data);
   auto* wgt_data = static_cast<int8_t*>(wgt.data);
@@ -203,7 +211,7 @@ static void Run(const std::string& fixture_dir, const std::string& mode,
           Memory(VTA_OPCODE_LOAD, VTA_MEM_ID_INP, inp, inp_vectors),
           Memory(VTA_OPCODE_LOAD, VTA_MEM_ID_WGT, wgt, kTaps),
           Memory(VTA_OPCODE_LOAD, VTA_MEM_ID_ACC, acc, kAccVectors),
-          Memory(VTA_OPCODE_LOAD, VTA_MEM_ID_UOP, uop, kAluUopBegin + count),
+          Memory(VTA_OPCODE_LOAD, VTA_MEM_ID_UOP, uop, kSnapshotUopBegin + count),
       };
       reinterpret_cast<VTAMemInsn&>(instructions[1]).push_next_dep = 1;
       instructions.push_back(gemm);
@@ -212,6 +220,10 @@ static void Run(const std::string& fixture_dir, const std::string& mode,
       for (uint32_t p = 0; p < count; ++p) {
         uops[kAluUopBegin + p].dst_idx = kAccCopyBase + p;
         uops[kAluUopBegin + p].src_idx = p;
+        uops[kAluUopBegin + p].wgt_idx = 0;
+        uops[kSnapshotUopBegin + p].dst_idx = kAccCopyBase + p;
+        uops[kSnapshotUopBegin + p].src_idx = kAccCopyBase + p;
+        uops[kSnapshotUopBegin + p].wgt_idx = 0;
       }
       instructions.push_back(Alu(VTA_ALU_OPCODE_ADD, VTA_ALU_ROUND_NONE, 0,
                                  kAluUopBegin, kAluUopBegin + count, false, true, false));
@@ -224,7 +236,7 @@ static void Run(const std::string& fixture_dir, const std::string& mode,
         instructions.push_back(store);
         if (byte != 3) {
           auto shift = Alu(VTA_ALU_OPCODE_SHR, VTA_ALU_ROUND_NONE, 8,
-                           kAluUopBegin, kAluUopBegin + count, true, true, false);
+                           kSnapshotUopBegin, kSnapshotUopBegin + count, true, true, false);
           auto& alu = reinterpret_cast<VTAAluInsn&>(shift);
           alu.push_next_dep = 1;
           alu.pop_prev_dep = 0;
@@ -264,28 +276,33 @@ static void Run(const std::string& fixture_dir, const std::string& mode,
           acc_data[(kTile + p) * kBytes + lane] = multiplier[channel];
           acc_data[(2 * kTile + p) * kBytes + lane] = -shifts[channel];
         }
-        uops[p].dst_idx = p;
-        uops[p].src_idx = kTile + p;
-        uops[count + p].dst_idx = p;
-        uops[count + p].src_idx = 2 * kTile + p;
+        uops[kRmulUopBegin + p].dst_idx = p;
+        uops[kRmulUopBegin + p].src_idx = kTile + p;
+        uops[kRsftUopBegin + p].dst_idx = p;
+        uops[kRsftUopBegin + p].src_idx = 2 * kTile + p;
+        uops[kImmediateUopBegin + p].dst_idx = p;
+        uops[kImmediateUopBegin + p].src_idx = p;
       }
       std::vector<VTAGenericInsn> alu_instructions{
           Memory(VTA_OPCODE_LOAD, VTA_MEM_ID_ACC, acc, kAccVectors),
-          Memory(VTA_OPCODE_LOAD, VTA_MEM_ID_UOP, uop, 2 * count),
+          Memory(VTA_OPCODE_LOAD, VTA_MEM_ID_UOP, uop, kImmediateUopBegin + count),
       };
       alu_instructions.push_back(Alu(VTA_ALU_OPCODE_RMUL,
           mode == "double" ? VTA_ALU_ROUND_UP : VTA_ALU_ROUND_NONE,
-          0, 0, count, false, false, false));
+          0, kRmulUopBegin, kRmulUopBegin + count, false, false, false));
       auto rsft = Alu(VTA_ALU_OPCODE_RSFT,
           mode == "double" ? VTA_ALU_ROUND_AWAY : VTA_ALU_ROUND_UP,
-          0, count, 2 * count, false, false, false);
+          0, kRsftUopBegin, kRsftUopBegin + count, false, false, false);
       alu_instructions.push_back(rsft);
       alu_instructions.push_back(Alu(VTA_ALU_OPCODE_ADD, VTA_ALU_ROUND_NONE, -128,
-                                     0, count, true, false, false));
+                                     kImmediateUopBegin, kImmediateUopBegin + count,
+                                     true, false, false));
       alu_instructions.push_back(Alu(VTA_ALU_OPCODE_MIN, VTA_ALU_ROUND_NONE, 0,
-                                     0, count, true, false, false));
+                                     kImmediateUopBegin, kImmediateUopBegin + count,
+                                     true, false, false));
       alu_instructions.push_back(Alu(VTA_ALU_OPCODE_MAX, VTA_ALU_ROUND_NONE, -128,
-                                     0, count, true, true, false));
+                                     kImmediateUopBegin, kImmediateUopBegin + count,
+                                     true, true, false));
       auto output_store = Memory(VTA_OPCODE_STORE, VTA_MEM_ID_OUT, out, count, 0, 0);
       auto& output_fields = reinterpret_cast<VTAMemInsn&>(output_store);
       output_fields.pop_prev_dep = 1;

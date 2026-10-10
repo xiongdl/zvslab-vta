@@ -40,6 +40,6 @@ else
 fi
 mkdir -p "${script_dir}/reports"
 report_path="${script_dir}/reports/${backend}-${suite}.xml"
-export VTA_QCONV_REPORT_DIR="${script_dir}/reports/${backend}-qconv2d"
+export VTA_QCONV_REPORT_DIR="${script_dir}/reports"
 echo "Writing JUnit results to ${report_path}"
 "${python_bin}" -m pytest -p no:cacheprovider -v --junitxml="${report_path}" "${paths[@]}"

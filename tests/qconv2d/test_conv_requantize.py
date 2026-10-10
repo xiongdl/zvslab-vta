@@ -1,5 +1,6 @@
 """Acceptance checks for the extracted real first-convolution fixture."""
 import ctypes
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,14 @@ from analyze_rounding import analyze
 from fixture import check_requantize_range, load_fixture, quantize_multiplier
 
 FIXTURE_DIR = Path(__file__).with_name("fixtures") / "resnet-first-conv-cifar0"
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def test_fixture_has_expected_per_channel_first_convolution():
@@ -170,7 +179,7 @@ def conv_probe(tmp_path_factory):
         "-I" + str(tvm_root / "3rdparty/dmlc-core/include"),
         str(Path(__file__).with_name("conv_probe.cc")), str(library),
         "-Wl,-rpath," + str(VTA_ROOT / "build"), "-L" + str(tvm_root / "build"),
-        "-ltvm", "-Wl,-rpath," + str(tvm_root / "build"), "-o", str(binary),
+        "-ltvm", "-Wl,-rpath," + str(tvm_root / "build"), "-ldl", "-o", str(binary),
     ]
     result = subprocess.run(command, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -250,16 +259,89 @@ def test_real_per_channel_qconv2d_matches_cmsis_and_explains_tflite(
     assert len(report["tflite_single_difference_attribution"]) == 13
     report_dir_text = os.environ.get("VTA_QCONV_REPORT_DIR")
     if report_dir_text:
-        report_dir = Path(report_dir_text)
-        fsim_report_dir = report_dir / "fsim"
-        cmsis_report_dir = report_dir / "cmsis"
-        fsim_report_dir.mkdir(parents=True, exist_ok=True)
+        backend_report_dir = Path(report_dir_text) / backend
+        conv_report_dir = backend_report_dir / "conv"
+        cmsis_report_dir = backend_report_dir / "cmsis"
+        conv_report_dir.mkdir(parents=True, exist_ok=True)
         cmsis_report_dir.mkdir(parents=True, exist_ok=True)
         for mode in ("double", "single"):
-            results[mode][0].tofile(fsim_report_dir / f"{mode}-accumulator.bin")
-            results[mode][1].tofile(fsim_report_dir / f"{mode}-output.bin")
+            results[mode][0].tofile(conv_report_dir / f"{mode}-accumulator.bin")
+            results[mode][1].tofile(conv_report_dir / f"{mode}-output.bin")
             cmsis_results[mode][0].tofile(cmsis_report_dir / f"{mode}-accumulator.bin")
             cmsis_results[mode][1].tofile(cmsis_report_dir / f"{mode}-output.bin")
-        (report_dir / "qconv2d-rounding.json").write_text(
-            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        fixture_metadata = json.loads((FIXTURE_DIR / "metadata.json").read_text(encoding="utf-8"))
+        fixture_hash = fixture_metadata["fixture_sha256"]
+        instruction_hash = hashlib.sha256(json.dumps({
+            "fixture_sha256": fixture_hash,
+            "geometry": {"tile": 64, "channels": 16, "taps": 9},
+            "logical_instruction_contract": "qconv2d-gemm-rmul-rsft-out-v1",
+            "rounding_modes": ["double", "single"],
+        }, sort_keys=True, separators=(",", ":")).encode("ascii")).hexdigest()
+        report.update({
+            "backend": backend,
+            "fixture_sha256": fixture_hash,
+            "instruction_sha256": instruction_hash,
+            "cmsis_fsim_mismatch_count": 0 if backend == "fsim" else None,
+            "tflite_fsim_mismatch_count": report["tflite_comparison"]["double"]["difference_count"],
+            "tflite_max_abs_diff": report["tflite_comparison"]["single"]["max_absolute_difference"],
+            "rounding_evidence": report["tflite_single_difference_attribution"],
+        })
+        if backend == "tsim":
+            fsim_dir = Path(report_dir_text) / "fsim"
+            fsim_report = json.loads((fsim_dir / "conv" / "qconv2d-rounding.json").read_text(
+                encoding="utf-8"))
+            assert fsim_report["fixture_sha256"] == fixture_hash
+            assert fsim_report["instruction_sha256"] == instruction_hash
+            parity_differences = 0
+            for mode in ("double", "single"):
+                for tensor_name, actual in (("accumulator", results[mode][0]),
+                                             ("output", results[mode][1])):
+                    baseline = np.fromfile(fsim_dir / "conv" / f"{mode}-{tensor_name}.bin",
+                                            dtype=actual.dtype).reshape(actual.shape)
+                    differences = int(np.count_nonzero(actual != baseline))
+                    parity_differences += differences
+                    np.testing.assert_array_equal(actual, baseline)
+            report["fsim_tsim_mismatch_count"] = parity_differences
+            report["cmsis_fsim_mismatch_count"] = fsim_report["cmsis_fsim_mismatch_count"]
+            report["tflite_fsim_mismatch_count"] = fsim_report["tflite_fsim_mismatch_count"]
+        (conv_report_dir / "qconv2d-rounding.json").write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        if backend == "tsim":
+            alu_report = json.loads((backend_report_dir / "alu" / "requantize.json").read_text(
+                encoding="utf-8"))
+            vta_path = Path(os.environ["VTA_PATH"])
+            library_suffix = "dylib" if sys.platform == "darwin" else "so"
+            selected_library = vta_path / "build" / f"libvta_{backend}.{library_suffix}"
+            hardware_library = vta_path / "build" / f"libvta_hw.{library_suffix}"
+            config_path = Path(os.environ["VTA_CONFIG_FILE"])
+            import tvm
+            (backend_report_dir / "task5-validation.json").write_text(json.dumps({
+                "cmsis_fsim_mismatch_count": report["cmsis_fsim_mismatch_count"],
+                "fsim_tsim_mismatch_count": (
+                    report["fsim_tsim_mismatch_count"] +
+                    alu_report["fsim_tsim_mismatch_count"]),
+                "tflite_fsim_mismatch_count": report["tflite_fsim_mismatch_count"],
+                "tflite_max_abs_diff": report["tflite_max_abs_diff"],
+                "fixture_sha256": fixture_hash,
+                "instruction_sha256": instruction_hash,
+                "rounding_evidence": report["rounding_evidence"],
+                "source_runtime_build": {
+                    "cmsis_nn": "8.0.0 @ 13c97dbb6f781d4aab38ed34e6e441f42b79aff4",
+                    "model_sha256": fixture_metadata["model_sha256"],
+                    "input_sha256": fixture_metadata["input_sha256"],
+                    "fixture_source": {
+                        "model": fixture_metadata["model"],
+                        "input": fixture_metadata["input_source"],
+                    },
+                    "tvm_version": tvm.__version__,
+                    "tvm_path": os.environ["TVM_PATH"],
+                    "vta_path": str(vta_path),
+                    "vta_config": str(config_path),
+                    "vta_config_sha256": _sha256_file(config_path),
+                    "vta_backend": "tsim",
+                    "backend_library": str(selected_library),
+                    "backend_library_sha256": _sha256_file(selected_library),
+                    "hardware_library": str(hardware_library),
+                    "hardware_library_sha256": _sha256_file(hardware_library),
+                },
+            }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
