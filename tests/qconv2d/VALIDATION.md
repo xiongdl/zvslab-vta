@@ -108,3 +108,9 @@ rounding.
 
 Final verification after these fixes: `bash tests/qconv2d/run_tests.sh --backend
 fsim` completed with 39 passed.
+
+An initial run without worktree write authorization failed because the Python
+encoding-check subprocess could not create `.pkl_memoize_py3`; pytest teardown
+also could not write `reports/fsim-all.xml`. The suite was rerun with managed
+worktree write authorization, which allowed both artifacts to be created; the
+encoding check then passed and the complete result was 39 passed.
